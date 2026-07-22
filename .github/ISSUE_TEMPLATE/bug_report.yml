@@ -1,0 +1,48 @@
+name: Bug report
+description: Report a reproducible rendering, interface, export, or compatibility problem.
+title: "[Bug]: "
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: Thanks for helping improve Explosion Dynamics Lab. Do not include private data or real-world targeting or damage requests.
+  - type: textarea
+    id: description
+    attributes:
+      label: Problem
+      description: What happened, and what did you expect?
+    validations:
+      required: true
+  - type: input
+    id: preset
+    attributes:
+      label: Preset and mode
+      placeholder: Nuclear Ground Burst, Cinematic, Balanced
+    validations:
+      required: true
+  - type: input
+    id: environment
+    attributes:
+      label: Browser and device
+      placeholder: Chrome version, operating system, and device or GPU
+    validations:
+      required: true
+  - type: textarea
+    id: reproduction
+    attributes:
+      label: Reproduction steps
+      placeholder: Include seed, timeline position, quality tier, palette, wind, and export settings when relevant.
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Console output or screenshots
+      description: Remove credentials and private information before attaching evidence.
+  - type: checkboxes
+    id: safety
+    attributes:
+      label: Safety confirmation
+      options:
+        - label: This report does not request weapon construction, targeting, casualty, or damage-optimization information.
+          required: true

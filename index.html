@@ -1,0 +1,623 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="theme-color" content="#08090d">
+  <meta name="color-scheme" content="dark">
+  <meta name="robots" content="index,follow,max-image-preview:large">
+  <meta name="explosion-lab-build" content="development">
+  <title>Interactive Explosion Dynamics Lab | Eric Barker</title>
+  <meta name="description" content="Explore a browser-based explosion dynamics simulator with shockwaves, fireballs, meteor impacts, volcanic events, and approximate nuclear-scale visuals.">
+  <link rel="canonical" href="https://www.ericbarker.co/explosion-dynamics-lab/">
+  <meta property="og:type" content="website">
+  <meta property="og:title" content="Explosion Dynamics Lab">
+  <meta property="og:description" content="A cinematic, educational laboratory for exploring shock fronts, fireballs, cloud formation, and high-energy events in the browser.">
+  <meta property="og:url" content="https://www.ericbarker.co/explosion-dynamics-lab/">
+  <meta property="og:image" content="https://www.ericbarker.co/explosion-dynamics-lab/explosion-dynamics-lab-social.png">
+  <meta property="og:image:width" content="1200">
+  <meta property="og:image:height" content="630">
+  <meta property="og:image:alt" content="Explosion Dynamics Lab interface showing an abstract luminous fireball, shock front, and rising cloud over a fictional test range">
+  <meta name="twitter:card" content="summary_large_image">
+  <meta name="twitter:title" content="Explosion Dynamics Lab">
+  <meta name="twitter:description" content="Detonate an abstract high-energy event. Scrub its phases. Export the experiment.">
+  <meta name="twitter:image" content="https://www.ericbarker.co/explosion-dynamics-lab/explosion-dynamics-lab-social.png">
+  <meta name="twitter:image:alt" content="Explosion Dynamics Lab interface showing an abstract luminous fireball, shock front, and rising cloud over a fictional test range">
+  <link rel="icon" href="https://www.ericbarker.co/favicon.ico">
+  <link rel="icon" type="image/png" sizes="32x32" href="https://www.ericbarker.co/favicon-32x32.png">
+  <link rel="icon" type="image/png" sizes="16x16" href="https://www.ericbarker.co/favicon-16x16.png">
+  <link rel="apple-touch-icon" sizes="180x180" href="https://www.ericbarker.co/apple-touch-icon.png">
+  <link rel="manifest" href="https://www.ericbarker.co/site.webmanifest">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&amp;family=JetBrains+Mono:wght@400;500;600&amp;display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="assets/styles.css">
+  <script type="application/ld+json">
+  {
+    "@context": "https://schema.org",
+    "@graph": [
+      {
+        "@type": "WebApplication",
+        "@id": "https://www.ericbarker.co/explosion-dynamics-lab/#application",
+        "name": "Explosion Dynamics Lab",
+        "url": "https://www.ericbarker.co/explosion-dynamics-lab/",
+        "description": "An interactive browser-based educational visualization of simplified explosion dynamics, shock fronts, fireballs, atmospheric clouds, meteor impacts, and volcanic events.",
+        "applicationCategory": "EducationalApplication",
+        "operatingSystem": "Any modern operating system",
+        "browserRequirements": "A modern browser with WebGL2 for the research fluid model or Canvas 2D fallback; MediaRecorder is required for video export",
+        "isAccessibleForFree": true,
+        "license": [
+          "https://opensource.org/license/mit",
+          "https://www.ericbarker.co/explosion-dynamics-lab/THIRD_PARTY_NOTICES.md"
+        ],
+        "image": "https://www.ericbarker.co/explosion-dynamics-lab/explosion-dynamics-lab-social.png",
+        "creator": {
+          "@type": "Person",
+          "name": "Eric Barker",
+          "url": "https://www.ericbarker.co/"
+        },
+        "featureList": [
+          "Twelve visually distinct high-energy event presets",
+          "Cinematic profile and abstract effects-overview modes",
+          "Deterministic timeline scrubbing and seeded replay",
+          "Local PNG and genuine MP4 export"
+        ]
+      },
+      {
+        "@type": "WebPage",
+        "@id": "https://www.ericbarker.co/explosion-dynamics-lab/#webpage",
+        "url": "https://www.ericbarker.co/explosion-dynamics-lab/",
+        "name": "Interactive Explosion Dynamics Lab | Eric Barker",
+        "description": "A cinematic educational explosion and blast-wave visualization created by Eric Barker.",
+        "primaryImageOfPage": "https://www.ericbarker.co/explosion-dynamics-lab/explosion-dynamics-lab-social.png",
+        "mainEntity": { "@id": "https://www.ericbarker.co/explosion-dynamics-lab/#application" }
+      },
+      {
+        "@type": "FAQPage",
+        "@id": "https://www.ericbarker.co/explosion-dynamics-lab/#faq",
+        "mainEntity": [
+          {
+            "@type": "Question",
+            "name": "Is the Explosion Dynamics Lab an accurate blast calculator?",
+            "acceptedAnswer": { "@type": "Answer", "text": "No. Every effect, distance, timing, and scale is a deliberately simplified visual approximation for education and creative coding." }
+          },
+          {
+            "@type": "Question",
+            "name": "Does the simulator use real maps or targets?",
+            "acceptedAnswer": { "@type": "Answer", "text": "No. It uses only abstract, fictional, or generic environments and includes no address, coordinate, population, casualty, or targeting tools." }
+          },
+          {
+            "@type": "Question",
+            "name": "How are MP4 videos created?",
+            "acceptedAnswer": { "@type": "Answer", "text": "The lab first tries a browser-native MP4 recording. When that is unavailable, it can load FFmpeg WebAssembly on demand and convert a temporary recording locally on the device." }
+          }
+        ]
+      }
+    ]
+  }
+  </script>
+  <!-- Google tag (gtag.js) -->
+  <script async src="https://www.googletagmanager.com/gtag/js?id=G-CWYYLRZP53"></script>
+  <script>
+    window.dataLayer = window.dataLayer || [];
+    function gtag(){dataLayer.push(arguments);}
+    gtag('js', new Date());
+    gtag('config', 'G-CWYYLRZP53');
+  </script>
+  <script type="module" src="scripts/app.js"></script>
+</head>
+<body class="interface-visible">
+  <a class="skip-link" href="#learn">Skip to educational content</a>
+
+  <noscript>
+    <div class="noscript-note">The interactive visualization needs JavaScript, but the educational guide below remains available.</div>
+  </noscript>
+
+  <section class="sim-shell" id="laboratory" aria-labelledby="labTitle">
+    <p class="sr-only" id="canvasInstructions">An abstract educational visualization. Click or tap to reposition the event. Drag horizontally to change the camera angle, use Shift plus the mouse wheel or a pinch gesture to change camera distance, and use the labeled controls for keyboard access.</p>
+    <canvas id="simCanvas" tabindex="0" role="img" aria-label="Interactive abstract explosion dynamics visualization" aria-describedby="canvasInstructions">
+      Your browser does not support Canvas. Read the educational guide below for a text explanation of the visualization.
+    </canvas>
+    <canvas id="researchCanvas" aria-hidden="true"></canvas>
+    <div class="renderer-comparison" id="rendererComparison" aria-hidden="true" hidden>
+      <span class="renderer-comparison__label renderer-comparison__label--old">Original Procedural Model</span>
+      <span class="renderer-comparison__label renderer-comparison__label--new" id="comparisonResearchLabel">Research Fluid Model · initializing</span>
+      <span class="renderer-comparison__fallback" id="comparisonFallback" hidden></span>
+      <span class="renderer-comparison__divider"></span>
+    </div>
+    <aside class="fluid-debug-overlay" id="fluidDebugOverlay" aria-label="GPU fluid developer diagnostics" hidden>
+      <div class="fluid-debug-overlay__head">
+        <strong>Fluid verification</strong>
+        <span>developer mode</span>
+      </div>
+      <label class="fluid-debug-overlay__view" for="debugFluidView">
+        <span>View</span>
+        <select id="debugFluidView">
+          <option value="beauty" selected>Final composite</option>
+          <option value="velocity">Velocity field</option>
+          <option value="temperature">Temperature</option>
+          <option value="smoke">Smoke density</option>
+          <option value="incandescent">Incandescent density</option>
+          <option value="pressure">Pressure</option>
+          <option value="divergence">Divergence</option>
+          <option value="vorticity">Vorticity</option>
+          <option value="tracers">Particle tracers</option>
+        </select>
+      </label>
+      <dl class="fluid-debug-overlay__metrics">
+        <div><dt>Active renderer</dt><dd id="debugActiveRenderer">INITIALIZING</dd></div>
+        <div><dt>WebGL2 available</dt><dd id="debugWebgl">checking</dd></div>
+        <div><dt>Fluid grid</dt><dd id="debugGrid">—</dd></div>
+        <div><dt>Pressure iterations</dt><dd id="debugPressure">—</dd></div>
+        <div><dt>Simulation timestep</dt><dd id="debugTimestep">—</dd></div>
+        <div><dt>Fluid steps</dt><dd id="debugSteps">0</dd></div>
+        <div><dt>Max velocity</dt><dd id="debugVelocity">—</dd></div>
+        <div><dt>Max temperature</dt><dd id="debugTemperature">—</dd></div>
+        <div><dt>Max smoke density</dt><dd id="debugSmoke">—</dd></div>
+        <div><dt>Max vorticity</dt><dd id="debugVorticity">—</dd></div>
+        <div class="fluid-debug-overlay__wide"><dt>Active preset</dt><dd id="debugPreset">—</dd></div>
+        <div class="fluid-debug-overlay__wide"><dt>Event family</dt><dd id="debugEventFamily">—</dd></div>
+        <div class="fluid-debug-overlay__wide"><dt>Fluid profile</dt><dd id="debugFluidProfile">—</dd></div>
+        <div><dt>Volume slices</dt><dd id="debugVolumeSlices">—</dd></div>
+        <div><dt>Tracers</dt><dd id="debugTracers">—</dd></div>
+        <div class="fluid-debug-overlay__wide"><dt>Source primitives</dt><dd id="debugSourcePrimitives">—</dd></div>
+        <div class="fluid-debug-overlay__wide"><dt>Fallback reason</dt><dd id="debugFallback">none</dd></div>
+        <div class="fluid-debug-overlay__wide"><dt>Source</dt><dd id="debugBuildSource">standalone explosion-dynamics-lab</dd></div>
+        <div><dt>Build</dt><dd id="debugBuildRevision">development</dd></div>
+        <div><dt>Deployed</dt><dd id="debugBuildDeployed">not deployed</dd></div>
+        <div><dt>Renderer version</dt><dd id="debugRendererVersion">gpu-fluid-families-r3</dd></div>
+        <div><dt>Asset version</dt><dd id="debugAssetVersion">development</dd></div>
+        <div class="fluid-debug-overlay__wide"><dt>Manifest</dt><dd id="debugManifestHash">development</dd></div>
+      </dl>
+    </aside>
+    <div class="grain" aria-hidden="true"></div>
+
+    <header class="lab-topbar">
+      <a class="lab-brand" href="https://www.ericbarker.co/" aria-label="Eric Barker home">
+        <span class="lab-brand__mark" aria-hidden="true"></span>
+        <span>Eric Barker</span>
+        <span class="lab-brand__series">Computational Studio · 02</span>
+      </a>
+      <div class="telemetry" aria-label="Simulation status">
+        <span class="telemetry__item"><small>Phase</small><strong id="phaseMetric">Ready</strong></span>
+        <span class="telemetry__item"><small>Clock</small><strong id="timeMetric">00.0 s</strong></span>
+        <span class="telemetry__item"><small>FPS</small><strong id="fpsMetric">—</strong></span>
+      </div>
+      <div class="topbar-actions">
+        <a class="topbar-link" href="#learn">Learn</a>
+        <button class="icon-button" id="interfaceButton" type="button" aria-pressed="false" aria-label="Hide interface">Hide UI</button>
+        <button class="panel-toggle" id="panelToggle" type="button" aria-controls="controlPanel" aria-expanded="true">Controls</button>
+      </div>
+    </header>
+
+    <div class="intro-card" id="introCard">
+      <p class="kicker"><span aria-hidden="true">●</span> Interactive scientific visualization</p>
+      <h1 id="labTitle">Explosion<br><em>Dynamics</em> Lab</h1>
+      <p class="intro-card__lead">Explore how a flash becomes a fireball, a shock front, a rising column, and a drifting atmospheric cloud.</p>
+      <p class="intro-card__disclaimer">Educational visualization only. Effects, distances, timings, and scales are simplified approximations—not real-world predictions.</p>
+      <div class="intro-card__actions">
+        <button class="detonate detonate--hero" id="heroDetonate" type="button"><span aria-hidden="true"></span>Detonate</button>
+        <button class="text-button" id="dismissIntro" type="button">Enter laboratory <span aria-hidden="true">→</span></button>
+      </div>
+    </div>
+
+    <aside class="control-panel" id="controlPanel" aria-label="Explosion Dynamics Lab controls">
+      <div class="panel-head">
+        <div>
+          <span class="panel-head__index">LAB / 02</span>
+          <strong>Event controls</strong>
+        </div>
+        <button class="panel-close" id="panelClose" type="button" aria-label="Close controls">×</button>
+      </div>
+
+      <div class="panel-scroll">
+        <section class="control-group" aria-labelledby="experimentHeading">
+          <div class="control-group__heading" id="experimentHeading"><span>01</span> Experiment</div>
+          <label class="field">
+            <span class="field__label">Preset</span>
+            <select id="presetSelect" aria-describedby="presetDescription"></select>
+          </label>
+          <p class="preset-description" id="presetDescription">Choose an event preset, then detonate it.</p>
+          <fieldset class="segmented" aria-label="View mode">
+            <legend class="sr-only">View mode</legend>
+            <label><input type="radio" name="viewMode" value="cinematic" checked><span>Cinematic</span></label>
+            <label><input type="radio" name="viewMode" value="overview"><span>Effects overview</span></label>
+          </fieldset>
+        </section>
+
+        <section class="control-group" aria-labelledby="timelineHeading">
+          <div class="control-group__heading" id="timelineHeading"><span>02</span> Timeline</div>
+          <button class="detonate" id="detonateButton" type="button"><span aria-hidden="true"></span>Detonate</button>
+          <div class="transport" role="group" aria-label="Playback controls">
+            <button id="playButton" type="button" aria-pressed="false">Play</button>
+            <button id="restartButton" type="button">Restart</button>
+            <button id="replayButton" type="button">Replay</button>
+          </div>
+          <label class="timeline-field" for="timelineRange">
+            <span><span>Elapsed simulation time</span><output id="timelineOutput">0.0 / 12.0 s</output></span>
+            <input id="timelineRange" type="range" min="0" max="12" step="0.01" value="0">
+          </label>
+          <div class="phase-track" id="phaseTrack" aria-label="Event phases"></div>
+          <label class="field field--row">
+            <span class="field__label">Playback speed</span>
+            <select id="speedSelect">
+              <option value="0.25">0.25× slow motion</option>
+              <option value="0.5">0.5×</option>
+              <option value="1" selected>1× real time</option>
+              <option value="2">2×</option>
+            </select>
+          </label>
+        </section>
+
+        <section class="control-group" aria-labelledby="eventHeading">
+          <div class="control-group__heading" id="eventHeading"><span>03</span> Event geometry</div>
+          <label class="range-field" for="energyRange">
+            <span><span>Visual energy scale</span><output id="energyOutput">1.00×</output></span>
+            <input id="energyRange" type="range" min="0.5" max="2.5" step="0.05" value="1">
+          </label>
+          <label class="field field--row">
+            <span class="field__label">Burst geometry</span>
+            <select id="burstSelect">
+              <option value="air">Airburst</option>
+              <option value="surface">Surface burst</option>
+              <option value="underground">Underground</option>
+              <option value="atmospheric">Atmospheric</option>
+            </select>
+          </label>
+          <label class="range-field" for="altitudeRange">
+            <span><span>Approximate altitude</span><output id="altitudeOutput">Low</output></span>
+            <input id="altitudeRange" type="range" min="0" max="100" step="1" value="28">
+          </label>
+          <p class="microcopy">Controls use rounded, relative visual scales. They do not represent validated physical distances or optimal configurations.</p>
+        </section>
+
+        <section class="control-group" aria-labelledby="atmosphereHeading">
+          <div class="control-group__heading" id="atmosphereHeading"><span>04</span> Atmosphere</div>
+          <label class="range-field" for="windDirectionRange">
+            <span><span>Wind direction</span><output id="windDirectionOutput">East</output></span>
+            <input id="windDirectionRange" type="range" min="0" max="359" step="1" value="90">
+          </label>
+          <label class="range-field" for="windStrengthRange">
+            <span><span>Wind strength</span><output id="windStrengthOutput">Light</output></span>
+            <input id="windStrengthRange" type="range" min="0" max="100" step="1" value="24">
+          </label>
+          <div class="field-pair">
+            <label class="field">
+              <span class="field__label">Environment</span>
+              <select id="environmentSelect"></select>
+            </label>
+            <label class="field">
+              <span class="field__label">Time of day</span>
+              <select id="timeOfDaySelect"></select>
+            </label>
+          </div>
+        </section>
+
+        <section class="control-group" aria-labelledby="cameraHeading">
+          <div class="control-group__heading" id="cameraHeading"><span>05</span> Camera &amp; render</div>
+          <label class="range-field" for="cameraDistanceRange">
+            <span><span>Camera distance</span><output id="cameraDistanceOutput">Medium</output></span>
+            <input id="cameraDistanceRange" type="range" min="50" max="150" step="1" value="100">
+          </label>
+          <label class="range-field" for="cameraAngleRange">
+            <span><span>Camera angle</span><output id="cameraAngleOutput">0°</output></span>
+            <input id="cameraAngleRange" type="range" min="-35" max="35" step="1" value="0">
+          </label>
+          <label class="range-field" for="densityRange">
+            <span><span>Detail density</span><output id="densityOutput">100%</output></span>
+            <input id="densityRange" type="range" min="35" max="140" step="5" value="100">
+          </label>
+          <div class="field-pair">
+            <label class="field">
+              <span class="field__label">Visual quality</span>
+              <select id="qualitySelect">
+                <option value="mobile">Mobile · reduced</option>
+                <option value="balanced" selected>Balanced · default</option>
+                <option value="high">High · expanded</option>
+              </select>
+            </label>
+            <label class="field">
+              <span class="field__label">Color palette</span>
+              <select id="paletteSelect"></select>
+            </label>
+          </div>
+          <div class="seed-row">
+            <label class="field" for="seedInput">
+              <span class="field__label">Random seed</span>
+              <input id="seedInput" type="number" min="1" max="999999999" step="1" value="1842" inputmode="numeric">
+            </label>
+            <button id="randomizeSeedButton" type="button">Randomize</button>
+          </div>
+        </section>
+
+        <section class="control-group research-diagnostics" id="researchDiagnostics" aria-labelledby="diagnosticsHeading" hidden>
+          <div class="control-group__heading" id="diagnosticsHeading"><span>R</span> Research diagnostics</div>
+          <label class="field field--row">
+            <span class="field__label">Field view</span>
+            <select id="diagnosticSelect">
+              <option value="beauty" selected>Final composite</option>
+              <option value="velocity">Velocity field</option>
+              <option value="temperature">Temperature</option>
+              <option value="smoke">Smoke density</option>
+              <option value="incandescent">Incandescent density</option>
+              <option value="pressure">Pressure</option>
+              <option value="divergence">Divergence</option>
+              <option value="vorticity">Vorticity</option>
+              <option value="tracers">Particle tracers</option>
+            </select>
+          </label>
+          <dl class="diagnostic-grid" aria-label="Normalized research model status">
+            <div><dt>Backend</dt><dd id="diagnosticBackend">Initializing</dd></div>
+            <div><dt>Tier</dt><dd id="diagnosticTier">Balanced</dd></div>
+            <div><dt>Field</dt><dd id="diagnosticGrid">—</dd></div>
+            <div><dt>Solver step</dt><dd id="diagnosticStep">0</dd></div>
+            <div><dt>Pressure passes</dt><dd id="diagnosticPressure">—</dd></div>
+            <div><dt>Volume steps</dt><dd id="diagnosticRays">—</dd></div>
+            <div><dt>Tracers</dt><dd id="diagnosticTracers">—</dd></div>
+            <div><dt>Field GPU est.</dt><dd id="diagnosticMemory">—</dd></div>
+          </dl>
+          <p class="microcopy" id="diagnosticNote">All fields are dimensionless visual values. No pressure, yield, distance, damage, or safety prediction is computed.</p>
+        </section>
+
+        <section class="control-group" aria-labelledby="layersHeading">
+          <div class="control-group__heading" id="layersHeading"><span>06</span> Effect layers</div>
+          <div class="toggle-grid">
+            <label><input type="checkbox" data-layer="flash" checked><span>Initial flash</span></label>
+            <label><input type="checkbox" data-layer="fireball" checked><span>Fireball</span></label>
+            <label><input type="checkbox" data-layer="shock" checked><span>Shock front</span></label>
+            <label><input type="checkbox" data-layer="thermal" checked><span>Thermal glow</span></label>
+            <label><input type="checkbox" data-layer="dust" checked><span>Surface dust</span></label>
+            <label><input type="checkbox" data-layer="cloud" checked><span>Cloud column</span></label>
+            <label><input type="checkbox" data-layer="debris" checked><span>Debris &amp; ejecta</span></label>
+            <label><input type="checkbox" data-layer="grid" checked><span>Reference grid</span></label>
+          </div>
+        </section>
+
+        <section class="control-group control-group--output" aria-labelledby="outputHeading">
+          <div class="control-group__heading" id="outputHeading"><span>07</span> Export</div>
+          <label class="switch-row"><span>Include compact interface label</span><input id="pngInterfaceToggle" type="checkbox"><i aria-hidden="true"></i></label>
+          <div class="export-buttons">
+            <button id="pngButton" type="button">Download PNG</button>
+            <button class="export-primary" id="mp4Button" type="button">Export MP4</button>
+          </div>
+          <p class="microcopy" id="exportCapability">PNG and video processing stay on this device. FFmpeg loads only if native MP4 is unavailable and you request an export.</p>
+        </section>
+      </div>
+    </aside>
+
+    <div class="sim-footer">
+      <p><strong>Photosensitivity:</strong> contains a brief flash. Reduced-motion preferences automatically soften flashes, shake, and distortion.</p>
+      <div class="sim-footer__keys" aria-label="Keyboard shortcuts">
+        <kbd>D</kbd><span>Detonate</span><kbd>Space</kbd><span>Play / pause</span><kbd>← →</kbd><span>Scrub</span>
+      </div>
+    </div>
+
+    <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  </section>
+
+  <main class="learn" id="learn">
+    <div class="learn__masthead">
+      <p class="learn__eyebrow">Field notes · Educational guide</p>
+      <h2>What the lab visualizes</h2>
+      <p>This interactive explosion simulator turns broad physical ideas—rapid energy release, expanding pressure fronts, buoyancy, drag, turbulence, and wind—into a cinematic browser experiment. It is meant to make phases visible, not to predict a real event.</p>
+    </div>
+
+    <section class="learn-section learn-section--grid" aria-labelledby="howHeading">
+      <div>
+        <p class="learn-section__index">01 / Method</p>
+        <h2 id="howHeading">How it works</h2>
+      </div>
+      <div class="prose">
+        <p>Each event follows a deterministic timeline. A short flash gives way to a growing fireball or hot gas volume, an expanding shock-front visualization, surface interaction, a rising column, cloud formation, and eventual dissipation. Presets turn phases on or off and change their timing, energy, debris, dust, cloud, lighting, and wind response.</p>
+        <p>In Cinematic mode, every preset uses an event-specific simplified GPU fluid profile for velocity, temperature, smoke, incandescent material, dust, pressure projection, and vorticity. GPU-advected tracers provide small-scale detail, while an analytical Canvas layer supplies the environment and family-specific early flash, shock, trail, vent, ground, or electrical effects. Effects overview intentionally remains an abstract analytical view, and Canvas remains available as a compatibility fallback. The system is designed for real-time artistic visualization rather than engineering prediction, and every exposed value remains normalized.</p>
+      </div>
+    </section>
+
+    <section class="learn-section" aria-labelledby="modesHeading">
+      <p class="learn-section__index">02 / Observation</p>
+      <h2 id="modesHeading">Two simulation modes</h2>
+      <div class="mode-cards">
+        <article>
+          <span>Profile / 2.5D</span>
+          <h3>Cinematic view</h3>
+          <p>A fictional horizon makes the event legible in profile: fireball expansion, reflected light, ground dust, rising hot gas, cloud development, debris, atmospheric drift, and restrained camera response.</p>
+        </article>
+        <article>
+          <span>Plan / Abstract</span>
+          <h3>Effects overview</h3>
+          <p>A top-down scientific-instrument view separates normalized fireball, thermal, strong-wave, light-wave, and particulate extents. The circles are qualitative and intentionally use no map, real location, or casualty layer.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="learn-section learn-section--grid" aria-labelledby="presetsHeading">
+      <div>
+        <p class="learn-section__index">03 / Event library</p>
+        <h2 id="presetsHeading">Why the presets behave differently</h2>
+      </div>
+      <div class="prose">
+        <h3>Conventional blasts and industrial fireballs</h3>
+        <p>Compact events are brief, localized, and debris-heavy. Larger conventional presets push the visible shock front farther. The industrial and fuel-air-style visual archetypes emphasize slower rolling fire, smoke, and atmospheric illumination; they provide no information about fuels, mixtures, construction, or triggering.</p>
+        <h3>Meteors and volcanic events</h3>
+        <p>An airburst forms in the atmosphere without a crater, while a ground impact emphasizes ejecta, surface displacement, and a persistent dust plume. The volcanic preset replaces the detonation flash with a sustained eruptive column and falling ash-like particulate.</p>
+        <h3>Nuclear-scale visualizations</h3>
+        <p>The nuclear-scale presets use broad public visual archetypes: intense flash, rapid fireball growth, shock-front propagation, column rise, and mushroom-cloud formation. A ground burst carries more surface dust than an airburst. These are approximate visual categories only—not yield calculators, damage models, or weapon simulations.</p>
+        <h3>Nuclear Airburst — Research Model</h3>
+        <p>The flagship airburst combines an analytical early shock with a deterministic WebGL2 velocity, temperature, and density field for the later fireball, rising column, and cloud cap. Its browser solver adapts published computer-graphics methods for smoke, fire, turbulence, and volume rendering on normalized fields; it is research-inspired, simplified, and non-predictive.</p>
+      </div>
+    </section>
+
+    <section class="learn-section learn-section--dark" aria-labelledby="scienceHeading">
+      <p class="learn-section__index">04 / Concepts</p>
+      <h2 id="scienceHeading">Shock fronts, clouds, and surface interaction</h2>
+      <div class="concept-grid">
+        <article>
+          <h3>What is a shockwave?</h3>
+          <p>A rapid energy release compresses nearby material and sends a pressure disturbance outward. The lab represents that motion as an expanding, fading front with a simplified radial falloff.</p>
+        </article>
+        <article>
+          <h3>Why do clouds rise?</h3>
+          <p>Hot gases are less dense than cooler surrounding air, so buoyancy drives them upward. In the research model, pressure projection, entrainment, vorticity confinement, and paired cap vortices create the rolling column and outer return flow.</p>
+        </article>
+        <article>
+          <h3>Why does the ground matter?</h3>
+          <p>Surface interaction reflects light and pressure and can lift generic dust or ejecta. Ground-coupled presets therefore look denser and dirtier than comparable events placed above the surface.</p>
+        </article>
+        <article>
+          <h3>What changes cloud shape?</h3>
+          <p>Event duration, buoyant rise, density, coherent vortices, cooling, altitude, and wind all influence the silhouette. The lab exaggerates some of these relationships so they remain easy to see.</p>
+        </article>
+      </div>
+    </section>
+
+    <section class="learn-section learn-section--warning" aria-labelledby="limitsHeading">
+      <div>
+        <p class="learn-section__index">05 / Boundaries</p>
+        <h2 id="limitsHeading">Approximation and safety limits</h2>
+      </div>
+      <div>
+        <p><strong>Educational visualization only.</strong> All effects, distances, timings, and scales are simplified approximations and must not be used for safety, engineering, emergency planning, targeting, or real-world predictions.</p>
+        <ul>
+          <li>No explosive construction, materials, quantities, ratios, detonators, triggers, or weapon-design information.</li>
+          <li>No maps, addresses, coordinates, real targets, population data, infrastructure overlays, or casualty estimates.</li>
+          <li>No building-level damage, optimized burst heights, military accuracy, or recommendations for increasing harm.</li>
+          <li>Only fictional, generic, and abstract environments are shown.</li>
+        </ul>
+      </div>
+    </section>
+
+    <section class="learn-section" aria-labelledby="faqHeading">
+      <p class="learn-section__index">06 / FAQ</p>
+      <h2 id="faqHeading">Frequently asked questions</h2>
+      <div class="faq-list">
+        <details>
+          <summary>Is this an accurate blast calculator?</summary>
+          <p>No. The lab is a creative-coding and educational visualization. Values are normalized, rounded, and intentionally avoid the false precision required for real planning or prediction.</p>
+        </details>
+        <details>
+          <summary>Does it use real maps or targets?</summary>
+          <p>No. Every environment is abstract, fictional, or generic. There is no location search, coordinate input, map tile, population layer, casualty estimate, or targeting function.</p>
+        </details>
+        <details>
+          <summary>Can I replay the same event?</summary>
+          <p>Yes. Particle properties and procedural variations are generated from the visible random seed. Replaying with the same seed and controls produces a substantially similar sequence.</p>
+        </details>
+        <details>
+          <summary>How does MP4 export work?</summary>
+          <p>The lab first checks whether your browser can record a genuine MP4. If it cannot, the optional FFmpeg WebAssembly fallback converts a temporary browser recording locally. No video is uploaded. If both routes fail, the original WebM remains available as a correctly labeled recovery download.</p>
+        </details>
+        <details>
+          <summary>Why might mobile exports be limited?</summary>
+          <p>Video encoding uses substantial memory and power. Recent phones default to 720p and shorter durations; older devices may need lower detail density or a desktop browser.</p>
+        </details>
+      </div>
+    </section>
+
+    <section class="learn-section related" aria-labelledby="relatedHeading">
+      <div>
+        <p class="learn-section__index">07 / Continue exploring</p>
+        <h2 id="relatedHeading">Related experiments</h2>
+      </div>
+      <div class="related-grid">
+        <a href="https://www.ericbarker.co/gray-scott-reaction-lab/" data-analytics="related_experiment_selected">
+          <span>Computational Studio · 01</span>
+          <strong>Gray–Scott Reaction Lab</strong>
+          <p>Disturb two virtual chemicals and grow spots, coral, waves, and splitting cells.</p>
+          <i aria-hidden="true">↗</i>
+        </a>
+        <a href="https://www.ericbarker.co/projects.html" data-analytics="related_experiment_selected">
+          <span>Eric Barker · Projects</span>
+          <strong>More systems and experiments</strong>
+          <p>See the laboratory alongside twenty years of businesses, digital systems, and shipped work.</p>
+          <i aria-hidden="true">→</i>
+        </a>
+      </div>
+    </section>
+  </main>
+
+  <footer class="lab-footer">
+    <div>
+      <strong>Explosion Dynamics Lab</strong>
+      <p>A creative-coding experiment by <a href="https://www.ericbarker.co/">Eric Barker</a>.</p>
+    </div>
+    <div>
+      <p>First-party implementation released under the <a href="LICENSE">MIT License</a>; the local encoder has separate <a href="THIRD_PARTY_NOTICES.md">third-party terms and source notices</a>.</p>
+      <p>© 2026 Eric Barker · No weapon construction, targeting, or casualty information.</p>
+    </div>
+  </footer>
+
+  <dialog class="export-dialog" id="exportDialog" aria-labelledby="exportDialogTitle">
+    <form method="dialog" class="export-dialog__shell" id="exportForm">
+      <div class="export-dialog__head">
+        <div>
+          <span>Local video laboratory</span>
+          <h2 id="exportDialogTitle">Export MP4</h2>
+        </div>
+        <button class="dialog-close" id="exportCloseButton" type="button" aria-label="Close export options">×</button>
+      </div>
+      <div class="export-dialog__body" id="exportOptions">
+        <div class="export-grid">
+          <label class="field">
+            <span class="field__label">Duration</span>
+            <select id="exportDuration">
+              <option value="5">5 seconds</option>
+              <option value="10" selected>10 seconds</option>
+              <option value="15">15 seconds</option>
+              <option value="full" id="exportFullDuration">Full event (up to 30 seconds)</option>
+            </select>
+          </label>
+          <label class="field">
+            <span class="field__label">Resolution</span>
+            <select id="exportResolution">
+              <option value="1280x720" selected>1280 × 720</option>
+              <option value="1920x1080">1920 × 1080</option>
+            </select>
+          </label>
+          <label class="field">
+            <span class="field__label">Frame rate</span>
+            <select id="exportFps">
+              <option value="24">24 FPS</option>
+              <option value="30" selected>30 FPS</option>
+            </select>
+          </label>
+          <label class="field">
+            <span class="field__label">Start point</span>
+            <select id="exportStartMode">
+              <option value="restart" selected>Restart complete event</option>
+              <option value="current">Current timeline position</option>
+            </select>
+          </label>
+          <label class="field export-grid__wide">
+            <span class="field__label">Encoding route</span>
+            <select id="exportRoute">
+              <option value="auto" selected>Automatic — native MP4 first</option>
+              <option value="native">Native MP4 only</option>
+              <option value="ffmpeg">Force local FFmpeg fallback</option>
+            </select>
+          </label>
+        </div>
+        <div class="dialog-toggles">
+          <label class="switch-row"><span>Include compact interface label</span><input id="exportInterfaceToggle" type="checkbox"><i aria-hidden="true"></i></label>
+          <label class="switch-row"><span>Include subtle Eric Barker attribution</span><input id="exportWatermarkToggle" type="checkbox" checked><i aria-hidden="true"></i></label>
+        </div>
+        <p class="dialog-note">The export captures the simulator composition—not browser chrome. Video is silent. Processing stays on this device.</p>
+        <button class="dialog-submit" id="startExportButton" type="button">Start MP4 export</button>
+      </div>
+      <div class="export-progress" id="exportProgress" hidden>
+        <div class="progress-orbit" aria-hidden="true"><span></span></div>
+        <p class="export-progress__stage" id="exportStage" role="status" aria-live="polite" aria-atomic="true">Preparing simulation</p>
+        <p class="export-progress__detail" id="exportDetail">Building a deterministic render session…</p>
+        <progress id="exportProgressBar" max="100" value="0">0%</progress>
+        <output id="exportPercent">0%</output>
+        <button class="cancel-button" id="cancelExportButton" type="button">Cancel export</button>
+      </div>
+      <div class="export-error" id="exportError" role="alert" aria-live="assertive" hidden>
+        <strong>MP4 could not be completed on this browser or device.</strong>
+        <p id="exportErrorMessage">Try a shorter duration, 720p, or another modern browser.</p>
+        <a class="recovery-link" id="webmRecoveryLink" href="#" download hidden>Download WebM recovery file</a>
+        <button id="exportRetryButton" type="button">Return to export options</button>
+      </div>
+    </form>
+  </dialog>
+</body>
+</html>

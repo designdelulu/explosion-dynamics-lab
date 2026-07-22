@@ -1,0 +1,3239 @@
+/**
+ * ResearchFluidEngine
+ * -------------------
+ * A deterministic, normalized 2.5D WebGL2 fluid study for the educational
+ * Explosion Dynamics Lab. The engine intentionally exposes no real-world
+ * quantities, locations, construction parameters, or damage calculations.
+ *
+ * By default the solver owns a hidden transparent WebGL2 canvas that a facade
+ * can composite into an existing Canvas2D scene. A caller-provided research
+ * canvas is used as-is: the engine never hides, repositions, or styles it.
+ */
+
+const clamp = (value, minimum, maximum) => Math.min(maximum, Math.max(minimum, value));
+const finite = (value, fallback) => (Number.isFinite(Number(value)) ? Number(value) : fallback);
+const TAU = Math.PI * 2;
+const MAX_OUTPUT_DIMENSION = 4096;
+const MAX_SEEK_SECONDS = 120;
+
+const deepFreeze = (value) => {
+  if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
+  for (const child of Object.values(value)) deepFreeze(child);
+  return Object.freeze(value);
+};
+
+function mixDetailBits(value) {
+  let mixed = value >>> 0;
+  mixed ^= mixed >>> 16;
+  mixed = Math.imul(mixed, 0x7feb352d);
+  mixed ^= mixed >>> 15;
+  mixed = Math.imul(mixed, 0x846ca68b);
+  mixed ^= mixed >>> 16;
+  return mixed >>> 0;
+}
+
+function wrappedDetailCell(value, size) {
+  return ((value % size) + size) % size;
+}
+
+function detailPotential(x, y, z, channel, size, seed) {
+  const wrappedX = wrappedDetailCell(x, size);
+  const wrappedY = wrappedDetailCell(y, size);
+  const wrappedZ = wrappedDetailCell(z, size);
+  let value = seed >>> 0;
+  value ^= Math.imul(wrappedX + 1, 0x9e3779b1);
+  value ^= Math.imul(wrappedY + 1, 0x85ebca77);
+  value ^= Math.imul(wrappedZ + 1, 0xc2b2ae3d);
+  value ^= Math.imul(channel + 1, 0x27d4eb2f);
+  return mixDetailBits(value) / 0xffffffff;
+}
+
+function encodeSignedDetail(value) {
+  return Math.round((clamp(value, -1, 1) * 0.5 + 0.5) * 255);
+}
+
+function buildCurlDetailVolume(size, seed) {
+  const data = new Uint8Array(size * size * size * 4);
+  let offset = 0;
+  for (let z = 0; z < size; z += 1) {
+    for (let y = 0; y < size; y += 1) {
+      for (let x = 0; x < size; x += 1) {
+        // Curl of a seeded periodic vector potential. The central differences
+        // make this low-resolution 3D field divergence-free before interpolation.
+        const curlX = (
+          detailPotential(x, y + 1, z, 2, size, seed)
+          - detailPotential(x, y - 1, z, 2, size, seed)
+          - detailPotential(x, y, z + 1, 1, size, seed)
+          + detailPotential(x, y, z - 1, 1, size, seed)
+        ) * 0.5;
+        const curlY = (
+          detailPotential(x, y, z + 1, 0, size, seed)
+          - detailPotential(x, y, z - 1, 0, size, seed)
+          - detailPotential(x + 1, y, z, 2, size, seed)
+          + detailPotential(x - 1, y, z, 2, size, seed)
+        ) * 0.5;
+        const curlZ = (
+          detailPotential(x + 1, y, z, 1, size, seed)
+          - detailPotential(x - 1, y, z, 1, size, seed)
+          - detailPotential(x, y + 1, z, 0, size, seed)
+          + detailPotential(x, y - 1, z, 0, size, seed)
+        ) * 0.5;
+        data[offset] = encodeSignedDetail(curlX);
+        data[offset + 1] = encodeSignedDetail(curlY);
+        data[offset + 2] = encodeSignedDetail(curlZ);
+        data[offset + 3] = Math.round(
+          detailPotential(x, y, z, 3, size, seed ^ 0xa511e9b3) * 255,
+        );
+        offset += 4;
+      }
+    }
+  }
+  return data;
+}
+
+export const RESEARCH_FLUID_TIERS = Object.freeze({
+  mobile: Object.freeze({
+    id: 'mobile',
+    label: 'Mobile',
+    gridLongSide: 112,
+    gridShortSideMinimum: 64,
+    pressureIterations: 8,
+    raySteps: 16,
+    tracerCount: 256,
+    detailResolution: 16,
+    fixedStep: 1 / 30,
+    velocityDecay: 0.989,
+    scalarDecay: 0.997,
+    vorticity: 0.19,
+  }),
+  balanced: Object.freeze({
+    id: 'balanced',
+    label: 'Balanced',
+    gridLongSide: 176,
+    gridShortSideMinimum: 88,
+    pressureIterations: 13,
+    raySteps: 26,
+    tracerCount: 512,
+    detailResolution: 24,
+    fixedStep: 1 / 30,
+    velocityDecay: 0.993,
+    scalarDecay: 0.998,
+    vorticity: 0.28,
+  }),
+  high: Object.freeze({
+    id: 'high',
+    label: 'High',
+    gridLongSide: 256,
+    gridShortSideMinimum: 128,
+    pressureIterations: 19,
+    raySteps: 38,
+    tracerCount: 1024,
+    detailResolution: 32,
+    fixedStep: 1 / 30,
+    velocityDecay: 0.995,
+    scalarDecay: 0.999,
+    vorticity: 0.36,
+  }),
+});
+
+/**
+ * Normalized visual source primitives. These identifiers select artistic field
+ * shapes only; they do not encode materials, construction, real dimensions, or
+ * predictive blast quantities.
+ */
+export const RESEARCH_FLUID_SOURCE_PRIMITIVES = Object.freeze({
+  'radial-impulse': 1,
+  'directional-impulse': 2,
+  'ring-source': 4,
+  'ground-sheet': 8,
+  'vertical-jet': 16,
+  'multiple-offset-kernels': 32,
+  'pulsed-column': 64,
+  'ejecta-curtain': 128,
+  'elongated-trail': 256,
+  'sustained-combustion-region': 512,
+  'turbulent-source-cluster': 1024,
+  'paired-cap-vortices': 2048,
+});
+
+const BASE_PROFILE = Object.freeze({
+  eventFamilyId: 'nuclear-scale',
+  eventFamily: 'Nuclear scale · research airburst',
+  physicalFamilyId: 'nuclear-scale',
+  profileKind: 9,
+  tracerType: 'thermal',
+  sourcePrimitives: Object.freeze(['radial-impulse', 'vertical-jet', 'paired-cap-vortices']),
+  source: Object.freeze({
+    centerX: 0.5,
+    centerY: 0.31,
+    radius: 0.065,
+    aspectX: 1,
+    aspectY: 0.82,
+    groundLevel: 0.18,
+    onsetEnd: 0.055,
+    sustainEnd: 0.43,
+    pulseFrequency: 3.2,
+    stageOffset: 0.03,
+    radial: 1,
+    vertical: 1,
+    directional: 0,
+    turbulence: 0.65,
+    heat: 1,
+    smoke: 1,
+    incandescent: 1,
+    dust: 0.4,
+    directionX: 0,
+    directionY: 1,
+    offsetX: 0,
+    offsetY: 0,
+    ringRadius: 1.2,
+    ejecta: 0,
+    trailLength: 0,
+    clusterSpread: 1,
+    capScale: 1,
+  }),
+  physics: Object.freeze({
+    buoyancy: 1,
+    densityLoading: 1,
+    windCoupling: 1,
+    vorticity: 1,
+    velocityRetention: 1,
+    cooling: 1,
+    smokeConversion: 1,
+    scalarRetention: 1,
+  }),
+  volume: Object.freeze({
+    scaleX: 1,
+    scaleY: 1,
+    depth: 1,
+    opacity: 1,
+    shadow: 1,
+    bloom: 1,
+    distortion: 1,
+    erosion: 1,
+    noiseScale: 1,
+    dustVisibility: 1,
+    exposure: 1,
+    toneMap: 0,
+    backgroundIllumination: 0,
+    emissionCurve: 1,
+  }),
+  quality: Object.freeze({ grid: 1, pressure: 1, rays: 1, tracers: 1, detail: 1 }),
+});
+
+function defineFluidProfile(presetId, profileId, overrides = {}) {
+  return deepFreeze({
+    ...BASE_PROFILE,
+    ...overrides,
+    presetId,
+    profileId,
+    physicalFamilyId: overrides.physicalFamilyId || overrides.eventFamilyId || BASE_PROFILE.physicalFamilyId,
+    sourcePrimitives: [...(overrides.sourcePrimitives || BASE_PROFILE.sourcePrimitives)],
+    source: { ...BASE_PROFILE.source, ...(overrides.source || {}) },
+    physics: { ...BASE_PROFILE.physics, ...(overrides.physics || {}) },
+    volume: { ...BASE_PROFILE.volume, ...(overrides.volume || {}) },
+    quality: { ...BASE_PROFILE.quality, ...(overrides.quality || {}) },
+  });
+}
+
+/**
+ * Per-preset GPU profiles. Values are dimensionless art-direction controls.
+ * The flagship profile intentionally retains the original source branch as a
+ * named regression/default while every other profile combines different,
+ * deterministically offset field primitives.
+ */
+export const RESEARCH_FLUID_PROFILES = deepFreeze({
+  'compact-conventional': defineFluidProfile(
+    'compact-conventional',
+    'compact-conventional-fluid-v1',
+    {
+      eventFamilyId: 'conventional-compact', eventFamily: 'Conventional · compact blast', profileKind: 0,
+      tracerType: 'debris',
+      sourcePrimitives: ['radial-impulse', 'ground-sheet', 'multiple-offset-kernels', 'turbulent-source-cluster'],
+      source: { centerY: 0.19, radius: 0.048, aspectX: 1.55, aspectY: 0.62, onsetEnd: 0.038, sustainEnd: 0.2, radial: 1.35, vertical: 0.22, turbulence: 1.1, heat: 1.15, smoke: 0.58, incandescent: 1.08, dust: 1.35, clusterSpread: 1.25 },
+      physics: { buoyancy: 0.5, densityLoading: 1.22, windCoupling: 0.48, vorticity: 1.28, velocityRetention: 0.974, cooling: 1.65, smokeConversion: 1.18, scalarRetention: 0.992 },
+      volume: { scaleX: 1.12, scaleY: 0.62, depth: 0.72, opacity: 1.08, shadow: 0.86, bloom: 0.72, distortion: 0.72, erosion: 1.3, noiseScale: 1.45, dustVisibility: 1.42, exposure: 0.92, backgroundIllumination: 0.08, emissionCurve: 0.86 },
+      quality: { grid: 0.82, pressure: 0.75, rays: 0.72, tracers: 0.72, detail: 0.75 },
+    },
+  ),
+  'large-conventional': defineFluidProfile(
+    'large-conventional',
+    'large-conventional-fluid-v1',
+    {
+      eventFamilyId: 'conventional-compact', eventFamily: 'Conventional · large blast', profileKind: 1,
+      tracerType: 'debris',
+      sourcePrimitives: ['radial-impulse', 'ground-sheet', 'vertical-jet', 'multiple-offset-kernels', 'turbulent-source-cluster'],
+      source: { centerY: 0.2, radius: 0.063, aspectX: 1.42, aspectY: 0.7, onsetEnd: 0.052, sustainEnd: 0.3, radial: 1.25, vertical: 0.48, turbulence: 1.05, heat: 1.12, smoke: 0.82, incandescent: 1, dust: 1.4, clusterSpread: 1.35 },
+      physics: { buoyancy: 0.65, densityLoading: 1.2, windCoupling: 0.62, vorticity: 1.22, velocityRetention: 0.98, cooling: 1.42, smokeConversion: 1.2, scalarRetention: 0.994 },
+      volume: { scaleX: 1.18, scaleY: 0.82, depth: 0.82, opacity: 1.12, shadow: 0.98, bloom: 0.82, distortion: 0.8, erosion: 1.2, noiseScale: 1.32, dustVisibility: 1.38, exposure: 0.96, backgroundIllumination: 0.1, emissionCurve: 0.9 },
+      quality: { grid: 0.9, pressure: 0.88, rays: 0.82, tracers: 0.86, detail: 0.88 },
+    },
+  ),
+  'industrial-fireball': defineFluidProfile(
+    'industrial-fireball',
+    'industrial-fireball-fluid-v1',
+    {
+      eventFamilyId: 'industrial-combustion', eventFamily: 'Industrial · rolling fireball', profileKind: 2,
+      tracerType: 'ember',
+      sourcePrimitives: ['sustained-combustion-region', 'multiple-offset-kernels', 'vertical-jet', 'turbulent-source-cluster'],
+      source: { centerY: 0.22, radius: 0.072, aspectX: 1.28, aspectY: 0.92, onsetEnd: 0.09, sustainEnd: 0.68, pulseFrequency: 2.2, radial: 0.48, vertical: 0.9, turbulence: 1.22, heat: 1.12, smoke: 1.42, incandescent: 1.35, dust: 0.38, clusterSpread: 1.48 },
+      physics: { buoyancy: 1.18, densityLoading: 1.12, windCoupling: 0.9, vorticity: 1.42, velocityRetention: 0.991, cooling: 0.66, smokeConversion: 1.38, scalarRetention: 0.999 },
+      volume: { scaleX: 1.05, scaleY: 1.05, depth: 1.12, opacity: 1.3, shadow: 1.35, bloom: 1.22, distortion: 1.18, erosion: 0.82, noiseScale: 1.14, dustVisibility: 0.48, exposure: 1.08, backgroundIllumination: 0.2, emissionCurve: 0.78 },
+      quality: { grid: 0.96, pressure: 0.94, rays: 1, tracers: 1.12, detail: 1 },
+    },
+  ),
+  'fuel-air-visual-archetype': defineFluidProfile(
+    'fuel-air-visual-archetype',
+    'fuel-air-style-fluid-v1',
+    {
+      eventFamilyId: 'industrial-combustion', eventFamily: 'Industrial · expansive fireball', profileKind: 3,
+      tracerType: 'ember',
+      sourcePrimitives: ['sustained-combustion-region', 'ring-source', 'multiple-offset-kernels', 'turbulent-source-cluster'],
+      source: { centerY: 0.27, radius: 0.082, aspectX: 1.62, aspectY: 0.76, onsetEnd: 0.1, sustainEnd: 0.6, pulseFrequency: 1.75, radial: 0.82, vertical: 0.65, turbulence: 1.25, heat: 1.18, smoke: 1.15, incandescent: 1.32, dust: 0.55, ringRadius: 1.55, clusterSpread: 1.62 },
+      physics: { buoyancy: 1.02, densityLoading: 1.02, windCoupling: 0.82, vorticity: 1.35, velocityRetention: 0.99, cooling: 0.72, smokeConversion: 1.3, scalarRetention: 0.998 },
+      volume: { scaleX: 1.24, scaleY: 0.92, depth: 1.22, opacity: 1.18, shadow: 1.18, bloom: 1.25, distortion: 1.2, erosion: 0.92, noiseScale: 1.08, dustVisibility: 0.68, exposure: 1.06, backgroundIllumination: 0.24, emissionCurve: 0.76 },
+      quality: { grid: 0.98, pressure: 0.94, rays: 1.04, tracers: 1.04, detail: 1 },
+    },
+  ),
+  'underground-detonation': defineFluidProfile(
+    'underground-detonation',
+    'underground-fluid-v1',
+    {
+      eventFamilyId: 'ground-coupled', eventFamily: 'Ground-coupled · underground', profileKind: 4,
+      tracerType: 'particulate',
+      sourcePrimitives: ['vertical-jet', 'ground-sheet', 'ejecta-curtain', 'multiple-offset-kernels', 'turbulent-source-cluster'],
+      source: { centerY: 0.14, groundLevel: 0.18, radius: 0.055, aspectX: 1.25, aspectY: 0.62, onsetEnd: 0.075, sustainEnd: 0.52, radial: 0.75, vertical: 1.55, turbulence: 1.42, heat: 0.38, smoke: 0.92, incandescent: 0.25, dust: 2.25, ejecta: 1.65, clusterSpread: 1.2 },
+      physics: { buoyancy: 0.78, densityLoading: 1.55, windCoupling: 0.68, vorticity: 1.52, velocityRetention: 0.982, cooling: 1.24, smokeConversion: 1.05, scalarRetention: 0.998 },
+      volume: { scaleX: 1.08, scaleY: 1.25, depth: 1.08, opacity: 1.55, shadow: 1.55, bloom: 0.38, distortion: 0.46, erosion: 1.15, noiseScale: 1.38, dustVisibility: 2, exposure: 0.78, toneMap: 0.25, backgroundIllumination: 0.04, emissionCurve: 1.15 },
+      quality: { grid: 0.94, pressure: 1, rays: 1, tracers: 1.28, detail: 1.08 },
+    },
+  ),
+  'meteor-airburst': defineFluidProfile(
+    'meteor-airburst',
+    'meteor-airburst-fluid-v1',
+    {
+      eventFamilyId: 'meteor', eventFamily: 'Meteor · atmospheric airburst', profileKind: 5,
+      tracerType: 'trail',
+      sourcePrimitives: ['elongated-trail', 'directional-impulse', 'ring-source', 'multiple-offset-kernels'],
+      source: { centerY: 0.47, radius: 0.06, aspectX: 1.72, aspectY: 0.66, onsetEnd: 0.045, sustainEnd: 0.38, stageOffset: 0.08, radial: 0.74, vertical: 0.32, directional: 1.38, turbulence: 0.82, heat: 1.45, smoke: 0.62, incandescent: 1.18, dust: 0.08, directionX: 0.66, directionY: -0.75, ringRadius: 1.75, trailLength: 2.7, clusterSpread: 1.35 },
+      physics: { buoyancy: 0.7, densityLoading: 0.75, windCoupling: 1.35, vorticity: 1.05, velocityRetention: 0.988, cooling: 1.3, smokeConversion: 0.94, scalarRetention: 0.996 },
+      volume: { scaleX: 1.38, scaleY: 0.86, depth: 0.88, opacity: 0.92, shadow: 0.72, bloom: 1.38, distortion: 1.18, erosion: 1.32, noiseScale: 1.4, dustVisibility: 0.12, exposure: 1.22, backgroundIllumination: 0.34, emissionCurve: 0.74 },
+      quality: { grid: 0.9, pressure: 0.88, rays: 0.9, tracers: 1.18, detail: 0.92 },
+    },
+  ),
+  'meteor-ground-impact': defineFluidProfile(
+    'meteor-ground-impact',
+    'meteor-impact-fluid-v1',
+    {
+      eventFamilyId: 'meteor', eventFamily: 'Meteor · ground impact', profileKind: 6,
+      tracerType: 'ejecta',
+      sourcePrimitives: ['elongated-trail', 'directional-impulse', 'vertical-jet', 'ejecta-curtain', 'ground-sheet'],
+      source: { centerY: 0.18, groundLevel: 0.18, radius: 0.065, aspectX: 1.28, aspectY: 0.72, onsetEnd: 0.052, sustainEnd: 0.55, stageOffset: 0.065, radial: 1.18, vertical: 1.58, directional: 1.25, turbulence: 1.15, heat: 1.02, smoke: 0.88, incandescent: 0.92, dust: 2.05, directionX: 0.58, directionY: -0.82, ejecta: 1.92, trailLength: 2.35, clusterSpread: 1.28 },
+      physics: { buoyancy: 0.84, densityLoading: 1.5, windCoupling: 0.82, vorticity: 1.4, velocityRetention: 0.982, cooling: 1.25, smokeConversion: 1.05, scalarRetention: 0.998 },
+      volume: { scaleX: 1.2, scaleY: 1.34, depth: 1.18, opacity: 1.48, shadow: 1.48, bloom: 0.78, distortion: 0.86, erosion: 1.15, noiseScale: 1.3, dustVisibility: 1.9, exposure: 0.9, toneMap: 0.18, backgroundIllumination: 0.12, emissionCurve: 0.94 },
+      quality: { grid: 1, pressure: 1.04, rays: 1.04, tracers: 1.42, detail: 1.12 },
+    },
+  ),
+  'volcanic-eruption': defineFluidProfile(
+    'volcanic-eruption',
+    'volcanic-column-fluid-v1',
+    {
+      eventFamilyId: 'volcanic', eventFamily: 'Volcanic eruption', profileKind: 7,
+      tracerType: 'ash',
+      sourcePrimitives: ['pulsed-column', 'vertical-jet', 'turbulent-source-cluster', 'ground-sheet'],
+      source: { centerY: 0.2, groundLevel: 0.18, radius: 0.052, aspectX: 0.72, aspectY: 1.58, onsetEnd: 0.14, sustainEnd: 1.25, pulseFrequency: 5.4, radial: 0.18, vertical: 1.42, turbulence: 1.5, heat: 0.48, smoke: 1.72, incandescent: 0.38, dust: 1.65, clusterSpread: 1.15 },
+      physics: { buoyancy: 1.08, densityLoading: 1.25, windCoupling: 1.45, vorticity: 1.55, velocityRetention: 0.994, cooling: 0.82, smokeConversion: 1.12, scalarRetention: 0.9997 },
+      volume: { scaleX: 1, scaleY: 1.62, depth: 1.2, opacity: 1.5, shadow: 1.62, bloom: 0.42, distortion: 0.55, erosion: 0.88, noiseScale: 1.18, dustVisibility: 1.55, exposure: 0.8, toneMap: 0.3, backgroundIllumination: 0.06, emissionCurve: 1.1 },
+      quality: { grid: 1.04, pressure: 1.08, rays: 1.12, tracers: 1.38, detail: 1.2 },
+    },
+  ),
+  'fictional-plasma-burst': defineFluidProfile(
+    'fictional-plasma-burst',
+    'fictional-plasma-fluid-v1',
+    {
+      eventFamilyId: 'fictional-plasma', eventFamily: 'Fictional · plasma', profileKind: 8,
+      tracerType: 'plasma-filament',
+      sourcePrimitives: ['radial-impulse', 'ring-source', 'multiple-offset-kernels', 'turbulent-source-cluster'],
+      source: { centerY: 0.42, radius: 0.062, aspectX: 1, aspectY: 1, onsetEnd: 0.05, sustainEnd: 0.34, pulseFrequency: 7.2, radial: 1.35, vertical: 0.08, turbulence: 1.75, heat: 1.75, smoke: 0.12, incandescent: 1.85, dust: 0.02, ringRadius: 1.62, clusterSpread: 1.65 },
+      physics: { buoyancy: 0.18, densityLoading: 0.3, windCoupling: 0.16, vorticity: 1.75, velocityRetention: 0.968, cooling: 1.9, smokeConversion: 0.28, scalarRetention: 0.984 },
+      volume: { scaleX: 1.02, scaleY: 1.02, depth: 0.82, opacity: 0.58, shadow: 0.32, bloom: 1.85, distortion: 1.8, erosion: 1.55, noiseScale: 1.85, dustVisibility: 0.02, exposure: 1.45, toneMap: 0.45, backgroundIllumination: 0.5, emissionCurve: 0.62 },
+      quality: { grid: 0.9, pressure: 0.82, rays: 0.86, tracers: 1.5, detail: 1.18 },
+    },
+  ),
+  'low-yield-nuclear-airburst': defineFluidProfile(
+    'low-yield-nuclear-airburst',
+    'nuclear-airburst-fluid-v1',
+    {
+      eventFamilyId: 'nuclear-scale', eventFamily: 'Nuclear scale · research airburst', profileKind: 9,
+      tracerType: 'thermal',
+      sourcePrimitives: ['radial-impulse', 'vertical-jet', 'paired-cap-vortices'],
+      preserveResearchSource: true,
+    },
+  ),
+  'nuclear-ground-burst': defineFluidProfile(
+    'nuclear-ground-burst',
+    'nuclear-ground-fluid-v1',
+    {
+      eventFamilyId: 'nuclear-scale', physicalFamilyId: 'ground-coupled', eventFamily: 'Nuclear scale · ground-coupled', profileKind: 10,
+      tracerType: 'particulate',
+      sourcePrimitives: ['radial-impulse', 'ground-sheet', 'vertical-jet', 'ejecta-curtain', 'multiple-offset-kernels'],
+      source: { centerY: 0.18, groundLevel: 0.18, radius: 0.078, aspectX: 1.28, aspectY: 0.82, onsetEnd: 0.065, sustainEnd: 0.62, radial: 1.3, vertical: 1.5, turbulence: 1.3, heat: 1.28, smoke: 1.38, incandescent: 1.18, dust: 2.15, ejecta: 1.2, clusterSpread: 1.35 },
+      physics: { buoyancy: 1.05, densityLoading: 1.48, windCoupling: 1.28, vorticity: 1.45, velocityRetention: 0.991, cooling: 0.96, smokeConversion: 1.25, scalarRetention: 0.999 },
+      volume: { scaleX: 1.35, scaleY: 1.42, depth: 1.28, opacity: 1.52, shadow: 1.62, bloom: 1.12, distortion: 1.18, erosion: 1.02, noiseScale: 1.25, dustVisibility: 1.9, exposure: 1.02, toneMap: 0.12, backgroundIllumination: 0.25, emissionCurve: 0.86 },
+      quality: { grid: 1.04, pressure: 1.08, rays: 1.1, tracers: 1.32, detail: 1.12 },
+    },
+  ),
+  'extreme-historical-scale': defineFluidProfile(
+    'extreme-historical-scale',
+    'extreme-historical-fluid-v1',
+    {
+      eventFamilyId: 'nuclear-scale', eventFamily: 'Nuclear scale · extreme historical', profileKind: 11,
+      tracerType: 'atmospheric',
+      sourcePrimitives: ['radial-impulse', 'ring-source', 'vertical-jet', 'multiple-offset-kernels', 'paired-cap-vortices'],
+      source: { centerY: 0.37, radius: 0.092, aspectX: 1.15, aspectY: 0.92, onsetEnd: 0.055, sustainEnd: 0.78, pulseFrequency: 1.4, radial: 1.22, vertical: 1.38, turbulence: 1.48, heat: 1.42, smoke: 1.45, incandescent: 1.3, dust: 0.75, ringRadius: 1.75, clusterSpread: 1.62, capScale: 1.32 },
+      physics: { buoyancy: 1.22, densityLoading: 1.12, windCoupling: 1.42, vorticity: 1.5, velocityRetention: 0.996, cooling: 0.68, smokeConversion: 1.08, scalarRetention: 0.9997 },
+      volume: { scaleX: 1.5, scaleY: 1.66, depth: 1.42, opacity: 1.34, shadow: 1.5, bloom: 1.52, distortion: 1.28, erosion: 0.88, noiseScale: 0.92, dustVisibility: 1, exposure: 1.18, toneMap: 0.08, backgroundIllumination: 0.44, emissionCurve: 0.78 },
+      quality: { grid: 1.12, pressure: 1.16, rays: 1.18, tracers: 1.42, detail: 1.25 },
+    },
+  ),
+});
+
+// Descriptive alias for consumers that do not use the legacy research naming.
+export const EVENT_FLUID_PROFILES = RESEARCH_FLUID_PROFILES;
+
+const FLUID_PROFILE_BY_ID = Object.freeze(Object.fromEntries(
+  Object.values(RESEARCH_FLUID_PROFILES).map((profile) => [profile.profileId, profile]),
+));
+
+function resolveFluidProfile(presetId, profileId) {
+  const normalizedPresetId = String(presetId || '');
+  const presetProfile = RESEARCH_FLUID_PROFILES[normalizedPresetId];
+  if (!presetProfile) {
+    throw new RangeError(`Unknown fluid preset profile: ${normalizedPresetId || '<empty>'}.`);
+  }
+  if (!profileId) return presetProfile;
+  const requestedProfile = FLUID_PROFILE_BY_ID[String(profileId)];
+  if (!requestedProfile || requestedProfile.presetId !== normalizedPresetId) {
+    throw new RangeError(`Fluid profile ${String(profileId)} does not belong to preset ${normalizedPresetId}.`);
+  }
+  return requestedProfile;
+}
+
+function normalizeSourcePrimitives(value, profile) {
+  const requested = Array.isArray(value) ? value : profile.sourcePrimitives;
+  const unique = [];
+  for (const primitive of requested) {
+    const id = String(primitive || '').toLowerCase();
+    if (!RESEARCH_FLUID_SOURCE_PRIMITIVES[id] || unique.includes(id)) continue;
+    unique.push(id);
+  }
+  return Object.freeze(unique.length ? unique : [...profile.sourcePrimitives]);
+}
+
+function sourcePrimitiveMask(primitives) {
+  return primitives.reduce(
+    (mask, primitive) => mask | (RESEARCH_FLUID_SOURCE_PRIMITIVES[primitive] || 0),
+    0,
+  ) >>> 0;
+}
+
+const TRACER_TYPE_IDS = Object.freeze({
+  thermal: 0,
+  debris: 1,
+  particulate: 2,
+  ember: 3,
+  ash: 4,
+  ejecta: 5,
+  'plasma-filament': 6,
+  trail: 7,
+  atmospheric: 8,
+});
+
+function seededProfileOffsets(seed, profileKind) {
+  const values = [];
+  for (let index = 0; index < 8; index += 1) {
+    const mixed = mixDetailBits(
+      (seed >>> 0)
+      ^ Math.imul(profileKind + 1, 0x9e3779b1)
+      ^ Math.imul(index + 17, 0x85ebca77),
+    );
+    values.push(mixed / 0xffffffff * 2 - 1);
+  }
+  return values;
+}
+
+const DEFAULT_FLUID_PALETTE = deepFreeze({
+  id: 'research-natural',
+  background: [0.025, 0.029, 0.035],
+  core: [1, 0.96, 0.78],
+  hot: [1, 0.66, 0.15],
+  flame: [1, 0.19, 0.018],
+  ember: [0.34, 0.018, 0.004],
+  smoke: [0.025, 0.029, 0.035],
+  smokeLight: [0.22, 0.2, 0.18],
+  cloud: [0.22, 0.2, 0.18],
+  dust: [0.36, 0.27, 0.19],
+  plasma: [0.48, 0.9, 1],
+  thermal: [1, 0.34, 0.08],
+});
+
+function normalizedColor(value, fallback) {
+  if (Array.isArray(value) && value.length >= 3) {
+    const maximum = Math.max(...value.slice(0, 3).map((channel) => Math.abs(finite(channel, 0))));
+    const divisor = maximum > 1 ? 255 : 1;
+    return Object.freeze(value.slice(0, 3).map((channel, index) =>
+      clamp(finite(channel, fallback[index] * divisor) / divisor, 0, 1)));
+  }
+  const text = String(value || '').trim();
+  const hex = text.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i);
+  if (hex) {
+    let body = hex[1];
+    if (body.length === 3) body = body.split('').map((part) => part + part).join('');
+    const numeric = Number.parseInt(body, 16);
+    return Object.freeze([
+      ((numeric >> 16) & 255) / 255,
+      ((numeric >> 8) & 255) / 255,
+      (numeric & 255) / 255,
+    ]);
+  }
+  const rgb = text.match(/^rgba?\(([^)]+)\)$/i);
+  if (rgb) {
+    const channels = rgb[1].split(',').slice(0, 3).map((channel) => finite(channel.trim(), 0));
+    if (channels.length === 3) return Object.freeze(channels.map((channel) => clamp(channel / 255, 0, 1)));
+  }
+  return fallback;
+}
+
+function normalizeFluidPalette(value, previous = DEFAULT_FLUID_PALETTE) {
+  const palette = value && typeof value === 'object' ? value : {};
+  const read = (keys, fallback) => {
+    for (const key of keys) {
+      if (palette[key] !== undefined) return normalizedColor(palette[key], fallback);
+    }
+    return fallback;
+  };
+  return deepFreeze({
+    id: String(palette.id || previous.id || DEFAULT_FLUID_PALETTE.id),
+    background: read(['background', 'skyTop'], previous.background),
+    core: read(['core', 'flash'], previous.core),
+    hot: read(['hot', 'core', 'flash'], previous.hot),
+    flame: read(['flame'], previous.flame),
+    ember: read(['ember'], previous.ember),
+    smoke: read(['smoke'], previous.smoke),
+    smokeLight: read(['smokeLight', 'cloud'], previous.smokeLight),
+    cloud: read(['cloud', 'smoke'], previous.cloud),
+    dust: read(['dust'], previous.dust),
+    plasma: read(['plasma', 'accent', 'shock'], previous.plasma),
+    thermal: read(['thermal', 'flame'], previous.thermal),
+  });
+}
+
+export const RESEARCH_FLUID_DIAGNOSTICS = Object.freeze({
+  beauty: 0,
+  final: 0,
+  velocity: 1,
+  temperature: 2,
+  density: 3,
+  smoke: 3,
+  smokeDensity: 3,
+  incandescent: 4,
+  incandescentDensity: 4,
+  pressure: 5,
+  divergence: 6,
+  vorticity: 7,
+  tracers: 8,
+});
+
+export const RESEARCH_FLUID_DEFAULTS = Object.freeze({
+  presetId: 'low-yield-nuclear-airburst',
+  profileId: 'nuclear-airburst-fluid-v1',
+  eventFamilyId: 'nuclear-scale',
+  physicalFamilyId: 'nuclear-scale',
+  sourcePrimitives: RESEARCH_FLUID_PROFILES['low-yield-nuclear-airburst'].sourcePrimitives,
+  palette: DEFAULT_FLUID_PALETTE,
+  seed: 1842,
+  energy: 1,
+  altitude: 0.23,
+  windDirection: 90,
+  windStrength: 24,
+  duration: 29.5,
+  reducedMotion: false,
+  sourceStrength: 1,
+  buoyancy: 0.62,
+  densityLoading: 0.16,
+  cooling: 0.22,
+  smokeConversion: 0.78,
+  dissipation: 0.995,
+  tier: 'balanced',
+  diagnostic: 'beauty',
+});
+
+const FULLSCREEN_VERTEX = `#version 300 es
+precision highp float;
+out vec2 vUv;
+void main() {
+  vec2 position = vec2(
+    gl_VertexID == 1 ? 3.0 : -1.0,
+    gl_VertexID == 2 ? 3.0 : -1.0
+  );
+  vUv = position * 0.5 + 0.5;
+  gl_Position = vec4(position, 0.0, 1.0);
+}`;
+
+const FIELD_SAMPLING = `
+vec4 sampleField(sampler2D field, vec2 uv) {
+  ivec2 dimensions = textureSize(field, 0);
+  vec2 size = vec2(dimensions);
+  vec2 position = clamp(uv, 0.5 / size, 1.0 - 0.5 / size) * size - 0.5;
+  ivec2 base = ivec2(floor(position));
+  vec2 fraction = fract(position);
+  ivec2 maximum = dimensions - 1;
+  ivec2 p00 = clamp(base, ivec2(0), maximum);
+  ivec2 p10 = clamp(base + ivec2(1, 0), ivec2(0), maximum);
+  ivec2 p01 = clamp(base + ivec2(0, 1), ivec2(0), maximum);
+  ivec2 p11 = clamp(base + ivec2(1, 1), ivec2(0), maximum);
+  vec4 lower = mix(texelFetch(field, p00, 0), texelFetch(field, p10, 0), fraction.x);
+  vec4 upper = mix(texelFetch(field, p01, 0), texelFetch(field, p11, 0), fraction.x);
+  return mix(lower, upper, fraction.y);
+}
+
+float boundaryMask(vec2 uv) {
+  vec2 lower = smoothstep(vec2(0.0), vec2(0.018), uv);
+  vec2 upper = smoothstep(vec2(0.0), vec2(0.018), 1.0 - uv);
+  return lower.x * lower.y * upper.x * upper.y;
+}
+`;
+
+const SEEDED_HASH = `
+uint mixBits(uint value) {
+  value ^= value >> 16;
+  value *= 0x7feb352du;
+  value ^= value >> 15;
+  value *= 0x846ca68bu;
+  value ^= value >> 16;
+  return value;
+}
+`;
+
+const DETAIL_SAMPLING = `
+vec4 sampleCurlDetail(sampler3D field, vec3 position) {
+  return texture(field, fract(position));
+}
+
+vec3 decodeCurlDetail(vec4 encoded) {
+  return encoded.xyz * 2.0 - 1.0;
+}
+`;
+
+const SOURCE_PROFILE_UNIFORMS = `
+uniform uint uSourceMask;
+uniform int uProfileKind;
+uniform vec4 uSourceShape;
+uniform vec4 uSourceTiming;
+uniform vec4 uSourceMotion;
+uniform vec4 uSourceScalar;
+uniform vec4 uSourceVector;
+uniform vec4 uSourceAux;
+uniform vec4 uSeedOffsetsA;
+uniform vec4 uSeedOffsetsB;
+uniform vec4 uProfilePhysics;
+uniform vec4 uProfileDecay;
+uniform vec4 uProfileAux;
+`;
+
+const SOURCE_PROFILE_FUNCTIONS = `
+const uint SOURCE_RADIAL = 1u;
+const uint SOURCE_DIRECTIONAL = 2u;
+const uint SOURCE_RING = 4u;
+const uint SOURCE_GROUND = 8u;
+const uint SOURCE_VERTICAL = 16u;
+const uint SOURCE_MULTIPLE = 32u;
+const uint SOURCE_PULSED = 64u;
+const uint SOURCE_EJECTA = 128u;
+const uint SOURCE_TRAIL = 256u;
+const uint SOURCE_SUSTAINED = 512u;
+const uint SOURCE_TURBULENT = 1024u;
+const uint SOURCE_PAIRED_CAP = 2048u;
+
+bool sourceEnabled(uint primitive) {
+  return (uSourceMask & primitive) != 0u;
+}
+
+vec2 safeDirection(vec2 direction) {
+  float magnitude = length(direction);
+  return magnitude > 0.00001 ? direction / magnitude : vec2(0.0, 1.0);
+}
+
+vec2 profileSourceCenter() {
+  return uSourceCenter + uSourceVector.zw;
+}
+
+float ellipticalKernel(vec2 delta, float radius, vec2 aspect) {
+  vec2 scaled = delta / max(vec2(0.002), radius * max(aspect, vec2(0.12)));
+  return exp(-dot(scaled, scaled));
+}
+
+float profileBaseKernel(vec2 uv) {
+  return ellipticalKernel(
+    uv - profileSourceCenter(),
+    uSourceShape.x,
+    uSourceShape.yz
+  );
+}
+
+float profileMultiKernel(vec2 uv) {
+  float radius = uSourceShape.x * 0.68;
+  float spread = uSourceShape.x * uSourceAux.w;
+  vec2 center = profileSourceCenter();
+  float a = ellipticalKernel(uv - center - uSeedOffsetsA.xy * spread, radius, vec2(1.15, 0.72));
+  float b = ellipticalKernel(uv - center - uSeedOffsetsA.zw * spread, radius * 0.86, vec2(0.72, 1.08));
+  float c = ellipticalKernel(uv - center - uSeedOffsetsB.xy * spread, radius * 0.72, vec2(1.3, 0.66));
+  float d = ellipticalKernel(uv - center - uSeedOffsetsB.zw * spread, radius * 0.58, vec2(0.8, 1.2));
+  return clamp(a * 0.82 + b * 0.68 + c * 0.58 + d * 0.44, 0.0, 1.65);
+}
+
+float profileRingKernel(vec2 uv) {
+  vec2 delta = uv - profileSourceCenter();
+  vec2 scaled = delta / max(vec2(0.002), uSourceShape.x * uSourceShape.yz);
+  float distanceFromRing = abs(length(scaled) - uSourceAux.x);
+  return exp(-distanceFromRing * distanceFromRing * 9.5);
+}
+
+float profileGroundKernel(vec2 uv) {
+  float vertical = (uv.y - uSourceShape.w) / max(0.006, uSourceShape.x * 0.28);
+  float horizontal = (uv.x - profileSourceCenter().x) / max(0.02, uSourceShape.x * 4.8);
+  return exp(-vertical * vertical - horizontal * horizontal);
+}
+
+float profileVerticalKernel(vec2 uv) {
+  vec2 center = profileSourceCenter();
+  float horizontal = (uv.x - center.x) / max(0.006, uSourceShape.x * 0.42);
+  float lower = smoothstep(uSourceShape.w - 0.025, uSourceShape.w + 0.02, uv.y);
+  float upper = 1.0 - smoothstep(center.y + uSourceShape.x * 5.0, center.y + uSourceShape.x * 8.5, uv.y);
+  return exp(-horizontal * horizontal) * lower * upper;
+}
+
+float profileTrailKernel(vec2 uv) {
+  vec2 direction = safeDirection(uSourceVector.xy);
+  vec2 normal = vec2(-direction.y, direction.x);
+  vec2 delta = uv - profileSourceCenter();
+  float along = dot(delta, direction);
+  float across = dot(delta, normal);
+  float halfLength = max(uSourceShape.x, uSourceShape.x * uSourceAux.z);
+  float outside = max(abs(along) - halfLength, 0.0);
+  float directionalTaper = mix(
+    0.08,
+    1.0,
+    1.0 - smoothstep(-halfLength * 0.16, halfLength * 0.62, along)
+  );
+  return directionalTaper * exp(
+    -across * across / max(0.00008, uSourceShape.x * uSourceShape.x * 0.24)
+    -outside * outside / max(0.00012, uSourceShape.x * uSourceShape.x)
+  );
+}
+
+float profileEjectaKernel(vec2 uv) {
+  vec2 delta = uv - vec2(profileSourceCenter().x, uSourceShape.w);
+  float radius = max(0.012, uSourceShape.x * (1.1 + uNormalizedTime * 4.4));
+  float shell = abs(length(delta / vec2(1.35, 0.72)) - radius);
+  float upper = smoothstep(-0.012, 0.025, delta.y);
+  return exp(-shell * shell / max(0.00006, radius * radius * 0.12)) * upper;
+}
+
+float profilePulseEnvelope() {
+  float wave = 0.5 + 0.5 * sin(
+    uTime * max(0.2, uSourceTiming.z) + uSeedOffsetsB.w * 6.28318530718
+  );
+  return 0.28 + wave * wave * 0.72;
+}
+
+float profileOnsetEnvelope() {
+  float afterOnset = step(0.000001, uTime);
+  return exp(-uNormalizedTime / max(0.004, uSourceTiming.x)) * afterOnset;
+}
+
+float profileSustainEnvelope() {
+  float start = smoothstep(0.0, 0.012, uNormalizedTime);
+  float end = 1.0 - smoothstep(uSourceTiming.y, uSourceTiming.y + 0.24, uNormalizedTime);
+  return start * end;
+}
+
+float profileStageEnvelope() {
+  return smoothstep(uSourceTiming.w, uSourceTiming.w + 0.028, uNormalizedTime);
+}
+
+float profileCombinedKernelWithoutTrail(vec2 uv) {
+  float result = profileBaseKernel(uv) * (sourceEnabled(SOURCE_RADIAL) ? 1.0 : 0.0);
+  result = max(result, profileRingKernel(uv) * (sourceEnabled(SOURCE_RING) ? 1.0 : 0.0));
+  result = max(result, profileGroundKernel(uv) * (sourceEnabled(SOURCE_GROUND) ? 1.0 : 0.0));
+  result = max(result, profileVerticalKernel(uv) * (sourceEnabled(SOURCE_VERTICAL) ? 0.72 : 0.0));
+  result = max(result, profileBaseKernel(uv) * (sourceEnabled(SOURCE_SUSTAINED) ? 1.15 : 0.0));
+  result += profileMultiKernel(uv) * (sourceEnabled(SOURCE_MULTIPLE) ? 0.72 : 0.0);
+  result += profileMultiKernel(uv) * (sourceEnabled(SOURCE_TURBULENT) ? 0.24 : 0.0);
+  return clamp(result, 0.0, 2.2);
+}
+
+float profileCombinedKernel(vec2 uv) {
+  float result = profileCombinedKernelWithoutTrail(uv);
+  result = max(result, profileTrailKernel(uv) * (sourceEnabled(SOURCE_TRAIL) ? 1.0 : 0.0));
+  return clamp(result, 0.0, 2.2);
+}
+`;
+
+const ADVECT_FRAGMENT = `#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+in vec2 vUv;
+out vec4 outputValue;
+uniform sampler2D uVelocity;
+uniform sampler2D uSource;
+uniform float uDt;
+uniform vec4 uDecay;
+${FIELD_SAMPLING}
+void main() {
+  vec2 velocity = sampleField(uVelocity, vUv).xy;
+  vec2 previous = vUv - velocity * uDt;
+  outputValue = sampleField(uSource, previous) * uDecay;
+}`;
+
+const CURL_FRAGMENT = `#version 300 es
+precision highp float;
+precision highp sampler2D;
+in vec2 vUv;
+out vec4 outputValue;
+uniform sampler2D uVelocity;
+uniform vec2 uTexel;
+${FIELD_SAMPLING}
+void main() {
+  float left = sampleField(uVelocity, vUv - vec2(uTexel.x, 0.0)).y;
+  float right = sampleField(uVelocity, vUv + vec2(uTexel.x, 0.0)).y;
+  float bottom = sampleField(uVelocity, vUv - vec2(0.0, uTexel.y)).x;
+  float top = sampleField(uVelocity, vUv + vec2(0.0, uTexel.y)).x;
+  float curl = 0.5 * ((right - left) - (top - bottom));
+  outputValue = vec4(curl, abs(curl), 0.0, 1.0);
+}`;
+
+const FORCE_FRAGMENT = `#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+precision highp sampler3D;
+in vec2 vUv;
+out vec4 outputValue;
+uniform sampler2D uVelocity;
+uniform sampler2D uScalar;
+uniform sampler2D uCurl;
+uniform sampler3D uCurlDetail;
+uniform vec2 uTexel;
+uniform float uDt;
+uniform float uTime;
+uniform float uNormalizedTime;
+uniform float uEnergy;
+uniform float uBuoyancy;
+uniform float uDensityLoading;
+uniform float uVorticity;
+uniform float uReducedMotion;
+uniform vec2 uWind;
+uniform vec2 uSourceCenter;
+${SOURCE_PROFILE_UNIFORMS}
+${FIELD_SAMPLING}
+${DETAIL_SAMPLING}
+${SOURCE_PROFILE_FUNCTIONS}
+void main() {
+  vec4 velocitySample = sampleField(uVelocity, vUv);
+  vec2 velocity = velocitySample.xy;
+  vec4 scalar = sampleField(uScalar, vUv);
+
+  float temperature = scalar.r;
+  float smoke = scalar.g;
+  float incandescent = scalar.b;
+  float dust = scalar.a;
+  float lift = temperature * uBuoyancy * uProfilePhysics.x + incandescent * 0.14
+    - smoke * uDensityLoading * uProfilePhysics.y
+    - dust * uDensityLoading * uProfilePhysics.y * 1.7;
+  velocity.y += lift * uDt;
+  velocity += uWind * uDt * uProfilePhysics.z * (0.18 + smoke * 0.08);
+
+  float curlCenter = sampleField(uCurl, vUv).r;
+  float curlLeft = abs(sampleField(uCurl, vUv - vec2(uTexel.x, 0.0)).r);
+  float curlRight = abs(sampleField(uCurl, vUv + vec2(uTexel.x, 0.0)).r);
+  float curlBottom = abs(sampleField(uCurl, vUv - vec2(0.0, uTexel.y)).r);
+  float curlTop = abs(sampleField(uCurl, vUv + vec2(0.0, uTexel.y)).r);
+  vec2 curlGradient = vec2(curlRight - curlLeft, curlTop - curlBottom);
+  float gradientLength = length(curlGradient);
+  if (gradientLength > 0.00001) {
+    vec2 direction = curlGradient / gradientLength;
+    velocity += vec2(direction.y, -direction.x) * curlCenter * uVorticity * uProfilePhysics.w * uDt;
+  }
+
+  float motionScale = mix(1.0, 0.58, uReducedMotion);
+  vec3 turbulence = decodeCurlDetail(sampleCurlDetail(
+    uCurlDetail,
+    vec3(vUv * vec2(4.7, 6.1) + vec2(uTime * 0.011, -uTime * 0.007), uTime * 0.009)
+  ));
+  float afterOnset = step(0.000001, uTime);
+  float impulseEnvelope = exp(-uNormalizedTime * 36.0) * afterOnset;
+  float rollingEnvelope = smoothstep(0.0, 0.025, uNormalizedTime)
+    * (1.0 - smoothstep(0.28, 0.62, uNormalizedTime));
+  vec2 sourceDelta = vUv - uSourceCenter;
+  float sourceRadius = 0.045 + 0.038 * sqrt(uEnergy);
+  float sourceKernel = exp(-dot(sourceDelta, sourceDelta) / max(0.0005, sourceRadius * sourceRadius));
+
+  if (uProfileKind == 9) {
+    // Named regression path for Nuclear Airburst — Research Model. Keep its
+    // original centered impulse/updraft math intact while other profiles use
+    // composable, deterministically offset primitives below.
+    vec2 radial = sourceDelta / max(length(sourceDelta), 0.006);
+    velocity += radial * sourceKernel * impulseEnvelope * (0.46 + 0.16 * uEnergy)
+      * motionScale * uDt * 60.0;
+    velocity.y += sourceKernel * rollingEnvelope * (0.20 + 0.13 * uEnergy) * motionScale * uDt;
+    velocity += turbulence.xy * sourceKernel * (impulseEnvelope + rollingEnvelope * 0.42)
+      * 0.026 * motionScale * uDt * 60.0;
+  } else {
+    vec2 primitiveCenter = profileSourceCenter();
+    vec2 primitiveDelta = vUv - primitiveCenter;
+    vec2 primitiveRadial = primitiveDelta / max(length(primitiveDelta), 0.006);
+    vec2 direction = safeDirection(uSourceVector.xy);
+    float onset = profileOnsetEnvelope();
+    float sustain = profileSustainEnvelope();
+    float pulse = (sourceEnabled(SOURCE_PULSED) || uProfileKind == 8)
+      ? profilePulseEnvelope() : 1.0;
+    float stage = profileStageEnvelope();
+    float stagedImpact = sourceEnabled(SOURCE_TRAIL) && sourceEnabled(SOURCE_EJECTA)
+      ? stage : 1.0;
+    float entry = 1.0 - stage;
+    float baseKernel = profileBaseKernel(vUv);
+    float multiKernel = profileMultiKernel(vUv);
+    float ringKernel = profileRingKernel(vUv);
+    float groundKernel = profileGroundKernel(vUv);
+    float verticalKernel = profileVerticalKernel(vUv);
+    float trailKernel = profileTrailKernel(vUv);
+    float ejectaKernel = profileEjectaKernel(vUv);
+    float activeKernel = profileCombinedKernel(vUv);
+    float radialWeight = baseKernel * (sourceEnabled(SOURCE_RADIAL) ? 1.0 : 0.0)
+      + ringKernel * (sourceEnabled(SOURCE_RING) ? 0.72 : 0.0);
+    velocity += primitiveRadial * radialWeight * onset * stagedImpact * uSourceMotion.x
+      * (0.34 + 0.12 * uEnergy) * motionScale * uDt * 60.0;
+    velocity += direction * trailKernel * entry * onset * uSourceMotion.z
+      * 0.42 * motionScale * uDt * 60.0
+      * (sourceEnabled(SOURCE_DIRECTIONAL) ? 1.0 : 0.0);
+    velocity.y += verticalKernel * sustain * pulse * stagedImpact * uSourceMotion.y
+      * 0.18 * motionScale * uDt
+      * (sourceEnabled(SOURCE_VERTICAL) || sourceEnabled(SOURCE_PULSED) ? 1.0 : 0.0);
+    velocity.x += sign(primitiveDelta.x + uSeedOffsetsA.x * 0.04) * groundKernel
+      * onset * stagedImpact * uSourceMotion.x * 0.18 * motionScale * uDt * 60.0
+      * (sourceEnabled(SOURCE_GROUND) ? 1.0 : 0.0);
+    vec2 ejectaDirection = safeDirection(vec2(
+      primitiveDelta.x * 1.25 + uSeedOffsetsB.x * 0.03,
+      abs(primitiveDelta.y) + 0.12
+    ));
+    velocity += ejectaDirection * ejectaKernel * onset * stagedImpact * uSourceAux.y
+      * 0.32 * motionScale * uDt * 60.0
+      * (sourceEnabled(SOURCE_EJECTA) ? 1.0 : 0.0);
+    float clusterActivity = (onset + sustain * 0.58) * pulse * stagedImpact;
+    float clusterKernel = multiKernel * (
+      (sourceEnabled(SOURCE_MULTIPLE) ? 0.65 : 0.0)
+      + (sourceEnabled(SOURCE_TURBULENT) ? 0.45 : 0.0)
+    );
+    velocity += turbulence.xy * (activeKernel * 0.5 + clusterKernel)
+      * clusterActivity * uSourceMotion.w * 0.025 * motionScale * uDt * 60.0;
+  }
+
+  // A paired vortex ring in the vertical slice supplies the cap's toroidal
+  // circulation: both inner branches rise, while the outer branches roll
+  // downward and entrain nearby air. Projection keeps this field divergence
+  // controlled; it is a normalized atmospheric motion cue, not a blast model.
+  float capDevelopment = smoothstep(0.025, 0.34, uNormalizedTime);
+  float capEnvelope = smoothstep(0.02, 0.09, uNormalizedTime)
+    * (1.0 - smoothstep(0.72, 1.15, uNormalizedTime));
+  float plumeActivity = clamp(
+    temperature * 0.24 + smoke * 0.62 + incandescent * 0.34,
+    0.0,
+    1.0
+  );
+  // Once the plume leaves the source, the same deterministic 3D curl field
+  // perturbs the resolved velocity rather than merely decorating the rendered
+  // density. Advection therefore carries the asymmetry into the silhouette.
+  float capEnabled = sourceEnabled(SOURCE_PAIRED_CAP) ? 1.0 : 0.0;
+  velocity += turbulence.xy * plumeActivity * capEnvelope * capEnabled
+    * 0.0045 * motionScale * uDt * 60.0;
+  vec2 capCenter = uSourceCenter + vec2(
+    uWind.x * capDevelopment * 0.42,
+    mix(0.075, 0.43, capDevelopment)
+  );
+  float capHalfWidth = mix(0.052, 0.155, capDevelopment);
+  float vortexRadius = mix(0.055, 0.13, capDevelopment);
+  vec2 leftDelta = vUv - (capCenter - vec2(capHalfWidth, 0.0));
+  vec2 rightDelta = vUv - (capCenter + vec2(capHalfWidth, 0.0));
+  vec2 leftScaled = leftDelta / vec2(vortexRadius, vortexRadius * 0.82);
+  vec2 rightScaled = rightDelta / vec2(vortexRadius, vortexRadius * 0.82);
+  float leftWeight = exp(-dot(leftScaled, leftScaled));
+  float rightWeight = exp(-dot(rightScaled, rightScaled));
+  vec2 leftTangent = vec2(-leftDelta.y, leftDelta.x)
+    / max(length(leftDelta), 0.004);
+  vec2 rightTangent = vec2(rightDelta.y, -rightDelta.x)
+    / max(length(rightDelta), 0.004);
+  float circulation = (0.052 + 0.026 * uEnergy) * capEnvelope * motionScale
+    * capEnabled * uProfileAux.x;
+  velocity += (leftTangent * leftWeight + rightTangent * rightWeight)
+    * circulation * uDt;
+
+  // Gentle lateral inflow around the rising column makes entrainment legible;
+  // the paired vortices above provide the corresponding outer return motion.
+  float columnBand = smoothstep(uSourceCenter.y - 0.02, uSourceCenter.y + 0.04, vUv.y)
+    * (1.0 - smoothstep(capCenter.y - 0.02, capCenter.y + 0.08, vUv.y));
+  float sideDistance = abs(vUv.x - capCenter.x);
+  float entrainment = exp(-sideDistance * sideDistance / max(0.002, capHalfWidth * capHalfWidth * 2.8));
+  velocity.x += (capCenter.x - vUv.x) * columnBand * entrainment
+    * capEnvelope * capEnabled * 0.19 * motionScale * uDt;
+
+  velocity *= pow(clamp(uProfileDecay.x, 0.9, 1.0), uDt * 60.0);
+  velocity *= boundaryMask(vUv);
+  float speed = length(velocity);
+  if (speed > 1.4) velocity *= 1.4 / speed;
+  outputValue = vec4(velocity, 0.0, 1.0);
+}`;
+
+const SCALAR_FRAGMENT = `#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+precision highp sampler3D;
+in vec2 vUv;
+out vec4 outputValue;
+uniform sampler2D uScalar;
+uniform sampler3D uCurlDetail;
+uniform float uDt;
+uniform float uTime;
+uniform float uNormalizedTime;
+uniform float uEnergy;
+uniform float uSourceStrength;
+uniform float uCooling;
+uniform float uSmokeConversion;
+uniform float uDissipation;
+uniform float uReducedMotion;
+uniform vec2 uSourceCenter;
+${SOURCE_PROFILE_UNIFORMS}
+${FIELD_SAMPLING}
+${DETAIL_SAMPLING}
+${SOURCE_PROFILE_FUNCTIONS}
+void main() {
+  vec4 scalar = max(sampleField(uScalar, vUv), vec4(0.0));
+  float temperature = scalar.r;
+  float smoke = scalar.g;
+  float incandescent = scalar.b;
+  float dust = scalar.a;
+
+  float conversion = incandescent * (1.0 - exp(-uSmokeConversion * uProfileDecay.z * uDt));
+  incandescent = max(0.0, incandescent - conversion);
+  smoke += conversion * 0.72;
+  float normalizedHeat = clamp(temperature * 0.5, 0.0, 1.5);
+  float radiativeLoss = uCooling * uProfileDecay.y * uDt * 0.18 * pow(normalizedHeat, 4.0);
+  temperature = max(0.0,
+    temperature * exp(-uCooling * uProfileDecay.y * uDt * (0.42 + smoke * 0.08)) - radiativeLoss
+  );
+  smoke *= pow(clamp(uDissipation * uProfileDecay.w, 0.9, 1.0), uDt * 60.0);
+  dust *= pow(clamp(uDissipation * uProfileDecay.w - 0.0015, 0.88, 1.0), uDt * 60.0);
+  incandescent *= exp(-uCooling * uProfileDecay.y * uDt * 1.65);
+
+  float afterOnset = step(0.000001, uTime);
+  float flashEnvelope = exp(-uNormalizedTime * 54.0) * afterOnset;
+  float fireEnvelope = smoothstep(0.0, 0.012, uNormalizedTime)
+    * (1.0 - smoothstep(0.18, 0.43, uNormalizedTime));
+  float smokeEnvelope = smoothstep(0.015, 0.08, uNormalizedTime)
+    * (1.0 - smoothstep(0.42, 0.82, uNormalizedTime));
+  vec2 delta = vUv - uSourceCenter;
+  float radius = 0.042 + 0.044 * sqrt(uEnergy);
+  float core = exp(-dot(delta, delta) / max(0.0005, radius * radius));
+  float shellDistance = abs(length(delta) - radius * (1.2 + uNormalizedTime * 2.2));
+  float shell = exp(-shellDistance * shellDistance / max(0.0002, radius * radius * 0.18));
+  float sourceDetail = sampleCurlDetail(
+    uCurlDetail,
+    vec3(vUv * vec2(6.3, 8.1) + vec2(uTime * 0.009, 0.0), uTime * 0.006)
+  ).a * 2.0 - 1.0;
+  float spectral = 0.78 + sourceDetail * 0.32;
+  float motionScale = mix(1.0, 0.72, uReducedMotion);
+  float source = max(0.0, uSourceStrength * spectral * motionScale);
+
+  if (uProfileKind == 9) {
+    // Preserve the established Research Model scalar injection as the named
+    // regression branch; other event families use the primitive composition.
+    temperature += source * core * (flashEnvelope * 2.1 + fireEnvelope * 0.28) * uDt * 8.0;
+    incandescent += source * core * (flashEnvelope * 1.55 + fireEnvelope * 0.52) * uDt * 5.0;
+    smoke += source * core * smokeEnvelope * uDt * 0.62;
+
+    // The dust shell is a generic visual interaction cue. Airburst altitude keeps
+    // it deliberately subordinate to the rising thermal/smoke volume.
+    float lowerRegion = 1.0 - smoothstep(uSourceCenter.y + 0.12, uSourceCenter.y + 0.34, vUv.y);
+    dust += source * shell * lowerRegion * smokeEnvelope * uDt * 0.12;
+  } else {
+    float onset = profileOnsetEnvelope();
+    float sustain = profileSustainEnvelope();
+    float stage = profileStageEnvelope();
+    float pulse = (sourceEnabled(SOURCE_PULSED) || uProfileKind == 8)
+      ? profilePulseEnvelope() : 1.0;
+    float combined = profileCombinedKernel(vUv);
+    float withoutTrail = profileCombinedKernelWithoutTrail(vUv);
+    float multi = profileMultiKernel(vUv);
+    float ground = profileGroundKernel(vUv);
+    float ejecta = profileEjectaKernel(vUv);
+    float trail = profileTrailKernel(vUv);
+    float ring = profileRingKernel(vUv);
+    float combustion = sourceEnabled(SOURCE_SUSTAINED) ? sustain : fireEnvelope;
+    float hotEnvelope = onset * 1.45 + combustion * pulse * 0.72;
+    float matterEnvelope = sustain * (0.35 + pulse * 0.65);
+    float stagedImpact = sourceEnabled(SOURCE_TRAIL) && sourceEnabled(SOURCE_EJECTA)
+      ? stage : 1.0;
+    float entry = 1.0 - stage;
+    float stagedTrail = sourceEnabled(SOURCE_TRAIL)
+      ? trail * (sourceEnabled(SOURCE_EJECTA) ? entry : mix(1.0, entry, 0.65))
+      : 0.0;
+    float stagedCombined = sourceEnabled(SOURCE_TRAIL) && sourceEnabled(SOURCE_EJECTA)
+      ? clamp(withoutTrail * stagedImpact + stagedTrail, 0.0, 2.2)
+      : combined;
+    float thermalKernel = clamp(
+      stagedCombined
+        + ring * (sourceEnabled(SOURCE_RING) ? 0.5 : 0.0)
+        + stagedTrail * 0.72,
+      0.0,
+      2.4
+    );
+    float particulateKernel = clamp(
+      stagedCombined * 0.55
+        + multi * (
+          (sourceEnabled(SOURCE_MULTIPLE) ? 0.45 : 0.0)
+          + (sourceEnabled(SOURCE_TURBULENT) ? 0.18 : 0.0)
+        ) * stagedImpact
+        + ground * (sourceEnabled(SOURCE_GROUND) ? 0.8 : 0.0) * stagedImpact
+        + ejecta * uSourceAux.y * (sourceEnabled(SOURCE_EJECTA) ? 1.0 : 0.0) * stagedImpact,
+      0.0,
+      2.8
+    );
+    temperature += source * thermalKernel * hotEnvelope * uSourceScalar.x * uDt * 3.2;
+    incandescent += source * thermalKernel * hotEnvelope * uSourceScalar.z * uDt * 2.4;
+    smoke += source * stagedCombined * matterEnvelope * uSourceScalar.y * uDt * 0.92;
+    dust += source * particulateKernel * matterEnvelope * uSourceScalar.w * uDt * 0.72;
+  }
+
+  outputValue = clamp(vec4(temperature, smoke, incandescent, dust), 0.0, 4.0);
+}`;
+
+const DIVERGENCE_FRAGMENT = `#version 300 es
+precision highp float;
+precision highp sampler2D;
+in vec2 vUv;
+out vec4 outputValue;
+uniform sampler2D uVelocity;
+uniform vec2 uTexel;
+${FIELD_SAMPLING}
+void main() {
+  vec2 left = sampleField(uVelocity, vUv - vec2(uTexel.x, 0.0)).xy;
+  vec2 right = sampleField(uVelocity, vUv + vec2(uTexel.x, 0.0)).xy;
+  vec2 bottom = sampleField(uVelocity, vUv - vec2(0.0, uTexel.y)).xy;
+  vec2 top = sampleField(uVelocity, vUv + vec2(0.0, uTexel.y)).xy;
+  float divergence = 0.5 * ((right.x - left.x) + (top.y - bottom.y));
+  outputValue = vec4(divergence, 0.0, 0.0, 1.0);
+}`;
+
+const JACOBI_FRAGMENT = `#version 300 es
+precision highp float;
+precision highp sampler2D;
+in vec2 vUv;
+out vec4 outputValue;
+uniform sampler2D uPressure;
+uniform sampler2D uDivergence;
+uniform vec2 uTexel;
+${FIELD_SAMPLING}
+void main() {
+  float left = sampleField(uPressure, vUv - vec2(uTexel.x, 0.0)).r;
+  float right = sampleField(uPressure, vUv + vec2(uTexel.x, 0.0)).r;
+  float bottom = sampleField(uPressure, vUv - vec2(0.0, uTexel.y)).r;
+  float top = sampleField(uPressure, vUv + vec2(0.0, uTexel.y)).r;
+  float divergence = sampleField(uDivergence, vUv).r;
+  float pressure = (left + right + bottom + top - divergence) * 0.25;
+  outputValue = vec4(pressure, 0.0, 0.0, 1.0);
+}`;
+
+const PROJECT_FRAGMENT = `#version 300 es
+precision highp float;
+precision highp sampler2D;
+in vec2 vUv;
+out vec4 outputValue;
+uniform sampler2D uVelocity;
+uniform sampler2D uPressure;
+uniform vec2 uTexel;
+${FIELD_SAMPLING}
+void main() {
+  float left = sampleField(uPressure, vUv - vec2(uTexel.x, 0.0)).r;
+  float right = sampleField(uPressure, vUv + vec2(uTexel.x, 0.0)).r;
+  float bottom = sampleField(uPressure, vUv - vec2(0.0, uTexel.y)).r;
+  float top = sampleField(uPressure, vUv + vec2(0.0, uTexel.y)).r;
+  vec2 velocity = sampleField(uVelocity, vUv).xy;
+  velocity -= vec2(right - left, top - bottom) * 0.5;
+  velocity *= boundaryMask(vUv);
+  outputValue = vec4(velocity, 0.0, 1.0);
+}`;
+
+// Debug metrics are encoded into an RGBA8 framebuffer before readback. This
+// keeps readPixels deterministic across rgba16f and rgba32f solver targets
+// without depending on implementation-specific floating-point read formats.
+const METRICS_FRAGMENT = `#version 300 es
+precision highp float;
+precision highp sampler2D;
+in vec2 vUv;
+out vec4 outputValue;
+uniform sampler2D uVelocity;
+uniform sampler2D uScalar;
+uniform sampler2D uCurl;
+${FIELD_SAMPLING}
+void main() {
+  vec2 velocity = sampleField(uVelocity, vUv).xy;
+  vec4 scalar = max(sampleField(uScalar, vUv), vec4(0.0));
+  float vorticity = abs(sampleField(uCurl, vUv).r);
+  outputValue = vec4(
+    clamp(length(velocity) / 1.4, 0.0, 1.0),
+    clamp(scalar.r / 4.0, 0.0, 1.0),
+    clamp(scalar.g / 4.0, 0.0, 1.0),
+    clamp(vorticity / 1.4, 0.0, 1.0)
+  );
+}`;
+
+const TRACER_ADVECT_FRAGMENT = `#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+precision highp sampler3D;
+in vec2 vUv;
+out vec4 outputValue;
+uniform sampler2D uTracers;
+uniform sampler2D uVelocity;
+uniform sampler3D uCurlDetail;
+uniform float uDt;
+uniform float uTime;
+uniform float uNormalizedTime;
+uniform float uReducedMotion;
+uniform vec2 uSourceCenter;
+uniform uint uSeed;
+uniform int uTracerType;
+${SOURCE_PROFILE_UNIFORMS}
+${FIELD_SAMPLING}
+${SEEDED_HASH}
+${DETAIL_SAMPLING}
+${SOURCE_PROFILE_FUNCTIONS}
+
+float tracerRandom(uint index, uint generation, uint salt) {
+  uint value = index * 0x9e3779b9u;
+  value ^= generation * 0x85ebca6bu;
+  value ^= uSeed + salt * 0xc2b2ae35u;
+  return float(mixBits(value)) / 4294967295.0;
+}
+
+void main() {
+  uint index = uint(gl_FragCoord.x);
+  vec4 state = texelFetch(uTracers, ivec2(int(index), 0), 0);
+  uint generation = uint(max(0.0, floor(state.w + 0.5)));
+  float lifetimeScale = uTracerType == 4 || uTracerType == 5 ? 1.5 : (uTracerType == 6 ? 0.62 : 1.0);
+  float lifetime = mix(1.7, 4.8, tracerRandom(index, generation, 7u)) * lifetimeScale;
+  bool invalid = state.w < 0.5
+    || state.z + uDt >= lifetime
+    || any(lessThan(state.xy, vec2(0.012)))
+    || any(greaterThan(state.xy, vec2(0.988)));
+
+  if (invalid) {
+    generation = state.w < 0.5 ? 1u : generation + 1u;
+    float angle = 6.28318530718 * tracerRandom(index, generation, 11u);
+    float radius = mix(0.008, 0.074, sqrt(tracerRandom(index, generation, 17u)));
+    vec2 ellipse = vec2(cos(angle), sin(angle) * 0.72);
+    vec2 center = profileSourceCenter();
+    vec2 position = center + ellipse * radius;
+    float randomAlong = tracerRandom(index, generation, 23u) * 2.0 - 1.0;
+    float randomAcross = tracerRandom(index, generation, 29u) * 2.0 - 1.0;
+    uint sourceLane = index & 3u;
+    bool stagedImpact = sourceEnabled(SOURCE_TRAIL) && sourceEnabled(SOURCE_EJECTA);
+    bool entryActive = uNormalizedTime < uSourceTiming.w + 0.028;
+    bool useTrail = sourceEnabled(SOURCE_TRAIL)
+      && ((stagedImpact && entryActive) || (!stagedImpact && sourceLane < 2u));
+    if (uProfileKind != 9 && useTrail) {
+      vec2 direction = safeDirection(uSourceVector.xy);
+      vec2 normal = vec2(-direction.y, direction.x);
+      position = center - direction * abs(randomAlong) * uSourceShape.x * uSourceAux.z
+        + normal * randomAcross * uSourceShape.x * 0.34;
+    } else if (uProfileKind != 9 && sourceEnabled(SOURCE_EJECTA)
+      && (sourceLane == 0u || (sourceLane == 3u && !sourceEnabled(SOURCE_MULTIPLE)))) {
+      position = vec2(
+        center.x + randomAlong * uSourceShape.x * (2.2 + uSourceAux.y),
+        uSourceShape.w + abs(randomAcross) * uSourceShape.x * 0.46
+      );
+    } else if (uProfileKind != 9 && sourceEnabled(SOURCE_GROUND) && sourceLane == 1u) {
+      position = vec2(
+        center.x + randomAlong * uSourceShape.x * 3.2,
+        uSourceShape.w + abs(randomAcross) * uSourceShape.x * 0.14
+      );
+    } else if (uProfileKind != 9 && (sourceEnabled(SOURCE_VERTICAL) || sourceEnabled(SOURCE_PULSED))
+      && sourceLane == 2u) {
+      position = vec2(
+        center.x + randomAcross * uSourceShape.x * 0.42,
+        mix(uSourceShape.w, center.y + uSourceShape.x * 1.8, tracerRandom(index, generation, 31u))
+      );
+    } else if (uProfileKind != 9 && sourceEnabled(SOURCE_RING) && sourceLane < 3u) {
+      float ringRadius = uSourceShape.x * uSourceAux.x;
+      position = center + vec2(cos(angle), sin(angle) * uSourceShape.z) * ringRadius;
+    } else if (uProfileKind != 9
+      && (sourceEnabled(SOURCE_MULTIPLE) || sourceEnabled(SOURCE_TURBULENT))) {
+      vec2 chosenOffset = (index & 1u) == 0u ? uSeedOffsetsA.xy : uSeedOffsetsA.zw;
+      position = center + chosenOffset * uSourceShape.x * uSourceAux.w + ellipse * radius * 0.58;
+    } else if (uProfileKind != 9 && (sourceEnabled(SOURCE_VERTICAL) || sourceEnabled(SOURCE_PULSED))) {
+      position = vec2(
+        center.x + randomAcross * uSourceShape.x * 0.42,
+        mix(uSourceShape.w, center.y + uSourceShape.x * 1.8, tracerRandom(index, generation, 31u))
+      );
+    }
+    position = clamp(position, vec2(0.015), vec2(0.985));
+    outputValue = vec4(position, 0.0, float(generation));
+    return;
+  }
+
+  vec2 velocity = sampleField(uVelocity, state.xy).xy;
+  float tracerPhase = float((index * 47u + generation * 131u) & 1023u) / 1023.0;
+  vec2 detailCurl = decodeCurlDetail(sampleCurlDetail(
+    uCurlDetail,
+    vec3(
+      state.xy * vec2(7.1, 9.3) + vec2(uTime * 0.013, -uTime * 0.008),
+      tracerPhase + uTime * 0.007
+    )
+  )).xy;
+  float motionScale = mix(1.0, 0.5, uReducedMotion);
+  vec2 position = state.xy + velocity * uDt * motionScale
+    + detailCurl * uDt * 0.0018 * motionScale;
+  if (uTracerType == 4) position.y -= uDt * 0.0065;
+  if (uTracerType == 5) position.y -= uDt * 0.009;
+  outputValue = vec4(position, state.z + uDt, float(generation));
+}`;
+
+const TRACER_VERTEX = `#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+out vec4 vTracerColor;
+uniform sampler2D uTracers;
+uniform sampler2D uScalar;
+uniform vec2 uResolution;
+uniform vec2 uOrigin;
+uniform vec2 uVolumeScale;
+uniform vec2 uSourceCenter;
+uniform float uReducedMotion;
+uniform int uDiagnostic;
+uniform int uTracerType;
+uniform vec4 uLayerVisibility;
+uniform vec3 uTracerColorA;
+uniform vec3 uTracerColorB;
+uniform vec3 uTracerColorC;
+
+void main() {
+  vec4 state = texelFetch(uTracers, ivec2(gl_VertexID, 0), 0);
+  bool enabled = state.w >= 0.5 && (uDiagnostic == 0 || uDiagnostic == 8);
+  vec2 screenUv = uOrigin + (state.xy - uSourceCenter) * uVolumeScale;
+  bool visible = enabled
+    && all(greaterThanEqual(screenUv, vec2(0.0)))
+    && all(lessThanEqual(screenUv, vec2(1.0)));
+  if (!visible) {
+    gl_Position = vec4(2.0, 2.0, 0.0, 1.0);
+    gl_PointSize = 1.0;
+    vTracerColor = vec4(0.0);
+    return;
+  }
+
+  vec4 scalar = texture(uScalar, state.xy);
+  float diagnostic = float(uDiagnostic == 8);
+  float maskedPlume = scalar.g * 0.32 * uLayerVisibility.y
+    + scalar.a * 0.28 * uLayerVisibility.z
+    + scalar.r * 0.18 * uLayerVisibility.w
+    + scalar.b * 0.72 * uLayerVisibility.x;
+  float rawPlume = scalar.g * 0.32 + scalar.a * 0.28
+    + scalar.r * 0.18 + scalar.b * 0.72;
+  float plume = clamp(mix(maskedPlume, rawPlume, diagnostic), 0.0, 1.0);
+  float lifetimeScale = uTracerType == 4 || uTracerType == 5 ? 1.5 : (uTracerType == 6 ? 0.62 : 1.0);
+  float ageFade = 1.0 - smoothstep(2.4 * lifetimeScale, 4.8 * lifetimeScale, state.z);
+  float alpha = mix(plume * 0.34, 0.88, diagnostic) * ageFade;
+  vec3 warm = mix(uTracerColorA, uTracerColorB,
+    clamp(scalar.r + scalar.b, 0.0, 1.0));
+  float particulate = clamp(scalar.a * 0.75 + scalar.g * 0.22, 0.0, 1.0);
+  vec3 typed = (uTracerType == 1 || uTracerType == 2 || uTracerType == 4 || uTracerType == 5)
+    ? mix(warm, uTracerColorC, particulate)
+    : (uTracerType == 6 ? mix(uTracerColorC, uTracerColorB, clamp(scalar.b, 0.0, 1.0)) : warm);
+  vec3 color = mix(typed, vec3(0.48, 0.9, 1.0), diagnostic);
+  vTracerColor = vec4(color, alpha);
+  gl_Position = vec4(screenUv * 2.0 - 1.0, 0.0, 1.0);
+  float baseSize = clamp(min(uResolution.x, uResolution.y) * 0.003, 1.0, 3.2);
+  float typeSize = uTracerType == 4 || uTracerType == 5 ? 0.82 : (uTracerType == 6 ? 0.68 : 1.0);
+  gl_PointSize = baseSize * typeSize * mix(0.72, 1.18, diagnostic) * mix(1.0, 0.86, uReducedMotion);
+}`;
+
+const TRACER_FRAGMENT = `#version 300 es
+precision highp float;
+in vec4 vTracerColor;
+out vec4 outputColor;
+void main() {
+  vec2 centered = gl_PointCoord * 2.0 - 1.0;
+  float coverage = 1.0 - smoothstep(0.22, 1.0, dot(centered, centered));
+  float alpha = vTracerColor.a * coverage;
+  outputColor = vec4(vTracerColor.rgb * alpha, alpha);
+}`;
+
+const VOLUME_FRAGMENT = `#version 300 es
+precision highp float;
+precision highp int;
+precision highp sampler2D;
+precision highp sampler3D;
+in vec2 vUv;
+out vec4 outputColor;
+uniform sampler2D uVelocity;
+uniform sampler2D uScalar;
+uniform sampler2D uCurl;
+uniform sampler2D uPressure;
+uniform sampler2D uDivergence;
+uniform sampler3D uCurlDetail;
+uniform vec2 uTexel;
+uniform vec2 uResolution;
+uniform vec2 uOrigin;
+uniform vec2 uVolumeScale;
+uniform vec2 uSourceCenter;
+uniform vec4 uPhase;
+uniform float uTime;
+uniform float uExposure;
+uniform float uReducedMotion;
+uniform int uDiagnostic;
+uniform int uRaySteps;
+uniform uint uSeed;
+uniform vec4 uLayerVisibility;
+uniform vec4 uVolumeProfile0;
+uniform vec4 uVolumeProfile1;
+uniform vec4 uVolumeProfile2;
+uniform vec3 uPaletteBackground;
+uniform vec3 uPaletteEmber;
+uniform vec3 uPaletteFlame;
+uniform vec3 uPaletteHot;
+uniform vec3 uPaletteCore;
+uniform vec3 uPaletteSmoke;
+uniform vec3 uPaletteSmokeLight;
+uniform vec3 uPaletteCloud;
+uniform vec3 uPaletteDust;
+${FIELD_SAMPLING}
+${DETAIL_SAMPLING}
+
+// Compact blackbody-style artistic ramp for normalized temperature/emission.
+vec3 heatRamp(float temperature) {
+  float t = pow(clamp(temperature * 0.48, 0.0, 1.0), max(0.35, uVolumeProfile2.w));
+  vec3 ember = uPaletteEmber;
+  vec3 orange = uPaletteFlame;
+  vec3 gold = uPaletteHot;
+  vec3 whiteHot = uPaletteCore;
+  vec3 lower = mix(ember, orange, smoothstep(0.0, 0.42, t));
+  vec3 upper = mix(gold, whiteHot, smoothstep(0.66, 1.0, t));
+  return mix(lower, upper, smoothstep(0.38, 0.78, t));
+}
+
+vec3 toneMap(vec3 color) {
+  color *= uExposure * uVolumeProfile2.x;
+  vec3 aces = clamp((color * (2.51 * color + 0.03)) /
+    (color * (2.43 * color + 0.59) + 0.14), 0.0, 1.0);
+  vec3 reinhard = color / (vec3(1.0) + color);
+  return mix(aces, reinhard, clamp(uVolumeProfile2.y, 0.0, 1.0));
+}
+
+float velocityGlyph(vec2 localUv, vec2 velocity) {
+  float magnitude = length(velocity);
+  if (magnitude < 0.002) return 0.0;
+  vec2 direction = velocity / magnitude;
+  vec2 normal = vec2(-direction.y, direction.x);
+  vec2 glyphUv = fract(localUv * vec2(18.0, 14.0)) - 0.5;
+  float along = dot(glyphUv, direction);
+  float across = abs(dot(glyphUv, normal));
+  float shaft = (1.0 - smoothstep(0.026, 0.058, across))
+    * smoothstep(-0.34, -0.26, along)
+    * (1.0 - smoothstep(0.18, 0.27, along));
+  vec2 headUv = glyphUv - direction * 0.28;
+  float headAlong = dot(headUv, direction);
+  float headAcross = abs(dot(headUv, normal));
+  float head = (1.0 - smoothstep(0.025, 0.064,
+      abs(headAcross + headAlong * 0.78)))
+    * smoothstep(-0.24, -0.18, headAlong)
+    * (1.0 - smoothstep(-0.015, 0.01, headAlong));
+  return max(shaft, head) * smoothstep(0.002, 0.075, magnitude);
+}
+
+vec4 diagnosticColor(
+  vec2 localUv,
+  vec4 scalar,
+  vec2 velocity,
+  float curl,
+  float pressure,
+  float divergence
+) {
+  float inside = step(0.0, localUv.x) * step(localUv.x, 1.0)
+    * step(0.0, localUv.y) * step(localUv.y, 1.0);
+  if (uDiagnostic == 1) {
+    float magnitude = min(1.0, length(velocity) * 4.0);
+    float glyph = velocityGlyph(localUv, velocity);
+    vec3 directionColor = vec3(
+      0.42 + velocity.x * 1.8,
+      0.58 + velocity.y * 1.8,
+      0.82
+    );
+    vec3 background = vec3(0.018, 0.035, 0.055) + magnitude * vec3(0.04, 0.09, 0.12);
+    return vec4(mix(background, directionColor, glyph), inside * (0.72 + glyph * 0.28));
+  }
+  if (uDiagnostic == 2) {
+    float value = clamp(scalar.r * 0.52, 0.0, 1.0);
+    return vec4(heatRamp(scalar.r) * value, inside);
+  }
+  if (uDiagnostic == 3) {
+    float value = clamp(scalar.g * 0.52, 0.0, 1.0);
+    return vec4(vec3(value), inside);
+  }
+  if (uDiagnostic == 4) {
+    float value = clamp(scalar.b * 0.72, 0.0, 1.0);
+    return vec4(heatRamp(scalar.r + scalar.b) * value, inside);
+  }
+  if (uDiagnostic == 5) {
+    float value = clamp(0.5 + pressure * 5.0, 0.0, 1.0);
+    return vec4(value, 0.25 + 0.5 * (1.0 - abs(value - 0.5) * 2.0), 1.0 - value, inside);
+  }
+  if (uDiagnostic == 6) {
+    float value = clamp(divergence * 12.0, -1.0, 1.0);
+    return vec4(max(value, 0.0), 0.08 + abs(value) * 0.22, max(-value, 0.0), inside);
+  }
+  if (uDiagnostic == 7) {
+    float value = clamp(curl * 8.0, -1.0, 1.0);
+    return vec4(max(value, 0.0), 0.12 + abs(value) * 0.25, max(-value, 0.0), inside);
+  }
+
+  // The tracer diagnostic's actual particles are GPU-advected in a separate
+  // ping-pong texture and composited as points after this field backdrop.
+  float field = clamp(scalar.g * 0.36 + scalar.b * 0.42 + scalar.a * 0.2, 0.0, 1.0);
+  vec3 color = vec3(0.06, 0.16, 0.2) * field;
+  return vec4(color, inside * max(field * 0.62, 0.08));
+}
+
+void main() {
+  vec2 localUv = uSourceCenter + (vUv - uOrigin) / max(uVolumeScale, vec2(0.0001));
+  float inside = step(0.0, localUv.x) * step(localUv.x, 1.0)
+    * step(0.0, localUv.y) * step(localUv.y, 1.0);
+  if (inside <= 0.0) {
+    outputColor = vec4(0.0);
+    return;
+  }
+
+  vec4 centerScalar = sampleField(uScalar, localUv);
+  vec2 centerVelocity = sampleField(uVelocity, localUv).xy;
+  float centerCurl = sampleField(uCurl, localUv).r;
+  float centerPressure = sampleField(uPressure, localUv).r;
+  float centerDivergence = sampleField(uDivergence, localUv).r;
+  if (uDiagnostic != 0) {
+    vec4 diagnostic = diagnosticColor(
+      localUv,
+      centerScalar,
+      centerVelocity,
+      centerCurl,
+      centerPressure,
+      centerDivergence
+    );
+    outputColor = vec4(diagnostic.rgb * diagnostic.a, diagnostic.a);
+    return;
+  }
+
+  float distortionAmount = mix(1.0, 0.35, uReducedMotion) * uVolumeProfile1.x
+    * clamp(centerScalar.r * uLayerVisibility.w
+      + centerScalar.b * uLayerVisibility.x, 0.0, 2.0);
+  float temperatureLeft = sampleField(uScalar, localUv - vec2(uTexel.x, 0.0)).r;
+  float temperatureRight = sampleField(uScalar, localUv + vec2(uTexel.x, 0.0)).r;
+  float temperatureBottom = sampleField(uScalar, localUv - vec2(0.0, uTexel.y)).r;
+  float temperatureTop = sampleField(uScalar, localUv + vec2(0.0, uTexel.y)).r;
+  vec2 temperatureGradient = vec2(
+    temperatureRight - temperatureLeft,
+    temperatureTop - temperatureBottom
+  );
+  vec2 distortedUv = localUv + centerVelocity * distortionAmount * 0.008
+    + temperatureGradient * distortionAmount * 0.012
+    + vec2(centerCurl, -centerCurl) * uTexel * distortionAmount * 1.4;
+
+  vec3 accumulated = vec3(0.0);
+  float transmittance = 1.0;
+  float shadowColumn = 0.0;
+  vec4 sourceLightSample = sampleField(uScalar, uSourceCenter);
+  float sourceHeat = sourceLightSample.r * uLayerVisibility.w
+    + sourceLightSample.b * uLayerVisibility.x;
+  vec3 sourceRadiance = heatRamp(sourceHeat)
+    * clamp(sourceLightSample.b * uLayerVisibility.x + sourceHeat * 0.12, 0.0, 2.0);
+  float seedPhase = float(uSeed & 1023u) / 1023.0;
+  float inverseSteps = 1.0 / float(max(uRaySteps, 1));
+  const int MAX_RAY_STEPS = 48;
+  for (int index = 0; index < MAX_RAY_STEPS; index += 1) {
+    if (index >= uRaySteps) break;
+    float layer = (float(index) + 0.5) * inverseSteps;
+    float depth = layer * 2.0 - 1.0;
+    float profileDepth = max(0.42, uVolumeProfile0.x);
+    float radialWeight = sqrt(max(0.0, 1.0 - (depth * depth) / (profileDepth * profileDepth)));
+    vec2 curlOffset = vec2(0.0);
+    float densityDetail = 0.0;
+    float detailNormalization = 0.0;
+    // Two trilinear texture samples replace dozens of per-layer integer hashes.
+    // Velocity amplitudes use k^(-5/6), the square-root analogue of a k^(-5/3)
+    // energy spectrum. This is a bounded visual perturbation, not calibrated flow.
+    for (int octave = 0; octave < 2; octave += 1) {
+      float k = exp2(float(octave));
+      float amplitude = pow(k, -0.8333333333);
+      vec3 detailCoordinate = vec3(
+        distortedUv * vec2(4.7, 5.9) * k * uVolumeProfile1.z
+          + vec2(depth * 0.37, -depth * 0.23) * k
+          + vec2(uTime * 0.004, -uTime * 0.003),
+        layer * (0.83 * k) + seedPhase + uTime * 0.0025
+      );
+      vec4 detailSample = sampleCurlDetail(uCurlDetail, detailCoordinate);
+      curlOffset += decodeCurlDetail(detailSample).xy * amplitude;
+      densityDetail += (detailSample.a * 2.0 - 1.0) * amplitude;
+      detailNormalization += amplitude;
+    }
+    curlOffset /= max(detailNormalization, 0.0001);
+    densityDetail /= max(detailNormalization, 0.0001);
+    vec2 layerUv = distortedUv;
+    layerUv.x += depth * (0.025 + centerCurl * 0.012);
+    layerUv += curlOffset * 0.012 * radialWeight;
+
+    vec4 scalar = sampleField(uScalar, layerUv);
+    float smokeDensity = max(0.0, scalar.g * 0.9 * uLayerVisibility.y);
+    float dustDensity = max(0.0,
+      scalar.a * 0.72 * uLayerVisibility.z * uVolumeProfile1.w
+    );
+    float smoke = smokeDensity + dustDensity;
+    float incandescent = max(0.0, scalar.b * uLayerVisibility.x);
+    float temperature = max(0.0,
+      scalar.r * max(uLayerVisibility.x, uLayerVisibility.w)
+    );
+    float detailModulation = clamp(
+      1.0 + densityDetail * 0.34 * radialWeight * uVolumeProfile1.y,
+      0.62,
+      1.38
+    );
+    float density = (smoke + incandescent * 0.22) * radialWeight * detailModulation;
+    float erosion = smoothstep(-0.62 / max(0.4, uVolumeProfile1.y), 0.38, densityDetail);
+    density = max(0.0,
+      density - (1.0 - erosion) * radialWeight * 0.026 * uVolumeProfile1.y
+    );
+    float opticalDepth = density * inverseSteps * 3.2 * uVolumeProfile0.y;
+    float alpha = 1.0 - exp(-opticalDepth);
+
+    // One midpoint probe approximates extinction along the fire-to-smoke light
+    // path. Combined with accumulated view-ray density, this gives inexpensive
+    // internal self-shadowing and lets incandescent material illuminate smoke.
+    vec2 lightProbeUv = mix(layerUv, uSourceCenter, 0.5);
+    vec4 lightProbe = sampleField(uScalar, lightProbeUv);
+    float lightDensity = lightProbe.g * 0.9 * uLayerVisibility.y
+      + lightProbe.a * 0.72 * uLayerVisibility.z * uVolumeProfile1.w;
+    float lightTransmittance = exp(-lightDensity * 0.92 * uVolumeProfile0.z);
+    float selfShadow = exp(-shadowColumn * 1.6 * uVolumeProfile0.z) * lightTransmittance;
+    vec3 toLightVector = vec3(uSourceCenter - layerUv, -depth * 0.34);
+    float toLightLength = length(toLightVector);
+    vec3 toLight = toLightLength > 0.00001
+      ? toLightVector / toLightLength
+      : vec3(0.0, 0.0, 1.0);
+    float forwardLobe = pow(max(0.0, dot(toLight, vec3(0.0, 0.0, 1.0))), 3.0);
+    float dustMix = clamp(dustDensity / max(0.0001, smoke), 0.0, 1.0);
+    vec3 darkParticulate = mix(uPaletteSmoke, uPaletteDust, dustMix);
+    vec3 litParticulate = mix(uPaletteSmokeLight, uPaletteCloud, clamp(shadowColumn, 0.0, 1.0));
+    vec3 smokeColor = mix(darkParticulate, litParticulate,
+      clamp(temperature * 0.14 + selfShadow * 0.16, 0.0, 1.0));
+    vec3 emission = heatRamp(temperature + incandescent * 0.75)
+      * incandescent * (0.72 + selfShadow * 0.34);
+    float edgeScatter = pow(max(0.0, 1.0 - radialWeight), 1.7) * smoke * 0.12;
+    vec3 fireScatter = sourceRadiance * smoke * lightTransmittance
+      * (0.065 + forwardLobe * 0.12);
+    vec3 layerColor = smokeColor * smoke + emission + fireScatter
+      + mix(uPaletteSmokeLight, uPaletteCore, 0.18) * edgeScatter;
+    accumulated += transmittance * alpha * layerColor;
+    transmittance *= 1.0 - alpha;
+    shadowColumn += density * inverseSteps;
+    if (transmittance < 0.012) break;
+  }
+
+  // Restrained neighboring emission produces a cheap bloom without making the
+  // fluid simulation depend on output resolution.
+  vec3 bloom = vec3(0.0);
+  const vec2 directions[8] = vec2[8](
+    vec2(1.0, 0.0), vec2(-1.0, 0.0), vec2(0.0, 1.0), vec2(0.0, -1.0),
+    vec2(0.707, 0.707), vec2(-0.707, 0.707), vec2(0.707, -0.707), vec2(-0.707, -0.707)
+  );
+  for (int index = 0; index < 8; index += 1) {
+    vec4 neighbor = sampleField(uScalar, distortedUv + directions[index] * uTexel * 3.5);
+    float neighborHeat = neighbor.r * uLayerVisibility.w
+      + neighbor.b * uLayerVisibility.x;
+    bloom += heatRamp(neighborHeat) * neighbor.b * uLayerVisibility.x;
+  }
+  accumulated += bloom * 0.018 * uPhase.x * uVolumeProfile0.w;
+  accumulated += uPaletteBackground * uVolumeProfile2.z * (1.0 - transmittance) * 0.12;
+
+  // Density governs opacity across the fire-to-cloud handoff. Phase values
+  // modulate illumination and late dissipation gently; they no longer suppress
+  // radiance and alpha together, which made the 4–8 second plume nearly vanish.
+  float illuminationEnvelope = clamp(
+    0.86 + uPhase.x * 0.1 + uPhase.y * 0.1 + uPhase.w * 0.04,
+    0.78,
+    1.08
+  );
+  float atmosphericFade = 1.0 - clamp(uPhase.z * 0.46, 0.0, 0.58);
+  float alpha = clamp((1.0 - transmittance) * atmosphericFade, 0.0, 0.98);
+  vec3 mapped = toneMap(accumulated * illuminationEnvelope);
+  outputColor = vec4(mapped * alpha, alpha);
+}`;
+
+export const RESEARCH_FLUID_SHADER_SOURCES = Object.freeze({
+  fullscreenVertex: FULLSCREEN_VERTEX,
+  advectFragment: ADVECT_FRAGMENT,
+  curlFragment: CURL_FRAGMENT,
+  forceFragment: FORCE_FRAGMENT,
+  scalarFragment: SCALAR_FRAGMENT,
+  divergenceFragment: DIVERGENCE_FRAGMENT,
+  jacobiFragment: JACOBI_FRAGMENT,
+  projectFragment: PROJECT_FRAGMENT,
+  metricsFragment: METRICS_FRAGMENT,
+  tracerAdvectFragment: TRACER_ADVECT_FRAGMENT,
+  tracerVertex: TRACER_VERTEX,
+  tracerFragment: TRACER_FRAGMENT,
+  volumeFragment: VOLUME_FRAGMENT,
+});
+
+function createResearchCanvas(providedCanvas) {
+  // A visible research canvas supplied by the facade belongs to the caller.
+  // Do not modify its hidden attribute, CSS, ARIA, dataset, or DOM placement.
+  if (providedCanvas?.getContext) return providedCanvas;
+  try {
+    if (globalThis.document?.createElement) {
+      const canvas = document.createElement('canvas');
+      canvas.width = 1;
+      canvas.height = 1;
+      canvas.hidden = true;
+      canvas.setAttribute('aria-hidden', 'true');
+      canvas.dataset.renderer = 'research-fluid-webgl2';
+      if (canvas.style) {
+        canvas.style.position = 'fixed';
+        canvas.style.left = '-10000px';
+        canvas.style.top = '-10000px';
+        canvas.style.width = '1px';
+        canvas.style.height = '1px';
+        canvas.style.pointerEvents = 'none';
+      }
+      return canvas;
+    }
+    if (typeof globalThis.OffscreenCanvas === 'function') return new OffscreenCanvas(1, 1);
+  } catch {
+    // Capability reporting below provides the actionable fallback reason.
+  }
+  return null;
+}
+
+function normalizeTier(value) {
+  if (value && typeof value === 'object' && value.id && RESEARCH_FLUID_TIERS[value.id]) {
+    return RESEARCH_FLUID_TIERS[value.id];
+  }
+  const id = String(value || RESEARCH_FLUID_DEFAULTS.tier).toLowerCase();
+  if (id === 'low' || id === 'mobile') return RESEARCH_FLUID_TIERS.mobile;
+  if (id === 'high') return RESEARCH_FLUID_TIERS.high;
+  return RESEARCH_FLUID_TIERS.balanced;
+}
+
+function profileTier(value, profile) {
+  const base = normalizeTier(value);
+  const quality = profile?.quality || BASE_PROFILE.quality;
+  return Object.freeze({
+    ...base,
+    gridLongSide: Math.round(clamp(base.gridLongSide * quality.grid, 72, 320)),
+    gridShortSideMinimum: Math.round(clamp(base.gridShortSideMinimum * quality.grid, 48, 180)),
+    pressureIterations: Math.round(clamp(base.pressureIterations * quality.pressure, 6, 24)),
+    raySteps: Math.round(clamp(base.raySteps * quality.rays, 8, 48)),
+    tracerCount: Math.round(clamp(base.tracerCount * quality.tracers, 160, 1536)),
+    detailResolution: Math.round(clamp(base.detailResolution * quality.detail, 12, 40)),
+    // Every event family retains the same deterministic solver clock.
+    fixedStep: base.fixedStep,
+    profileQuality: quality,
+  });
+}
+
+function tierRuntimeSignature(tier) {
+  return [
+    tier.id,
+    tier.gridLongSide,
+    tier.gridShortSideMinimum,
+    tier.pressureIterations,
+    tier.raySteps,
+    tier.tracerCount,
+    tier.detailResolution,
+    tier.fixedStep,
+  ].join(':');
+}
+
+function normalizeDiagnostic(value) {
+  if (Number.isInteger(value)) return clamp(value, 0, 8);
+  const key = String(value || 'beauty').toLowerCase().replace(/[\s_-]+/g, '');
+  if (key === 'final' || key === 'finalcomposite') return RESEARCH_FLUID_DIAGNOSTICS.beauty;
+  if (key === 'density' || key === 'smoke' || key === 'smokedensity') {
+    return RESEARCH_FLUID_DIAGNOSTICS.smoke;
+  }
+  if (key === 'incandescent' || key === 'incandescentdensity') {
+    return RESEARCH_FLUID_DIAGNOSTICS.incandescent;
+  }
+  return {
+    beauty: RESEARCH_FLUID_DIAGNOSTICS.beauty,
+    velocity: RESEARCH_FLUID_DIAGNOSTICS.velocity,
+    temperature: RESEARCH_FLUID_DIAGNOSTICS.temperature,
+    pressure: RESEARCH_FLUID_DIAGNOSTICS.pressure,
+    divergence: RESEARCH_FLUID_DIAGNOSTICS.divergence,
+    vorticity: RESEARCH_FLUID_DIAGNOSTICS.vorticity,
+    tracers: RESEARCH_FLUID_DIAGNOSTICS.tracers,
+  }[key] ?? RESEARCH_FLUID_DIAGNOSTICS.beauty;
+}
+
+function diagnosticName(value) {
+  return [
+    'beauty',
+    'velocity',
+    'temperature',
+    'smoke',
+    'incandescent',
+    'pressure',
+    'divergence',
+    'vorticity',
+    'tracers',
+  ][normalizeDiagnostic(value)] || 'beauty';
+}
+
+function glErrorName(gl, code) {
+  const names = new Map([
+    [gl.INVALID_ENUM, 'INVALID_ENUM'],
+    [gl.INVALID_VALUE, 'INVALID_VALUE'],
+    [gl.INVALID_OPERATION, 'INVALID_OPERATION'],
+    [gl.INVALID_FRAMEBUFFER_OPERATION, 'INVALID_FRAMEBUFFER_OPERATION'],
+    [gl.OUT_OF_MEMORY, 'OUT_OF_MEMORY'],
+    [gl.CONTEXT_LOST_WEBGL, 'CONTEXT_LOST_WEBGL'],
+  ]);
+  return names.get(code) || `UNKNOWN_WEBGL_ERROR_${code}`;
+}
+
+function normalizeSettings(settings = {}, previous = RESEARCH_FLUID_DEFAULTS) {
+  const windInput = finite(settings.windStrength, previous.windStrength);
+  const windStrength = windInput > 1 ? windInput / 100 : windInput;
+  const presetId = String(settings.presetId ?? previous.presetId);
+  const requestedProfileId = settings.profileId ?? settings.fluidProfile
+    ?? (presetId === previous.presetId ? previous.profileId : null);
+  const profile = resolveFluidProfile(presetId, requestedProfileId);
+  const sourcePrimitives = normalizeSourcePrimitives(
+    settings.sourcePrimitives ?? (presetId === previous.presetId ? previous.sourcePrimitives : null),
+    profile,
+  );
+  return {
+    presetId,
+    profileId: profile.profileId,
+    eventFamily: String(settings.eventFamily ?? profile.eventFamily),
+    eventFamilyId: String(settings.eventFamilyId ?? profile.eventFamilyId),
+    physicalFamilyId: String(settings.physicalFamilyId ?? profile.physicalFamilyId),
+    sourcePrimitives,
+    sourcePrimitiveMask: sourcePrimitiveMask(sourcePrimitives),
+    palette: normalizeFluidPalette(settings.palette, previous.palette || DEFAULT_FLUID_PALETTE),
+    seed: (Math.max(1, Math.floor(finite(settings.seed, previous.seed))) >>> 0) || 1,
+    energy: clamp(finite(settings.energy, previous.energy), 0.2, 2.5),
+    altitude: clamp(finite(settings.altitude, previous.altitude), -0.15, 0.75),
+    windDirection: ((finite(settings.windDirection, previous.windDirection) % 360) + 360) % 360,
+    windStrength: clamp(windStrength, 0, 1),
+    duration: clamp(finite(settings.duration, previous.duration), 5, 60),
+    reducedMotion: settings.reducedMotion === undefined
+      ? Boolean(previous.reducedMotion)
+      : Boolean(settings.reducedMotion),
+    sourceStrength: clamp(finite(settings.sourceStrength, previous.sourceStrength), 0.25, 1.8),
+    buoyancy: clamp(finite(settings.buoyancy, previous.buoyancy), 0.1, 1.2),
+    densityLoading: clamp(finite(settings.densityLoading, previous.densityLoading), 0.02, 0.5),
+    cooling: clamp(finite(settings.cooling, previous.cooling), 0.04, 0.8),
+    smokeConversion: clamp(finite(settings.smokeConversion, previous.smokeConversion), 0.1, 1.5),
+    dissipation: clamp(finite(settings.dissipation, previous.dissipation), 0.94, 1),
+    tier: normalizeTier(settings.tier ?? previous.tier).id,
+    diagnostic: settings.diagnostic ?? previous.diagnostic,
+  };
+}
+
+function physicalSignature(settings, tier) {
+  return [
+    settings.presetId,
+    settings.profileId,
+    settings.eventFamilyId,
+    settings.physicalFamilyId,
+    settings.sourcePrimitives.join(','),
+    settings.sourcePrimitiveMask,
+    settings.seed,
+    settings.energy,
+    settings.altitude,
+    settings.windDirection,
+    settings.windStrength,
+    settings.duration,
+    Number(settings.reducedMotion),
+    settings.sourceStrength,
+    settings.buoyancy,
+    settings.densityLoading,
+    settings.cooling,
+    settings.smokeConversion,
+    settings.dissipation,
+    tierRuntimeSignature(tier),
+  ].join('|');
+}
+
+function makeGridDimensions(width, height, tier) {
+  const safeWidth = Math.max(1, width);
+  const safeHeight = Math.max(1, height);
+  const aspect = safeWidth / safeHeight;
+  let gridWidth;
+  let gridHeight;
+  if (aspect >= 1) {
+    gridWidth = tier.gridLongSide;
+    gridHeight = Math.max(tier.gridShortSideMinimum, Math.round(gridWidth / aspect));
+  } else {
+    gridHeight = tier.gridLongSide;
+    gridWidth = Math.max(tier.gridShortSideMinimum, Math.round(gridHeight * aspect));
+  }
+  // Even dimensions make framebuffer inspection and future packed fallbacks simpler.
+  return {
+    width: Math.max(2, Math.round(gridWidth / 2) * 2),
+    height: Math.max(2, Math.round(gridHeight / 2) * 2),
+  };
+}
+
+function shaderLabel(type) {
+  return type === 0x8b31 ? 'vertex' : 'fragment';
+}
+
+/**
+ * Stateful normalized GPU fluid solver. Methods return booleans for capability
+ * sensitive work and never throw during ordinary graceful fallback.
+ */
+export class ResearchFluidEngine {
+  constructor(options = {}) {
+    this.canvas = createResearchCanvas(options.canvas);
+    this._ownsCanvas = !options.canvas;
+    this.gl = null;
+    this.available = false;
+    this.destroyed = false;
+    this.reason = this.canvas ? 'WebGL2 has not been initialized.' : 'Canvas creation is unavailable.';
+    this.settings = normalizeSettings(options.settings || options, RESEARCH_FLUID_DEFAULTS);
+    this.profile = resolveFluidProfile(this.settings.presetId, this.settings.profileId);
+    this.tier = profileTier(options.tier ?? this.settings.tier, this.profile);
+    this.settings.tier = this.tier.id;
+    this.width = 1;
+    this.height = 1;
+    this.gridWidth = 0;
+    this.gridHeight = 0;
+    this.time = 0;
+    this.simulationTime = 0;
+    this.stepIndex = 0;
+    this._format = null;
+    this._programs = Object.create(null);
+    this._targets = null;
+    this._detailTexture = null;
+    this._detailSize = 0;
+    this._detailSignature = '';
+    this._metricTarget = null;
+    this._metricPixels = null;
+    this._debugMetricsEnabled = Boolean(options.debugMetrics);
+    this._debugMetricsActive = false;
+    this._metricStepIndex = -1;
+    this._metrics = {
+      velocityMagnitude: 0,
+      maximumTemperature: 0,
+      smokeDensity: 0,
+      vorticityMagnitude: 0,
+      sampledStep: null,
+    };
+    this._vao = null;
+    this._signature = physicalSignature(this.settings, this.tier);
+    this._contextLost = false;
+    this._drawCalls = 0;
+    this._simulationSteps = 0;
+    this._resets = 0;
+    this._lastDiagnostic = normalizeDiagnostic(this.settings.diagnostic);
+    this._lastRaySteps = this.tier.raySteps;
+    this._probeAttempts = [];
+    this._lastGlError = null;
+    this._boundContextLost = (event) => this._handleContextLost(event);
+    this._boundContextRestored = () => this._handleContextRestored();
+
+    this._installContextListeners();
+    this._initializeContext();
+    if (this.available) {
+      this.resize(
+        finite(options.width, 960),
+        finite(options.height, 540),
+        this.tier.id,
+      );
+    }
+  }
+
+  configure(partialSettings = {}) {
+    if (this.destroyed || !partialSettings || typeof partialSettings !== 'object') return this;
+    if (Object.prototype.hasOwnProperty.call(partialSettings, 'debugMetrics')) {
+      this._debugMetricsEnabled = Boolean(partialSettings.debugMetrics);
+    }
+    const previousTier = this.tier;
+    const previousTierSignature = tierRuntimeSignature(previousTier);
+    const previousSignature = this._signature;
+    this.settings = normalizeSettings(partialSettings, this.settings);
+    this.profile = resolveFluidProfile(this.settings.presetId, this.settings.profileId);
+    const desiredTier = profileTier(partialSettings.tier ?? this.settings.tier, this.profile);
+    this.tier = desiredTier;
+    this.settings.tier = desiredTier.id;
+    this._lastDiagnostic = normalizeDiagnostic(this.settings.diagnostic);
+    this._signature = physicalSignature(this.settings, this.tier);
+
+    if (this.available && previousTierSignature !== tierRuntimeSignature(this.tier)) {
+      // Let resize compare against the actually allocated tier so same-named
+      // tiers with different per-profile budgets reallocate every dependent target.
+      this.tier = previousTier;
+      this.resize(this.width, this.height, desiredTier.id);
+    } else if (this.available && previousSignature !== this._signature) {
+      try {
+        this._ensureDetailTexture();
+        this._resetState();
+      } catch (error) {
+        this._runtimeFailure('Curl-detail texture allocation failed.', error);
+      }
+    }
+    return this;
+  }
+
+  setDebugMetricsEnabled(enabled) {
+    this._debugMetricsEnabled = Boolean(enabled);
+    return this;
+  }
+
+  resize(width, height, tier = this.tier.id) {
+    if (this.destroyed || !this.canvas) return false;
+    const outputWidth = clamp(Math.round(finite(width, this.width || 1)), 1, MAX_OUTPUT_DIMENSION);
+    const outputHeight = clamp(Math.round(finite(height, this.height || 1)), 1, MAX_OUTPUT_DIMENSION);
+    const nextTier = profileTier(tier, this.profile);
+    const dimensions = makeGridDimensions(outputWidth, outputHeight, nextTier);
+    const gridChanged = dimensions.width !== this.gridWidth || dimensions.height !== this.gridHeight;
+    const tierChanged = tierRuntimeSignature(nextTier) !== tierRuntimeSignature(this.tier);
+
+    this.width = outputWidth;
+    this.height = outputHeight;
+    this.tier = nextTier;
+    if (tierChanged) this._lastRaySteps = nextTier.raySteps;
+    this.settings.tier = nextTier.id;
+    this._signature = physicalSignature(this.settings, nextTier);
+    if (this.canvas.width !== outputWidth) this.canvas.width = outputWidth;
+    if (this.canvas.height !== outputHeight) this.canvas.height = outputHeight;
+
+    if (!this.available || !this.gl) return false;
+    if (gridChanged || tierChanged || !this._targets) {
+      this.gridWidth = dimensions.width;
+      this.gridHeight = dimensions.height;
+      try {
+        this._allocateTargets();
+        this._resetState();
+      } catch (error) {
+        this._runtimeFailure('Fluid framebuffer allocation failed.', error);
+        return false;
+      }
+    }
+    return true;
+  }
+
+  seek(time) {
+    const requestedTime = clamp(finite(time, 0), 0, MAX_SEEK_SECONDS);
+    this.time = requestedTime;
+    if (!this.available || this.destroyed || !this._targets) return false;
+    const fixedStep = this.tier.fixedStep;
+    const targetStep = Math.max(0, Math.floor(requestedTime / fixedStep + 1e-7));
+    if (targetStep < this.stepIndex) this._resetState();
+    if (targetStep === this.stepIndex) {
+      this.time = requestedTime;
+      this.simulationTime = this.stepIndex * fixedStep;
+      return true;
+    }
+
+    try {
+      while (this.stepIndex < targetStep) {
+        const nextStep = this.stepIndex + 1;
+        this._stepSimulation(nextStep * fixedStep, fixedStep);
+        this.stepIndex = nextStep;
+        this.simulationTime = nextStep * fixedStep;
+        this._simulationSteps += 1;
+      }
+      this._assertNoGlError('fluid simulation');
+      this.time = requestedTime;
+      return true;
+    } catch (error) {
+      this._runtimeFailure('The WebGL2 fluid solver stopped unexpectedly.', error);
+      return false;
+    }
+  }
+
+  render(options = {}) {
+    if (this.destroyed) return false;
+    const width = finite(options.width, this.width);
+    const height = finite(options.height, this.height);
+    const requestedTier = typeof options.quality === 'string'
+      ? profileTier(options.quality, this.profile)
+      : this.tier;
+    if (
+      Math.round(width) !== this.width
+      || Math.round(height) !== this.height
+      || tierRuntimeSignature(requestedTier) !== tierRuntimeSignature(this.tier)
+    ) {
+      this.resize(width, height, requestedTier.id);
+    }
+    if (!this.available || !this.gl || !this._targets) return false;
+    if (!this.seek(options.time ?? this.time)) return false;
+
+    const gl = this.gl;
+    const diagnostic = normalizeDiagnostic(options.diagnostic ?? this.settings.diagnostic);
+    this._lastDiagnostic = diagnostic;
+    const collectDebugMetrics = Boolean(
+      options.debugMetrics
+      || options.collectMetrics
+      || this._debugMetricsEnabled
+      || diagnostic !== RESEARCH_FLUID_DIAGNOSTICS.beauty
+    );
+    this._debugMetricsActive = collectDebugMetrics;
+    const phase = options.phase || {};
+    const layout = options.layout || {};
+    const originX = clamp(finite(layout.originX, this.width * 0.5) / this.width, 0, 1);
+    const topOriginY = finite(layout.eventY ?? layout.originY, this.height * 0.68);
+    const originY = clamp(1 - topOriginY / this.height, 0, 1);
+    const sceneScale = clamp(finite(layout.scale, 1), 0.45, 2.4);
+    const minimumDimension = Math.min(this.width, this.height);
+    const volumeScale = [
+      clamp(
+        minimumDimension * 0.48 * sceneScale * this.profile.volume.scaleX / this.width,
+        0.06,
+        1.15,
+      ),
+      clamp(
+        minimumDimension * 0.78 * sceneScale * this.profile.volume.scaleY / this.height,
+        0.08,
+        1.65,
+      ),
+    ];
+    const phaseValues = [
+      clamp(finite(phase.fireAlpha ?? phase.fireGrowth, this._fallbackFirePhase()), 0, 2),
+      clamp(finite(phase.cloud, this._fallbackCloudPhase()), 0, 2),
+      clamp(finite(phase.dissipation, this._fallbackDissipationPhase()), 0, 1),
+      clamp(finite(phase.rise, this._fallbackRisePhase()), 0, 1),
+    ];
+    const numericQuality = Number.isFinite(options.quality)
+      ? clamp(Number(options.quality), 0.35, 1)
+      : 1;
+    const raySteps = Math.max(8, Math.min(48, Math.round(this.tier.raySteps * numericQuality)));
+    this._lastRaySteps = raySteps;
+    const requestedLayers = Array.isArray(options.layerVisibility)
+      ? options.layerVisibility
+      : [1, 1, 1, 1];
+    const layerVisibility = [0, 1, 2, 3].map((index) => {
+      const value = requestedLayers[index];
+      return value === undefined ? 1 : clamp(finite(value, 1), 0, 1);
+    });
+
+    try {
+      if (collectDebugMetrics) this._collectDebugMetrics(Boolean(options.forceMetrics));
+      gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+      gl.viewport(0, 0, this.width, this.height);
+      gl.disable(gl.BLEND);
+      gl.disable(gl.DEPTH_TEST);
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+      this._draw('volume', null, (program) => {
+        this._texture(program, 'uVelocity', this._targets.velocity.read.texture, 0);
+        this._texture(program, 'uScalar', this._targets.scalar.read.texture, 1);
+        this._texture(program, 'uCurl', this._targets.curl.texture, 2);
+        this._texture(program, 'uPressure', this._targets.pressure.read.texture, 3);
+        this._texture(program, 'uDivergence', this._targets.divergence.texture, 4);
+        this._texture3D(program, 'uCurlDetail', this._detailTexture, 5);
+        this._uniform2f(program, 'uTexel', 1 / this.gridWidth, 1 / this.gridHeight);
+        this._uniform2f(program, 'uResolution', this.width, this.height);
+        this._uniform2f(program, 'uOrigin', originX, originY);
+        this._uniform2f(program, 'uVolumeScale', volumeScale[0], volumeScale[1]);
+        const sourceCenter = this._sourceCenter();
+        this._uniform2f(program, 'uSourceCenter', sourceCenter[0], sourceCenter[1]);
+        this._uniform4f(program, 'uPhase', ...phaseValues);
+        this._uniform1f(program, 'uTime', this.simulationTime);
+        this._uniform1f(program, 'uExposure', 1.02 + this.settings.energy * 0.12);
+        this._uniform1f(program, 'uReducedMotion', this.settings.reducedMotion ? 1 : 0);
+        this._uniform1i(program, 'uDiagnostic', diagnostic);
+        this._uniform1i(program, 'uRaySteps', raySteps);
+        this._uniform1ui(program, 'uSeed', this.settings.seed);
+        this._uniform4f(program, 'uLayerVisibility', ...layerVisibility);
+        this._bindVolumeProfileUniforms(program);
+        this._bindPaletteUniforms(program);
+      }, this.width, this.height);
+      if (diagnostic === RESEARCH_FLUID_DIAGNOSTICS.beauty
+        || diagnostic === RESEARCH_FLUID_DIAGNOSTICS.tracers) {
+        this._renderTracerPoints({
+          diagnostic,
+          originX,
+          originY,
+          volumeScale,
+          sourceCenter: this._sourceCenter(),
+          layerVisibility,
+        });
+      }
+      gl.flush();
+      this._assertNoGlError('fluid volume render');
+      return true;
+    } catch (error) {
+      this._runtimeFailure('The fluid volume render failed.', error);
+      return false;
+    }
+  }
+
+  getStats() {
+    return {
+      available: this.available,
+      webgl2Available: Boolean(this.gl && !this._contextLost),
+      reason: this.available ? null : this.reason,
+      backend: this.available ? 'webgl2-fluid' : 'unavailable',
+      presetId: this.settings.presetId,
+      profileId: this.profile.profileId,
+      fluidProfile: this.profile.profileId,
+      eventFamily: this.settings.eventFamily || this.profile.eventFamily,
+      eventFamilyId: this.settings.eventFamilyId || this.profile.eventFamilyId,
+      physicalFamilyId: this.settings.physicalFamilyId || this.profile.physicalFamilyId,
+      sourcePrimitives: [...this.settings.sourcePrimitives],
+      sourcePrimitiveMask: this.settings.sourcePrimitiveMask,
+      tracerType: this.profile.tracerType,
+      paletteId: this.settings.palette.id,
+      format: this._format?.label || null,
+      tier: this.tier.id,
+      gridLongSide: this.tier.gridLongSide,
+      gridShortSideMinimum: this.tier.gridShortSideMinimum,
+      performanceProfile: { ...this.profile.quality },
+      width: this.width,
+      height: this.height,
+      gridWidth: this.gridWidth,
+      gridHeight: this.gridHeight,
+      fixedStep: this.tier.fixedStep,
+      simulationTimestep: this.tier.fixedStep,
+      time: this.time,
+      simulationTime: this.simulationTime,
+      stepIndex: this.stepIndex,
+      fluidSteps: this.stepIndex,
+      simulationSteps: this._simulationSteps,
+      pressureIterations: this.tier.pressureIterations,
+      raySteps: this._lastRaySteps,
+      volumeSlices: this._lastRaySteps,
+      tracerCount: this._targets?.tracers?.count ?? this.tier.tracerCount,
+      detailTexture: this._detailSize > 0
+        ? `${this._detailSize} × ${this._detailSize} × ${this._detailSize}`
+        : null,
+      detailTextureSize: this._detailSize,
+      detailResolution: this.tier.detailResolution,
+      estimatedGpuBytes: this._estimatedGpuBytes(),
+      diagnostic: diagnosticName(this._lastDiagnostic),
+      debugMetricsEnabled: this._debugMetricsActive || this._debugMetricsEnabled,
+      metricsSampledStep: this._metrics.sampledStep,
+      velocityMagnitude: this._metrics.velocityMagnitude,
+      currentVelocityMagnitude: this._metrics.velocityMagnitude,
+      maximumTemperature: this._metrics.maximumTemperature,
+      currentMaximumTemperature: this._metrics.maximumTemperature,
+      smokeDensity: this._metrics.smokeDensity,
+      currentSmokeDensity: this._metrics.smokeDensity,
+      vorticityMagnitude: this._metrics.vorticityMagnitude,
+      currentVorticityMagnitude: this._metrics.vorticityMagnitude,
+      metrics: { ...this._metrics },
+      drawCalls: this._drawCalls,
+      resets: this._resets,
+      contextLost: this._contextLost,
+      lastGlError: this._lastGlError ? { ...this._lastGlError } : null,
+      probeAttempts: this._probeAttempts.map((attempt) => ({ ...attempt })),
+    };
+  }
+
+  destroy() {
+    if (this.destroyed) return;
+    this.destroyed = true;
+    this._removeContextListeners();
+    this._releaseResources();
+    this.available = false;
+    this.reason = 'Fluid engine destroyed.';
+    this.gl = null;
+  }
+
+  _installContextListeners() {
+    if (!this.canvas?.addEventListener) return;
+    this.canvas.addEventListener('webglcontextlost', this._boundContextLost, false);
+    this.canvas.addEventListener('webglcontextrestored', this._boundContextRestored, false);
+  }
+
+  _removeContextListeners() {
+    if (!this.canvas?.removeEventListener) return;
+    this.canvas.removeEventListener('webglcontextlost', this._boundContextLost, false);
+    this.canvas.removeEventListener('webglcontextrestored', this._boundContextRestored, false);
+  }
+
+  _initializeContext() {
+    if (!this.canvas || this.destroyed) return false;
+    let gl;
+    try {
+      gl = this.canvas.getContext('webgl2', {
+        alpha: true,
+        antialias: false,
+        depth: false,
+        stencil: false,
+        premultipliedAlpha: true,
+        preserveDrawingBuffer: this._ownsCanvas,
+        desynchronized: true,
+        powerPreference: 'high-performance',
+      });
+    } catch (error) {
+      this.reason = `WebGL2 context creation failed: ${error?.message || error}`;
+      return false;
+    }
+    if (!gl) {
+      this.reason = 'WebGL2 is unavailable; use the existing Canvas2D renderer.';
+      return false;
+    }
+
+    this.gl = gl;
+    this._lastGlError = null;
+    this._probeAttempts = [];
+    gl.getExtension('EXT_color_buffer_float');
+    gl.getExtension('OES_texture_float_linear');
+    this._format = this._probeFramebufferFormat();
+    if (!this._format) {
+      this.reason = 'Renderable floating-point or half-float framebuffers are unavailable.';
+      this.gl = gl;
+      return false;
+    }
+
+    try {
+      this._vao = gl.createVertexArray();
+      if (!this._vao) throw new Error('Unable to allocate a fullscreen vertex array.');
+      gl.bindVertexArray(this._vao);
+      this._programs = Object.create(null);
+      const definitions = [
+        ['advect', FULLSCREEN_VERTEX, ADVECT_FRAGMENT],
+        ['curl', FULLSCREEN_VERTEX, CURL_FRAGMENT],
+        ['force', FULLSCREEN_VERTEX, FORCE_FRAGMENT],
+        ['scalar', FULLSCREEN_VERTEX, SCALAR_FRAGMENT],
+        ['divergence', FULLSCREEN_VERTEX, DIVERGENCE_FRAGMENT],
+        ['jacobi', FULLSCREEN_VERTEX, JACOBI_FRAGMENT],
+        ['project', FULLSCREEN_VERTEX, PROJECT_FRAGMENT],
+        ['metrics', FULLSCREEN_VERTEX, METRICS_FRAGMENT],
+        ['tracerAdvect', FULLSCREEN_VERTEX, TRACER_ADVECT_FRAGMENT],
+        ['tracerDisplay', TRACER_VERTEX, TRACER_FRAGMENT],
+        ['volume', FULLSCREEN_VERTEX, VOLUME_FRAGMENT],
+      ];
+      for (const [name, vertexSource, fragmentSource] of definitions) {
+        this._programs[name] = this._createProgram(name, vertexSource, fragmentSource);
+      }
+      this.available = true;
+      this.reason = null;
+      this._contextLost = false;
+      return true;
+    } catch (error) {
+      this._releaseResources();
+      this.available = false;
+      this.reason = `Fluid shader initialization failed: ${error?.message || error}`;
+      return false;
+    }
+  }
+
+  _probeFramebufferFormat() {
+    const gl = this.gl;
+    const candidates = [
+      {
+        label: 'rgba16f',
+        internalFormat: gl.RGBA16F,
+        format: gl.RGBA,
+        type: gl.HALF_FLOAT,
+        bytesPerChannel: 2,
+      },
+      {
+        label: 'rgba32f',
+        internalFormat: gl.RGBA32F,
+        format: gl.RGBA,
+        type: gl.FLOAT,
+        bytesPerChannel: 4,
+      },
+    ];
+    for (const candidate of candidates) {
+      const texture = gl.createTexture();
+      const framebuffer = gl.createFramebuffer();
+      let status = 0;
+      let errorCode = 0;
+      try {
+        for (let index = 0; index < 8 && gl.getError() !== gl.NO_ERROR; index += 1) {
+          // Clear a bounded number of unrelated startup errors before probing.
+        }
+        gl.bindTexture(gl.TEXTURE_2D, texture);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+        gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+        gl.texImage2D(
+          gl.TEXTURE_2D,
+          0,
+          candidate.internalFormat,
+          4,
+          4,
+          0,
+          candidate.format,
+          candidate.type,
+          null,
+        );
+        gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+        gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+        status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+        gl.viewport(0, 0, 4, 4);
+        gl.clearColor(0.125, 0.25, 0.5, 1);
+        gl.clear(gl.COLOR_BUFFER_BIT);
+        errorCode = gl.getError();
+      } catch {
+        status = 0;
+        errorCode = -1;
+      } finally {
+        gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+        gl.bindTexture(gl.TEXTURE_2D, null);
+        if (framebuffer) gl.deleteFramebuffer(framebuffer);
+        if (texture) gl.deleteTexture(texture);
+      }
+      const supported = status === gl.FRAMEBUFFER_COMPLETE && errorCode === gl.NO_ERROR;
+      this._probeAttempts.push({
+        label: candidate.label,
+        supported,
+        framebufferStatus: status,
+        errorCode,
+      });
+      if (supported) return candidate;
+    }
+    return null;
+  }
+
+  _createProgram(name, vertexSource, fragmentSource) {
+    const gl = this.gl;
+    let vertex = null;
+    let fragment = null;
+    let program = null;
+    let completed = false;
+    try {
+      vertex = this._compileShader(gl.VERTEX_SHADER, vertexSource, `${name} vertex`);
+      fragment = this._compileShader(gl.FRAGMENT_SHADER, fragmentSource, `${name} fragment`);
+      program = gl.createProgram();
+      if (!program) throw new Error(`Unable to allocate the ${name} program.`);
+      gl.attachShader(program, vertex);
+      gl.attachShader(program, fragment);
+      gl.linkProgram(program);
+      const linked = gl.getProgramParameter(program, gl.LINK_STATUS);
+      const log = gl.getProgramInfoLog(program) || '';
+      if (!linked) throw new Error(`${name} program link failed${log ? `: ${log}` : '.'}`);
+      completed = true;
+      return { name, program, uniforms: new Map() };
+    } finally {
+      if (program && vertex) gl.detachShader(program, vertex);
+      if (program && fragment) gl.detachShader(program, fragment);
+      if (vertex) gl.deleteShader(vertex);
+      if (fragment) gl.deleteShader(fragment);
+      if (program && !completed) gl.deleteProgram(program);
+    }
+  }
+
+  _compileShader(type, source, name) {
+    const gl = this.gl;
+    const shader = gl.createShader(type);
+    if (!shader) throw new Error(`Unable to allocate the ${name} shader.`);
+    gl.shaderSource(shader, source);
+    gl.compileShader(shader);
+    if (!gl.getShaderParameter(shader, gl.COMPILE_STATUS)) {
+      const log = gl.getShaderInfoLog(shader) || 'No compiler log was provided.';
+      gl.deleteShader(shader);
+      throw new Error(`${name} (${shaderLabel(type)}) compile failed: ${log}`);
+    }
+    return shader;
+  }
+
+  _allocateTargets() {
+    this._releaseTargets();
+    this._releaseMetricResources();
+    this._targets = Object.create(null);
+    try {
+      this._ensureDetailTexture();
+      this._targets.velocity = this._createPair('velocity');
+      this._targets.scalar = this._createPair('scalar');
+      this._targets.pressure = this._createPair('pressure');
+      this._targets.divergence = this._createTarget('divergence');
+      this._targets.curl = this._createTarget('curl');
+      this._targets.tracers = this._createPair('tracer', this.tier.tracerCount, 1);
+      this._targets.tracers.count = this.tier.tracerCount;
+    } catch (error) {
+      this._releaseTargets();
+      throw error;
+    }
+  }
+
+  _createPair(label, width = this.gridWidth, height = this.gridHeight) {
+    const read = this._createTarget(`${label}-a`, width, height);
+    try {
+      return {
+        read,
+        write: this._createTarget(`${label}-b`, width, height),
+      };
+    } catch (error) {
+      this.gl.deleteFramebuffer(read.framebuffer);
+      this.gl.deleteTexture(read.texture);
+      throw error;
+    }
+  }
+
+  _createTarget(label, width = this.gridWidth, height = this.gridHeight) {
+    const gl = this.gl;
+    const texture = gl.createTexture();
+    const framebuffer = gl.createFramebuffer();
+    if (!texture || !framebuffer) {
+      if (framebuffer) gl.deleteFramebuffer(framebuffer);
+      if (texture) gl.deleteTexture(texture);
+      throw new Error(`Unable to allocate ${label}.`);
+    }
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      this._format.internalFormat,
+      width,
+      height,
+      0,
+      this._format.format,
+      this._format.type,
+      null,
+    );
+    gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+    const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    if (status !== gl.FRAMEBUFFER_COMPLETE) {
+      gl.deleteFramebuffer(framebuffer);
+      gl.deleteTexture(texture);
+      throw new Error(`${label} framebuffer is incomplete (${status}).`);
+    }
+    return { label, texture, framebuffer, width, height };
+  }
+
+  _createByteTarget(label, width, height) {
+    const gl = this.gl;
+    const texture = gl.createTexture();
+    const framebuffer = gl.createFramebuffer();
+    if (!texture || !framebuffer) {
+      if (framebuffer) gl.deleteFramebuffer(framebuffer);
+      if (texture) gl.deleteTexture(texture);
+      throw new Error(`Unable to allocate ${label}.`);
+    }
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_S, gl.CLAMP_TO_EDGE);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_WRAP_T, gl.CLAMP_TO_EDGE);
+    gl.texImage2D(
+      gl.TEXTURE_2D,
+      0,
+      gl.RGBA8,
+      width,
+      height,
+      0,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      null,
+    );
+    gl.bindFramebuffer(gl.FRAMEBUFFER, framebuffer);
+    gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, texture, 0);
+    const status = gl.checkFramebufferStatus(gl.FRAMEBUFFER);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.bindTexture(gl.TEXTURE_2D, null);
+    if (status !== gl.FRAMEBUFFER_COMPLETE) {
+      gl.deleteFramebuffer(framebuffer);
+      gl.deleteTexture(texture);
+      throw new Error(`${label} framebuffer is incomplete (${status}).`);
+    }
+    return { label, texture, framebuffer, width, height, bytesPerTexel: 4 };
+  }
+
+  _ensureMetricResources() {
+    const pixelCount = this.gridWidth * this.gridHeight * 4;
+    const targetMatches = this._metricTarget
+      && this._metricTarget.width === this.gridWidth
+      && this._metricTarget.height === this.gridHeight;
+    if (!targetMatches) {
+      this._releaseMetricResources();
+      this._metricTarget = this._createByteTarget(
+        'debug-metrics',
+        this.gridWidth,
+        this.gridHeight,
+      );
+    }
+    if (!this._metricPixels || this._metricPixels.length !== pixelCount) {
+      this._metricPixels = new Uint8Array(pixelCount);
+    }
+  }
+
+  _collectDebugMetrics(force = false) {
+    if (!this.gl || !this._targets) return;
+    // Six updates per simulated second are enough for a readable developer HUD
+    // and avoid turning a diagnostic readback into a normal-frame GPU stall.
+    if (!force && this._metricStepIndex >= 0 && this.stepIndex - this._metricStepIndex < 5) return;
+    this._ensureMetricResources();
+    const gl = this.gl;
+    const target = this._metricTarget;
+    gl.disable(gl.BLEND);
+    gl.disable(gl.DEPTH_TEST);
+    this._draw('metrics', target, (program) => {
+      this._texture(program, 'uVelocity', this._targets.velocity.read.texture, 0);
+      this._texture(program, 'uScalar', this._targets.scalar.read.texture, 1);
+      this._texture(program, 'uCurl', this._targets.curl.texture, 2);
+    }, target.width, target.height);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
+    gl.pixelStorei(gl.PACK_ALIGNMENT, 1);
+    gl.readPixels(
+      0,
+      0,
+      target.width,
+      target.height,
+      gl.RGBA,
+      gl.UNSIGNED_BYTE,
+      this._metricPixels,
+    );
+    this._assertNoGlError('debug field metric readback');
+
+    let velocityByte = 0;
+    let temperatureByte = 0;
+    let smokeByte = 0;
+    let vorticityByte = 0;
+    for (let offset = 0; offset < this._metricPixels.length; offset += 4) {
+      velocityByte = Math.max(velocityByte, this._metricPixels[offset]);
+      temperatureByte = Math.max(temperatureByte, this._metricPixels[offset + 1]);
+      smokeByte = Math.max(smokeByte, this._metricPixels[offset + 2]);
+      vorticityByte = Math.max(vorticityByte, this._metricPixels[offset + 3]);
+    }
+    this._metrics.velocityMagnitude = velocityByte / 255 * 1.4;
+    this._metrics.maximumTemperature = temperatureByte / 255 * 4;
+    this._metrics.smokeDensity = smokeByte / 255 * 4;
+    this._metrics.vorticityMagnitude = vorticityByte / 255 * 1.4;
+    this._metrics.sampledStep = this.stepIndex;
+    this._metricStepIndex = this.stepIndex;
+  }
+
+  _ensureDetailTexture() {
+    const gl = this.gl;
+    if (!gl) throw new Error('WebGL2 is unavailable for the curl-detail texture.');
+    const size = clamp(Math.round(finite(this.tier.detailResolution, 16)), 8, 48);
+    const signature = `${this.settings.seed}|${this.tier.id}|${size}`;
+    if (this._detailTexture && this._detailSignature === signature) return;
+
+    const data = buildCurlDetailVolume(size, this.settings.seed);
+    const texture = gl.createTexture();
+    if (!texture) throw new Error('Unable to allocate the 3D curl-detail texture.');
+    let errorCode = gl.NO_ERROR;
+    let uploadFailure = null;
+    try {
+      for (let index = 0; index < 8 && gl.getError() !== gl.NO_ERROR; index += 1) {
+        // Clear a bounded number of unrelated startup errors before uploading.
+      }
+      gl.bindTexture(gl.TEXTURE_3D, texture);
+      gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_MAG_FILTER, gl.LINEAR);
+      gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_S, gl.REPEAT);
+      gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_T, gl.REPEAT);
+      gl.texParameteri(gl.TEXTURE_3D, gl.TEXTURE_WRAP_R, gl.REPEAT);
+      gl.pixelStorei(gl.UNPACK_ALIGNMENT, 1);
+      gl.texImage3D(
+        gl.TEXTURE_3D,
+        0,
+        gl.RGBA8,
+        size,
+        size,
+        size,
+        0,
+        gl.RGBA,
+        gl.UNSIGNED_BYTE,
+        data,
+      );
+      errorCode = gl.getError();
+    } catch (error) {
+      uploadFailure = error;
+    } finally {
+      gl.bindTexture(gl.TEXTURE_3D, null);
+    }
+    if (uploadFailure || errorCode !== gl.NO_ERROR) {
+      gl.deleteTexture(texture);
+      if (uploadFailure) throw uploadFailure;
+      throw new Error(`3D curl-detail upload failed (${errorCode}).`);
+    }
+
+    if (this._detailTexture) gl.deleteTexture(this._detailTexture);
+    this._detailTexture = texture;
+    this._detailSize = size;
+    this._detailSignature = signature;
+  }
+
+  _resetState() {
+    if (!this.gl || !this._targets) return;
+    const gl = this.gl;
+    for (const target of this._allTargets()) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, target.framebuffer);
+      gl.viewport(0, 0, target.width, target.height);
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+    }
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    this.time = 0;
+    this.simulationTime = 0;
+    this.stepIndex = 0;
+    this._metricStepIndex = -1;
+    this._metrics.velocityMagnitude = 0;
+    this._metrics.maximumTemperature = 0;
+    this._metrics.smokeDensity = 0;
+    this._metrics.vorticityMagnitude = 0;
+    this._metrics.sampledStep = null;
+    this._resets += 1;
+  }
+
+  _sourceUniformState() {
+    const source = this.profile.source;
+    const offsets = seededProfileOffsets(this.settings.seed, this.profile.profileKind);
+    const researchRegression = Boolean(this.profile.preserveResearchSource);
+    const offsetScale = researchRegression ? 0 : source.radius * 0.24;
+    return {
+      mask: this.settings.sourcePrimitiveMask,
+      profileKind: this.profile.profileKind,
+      shape: [source.radius, source.aspectX, source.aspectY, source.groundLevel],
+      timing: [source.onsetEnd, source.sustainEnd, source.pulseFrequency, source.stageOffset],
+      motion: [source.radial, source.vertical, source.directional, source.turbulence],
+      scalar: [source.heat, source.smoke, source.incandescent, source.dust],
+      vector: [
+        source.directionX,
+        source.directionY,
+        source.offsetX + offsets[6] * offsetScale,
+        source.offsetY + offsets[7] * offsetScale * 0.72,
+      ],
+      aux: [source.ringRadius, source.ejecta, source.trailLength, source.clusterSpread],
+      offsetsA: offsets.slice(0, 4),
+      offsetsB: offsets.slice(4, 8),
+      physics: [
+        this.profile.physics.buoyancy,
+        this.profile.physics.densityLoading,
+        this.profile.physics.windCoupling,
+        this.profile.physics.vorticity,
+      ],
+      decay: [
+        this.profile.physics.velocityRetention,
+        this.profile.physics.cooling,
+        this.profile.physics.smokeConversion,
+        this.profile.physics.scalarRetention,
+      ],
+      profileAux: [source.capScale, 0, 0, 0],
+    };
+  }
+
+  _bindSourceProfileUniforms(program, state = this._sourceUniformState()) {
+    this._uniform1ui(program, 'uSourceMask', state.mask);
+    this._uniform1i(program, 'uProfileKind', state.profileKind);
+    this._uniform4f(program, 'uSourceShape', ...state.shape);
+    this._uniform4f(program, 'uSourceTiming', ...state.timing);
+    this._uniform4f(program, 'uSourceMotion', ...state.motion);
+    this._uniform4f(program, 'uSourceScalar', ...state.scalar);
+    this._uniform4f(program, 'uSourceVector', ...state.vector);
+    this._uniform4f(program, 'uSourceAux', ...state.aux);
+    this._uniform4f(program, 'uSeedOffsetsA', ...state.offsetsA);
+    this._uniform4f(program, 'uSeedOffsetsB', ...state.offsetsB);
+    this._uniform4f(program, 'uProfilePhysics', ...state.physics);
+    this._uniform4f(program, 'uProfileDecay', ...state.decay);
+    this._uniform4f(program, 'uProfileAux', ...state.profileAux);
+  }
+
+  _bindVolumeProfileUniforms(program) {
+    const volume = this.profile.volume;
+    this._uniform4f(
+      program,
+      'uVolumeProfile0',
+      volume.depth,
+      volume.opacity,
+      volume.shadow,
+      volume.bloom,
+    );
+    this._uniform4f(
+      program,
+      'uVolumeProfile1',
+      volume.distortion,
+      volume.erosion,
+      volume.noiseScale,
+      volume.dustVisibility,
+    );
+    this._uniform4f(
+      program,
+      'uVolumeProfile2',
+      volume.exposure,
+      volume.toneMap,
+      volume.backgroundIllumination,
+      volume.emissionCurve,
+    );
+  }
+
+  _bindPaletteUniforms(program) {
+    const palette = this.settings.palette;
+    this._uniform3f(program, 'uPaletteBackground', ...palette.background);
+    this._uniform3f(program, 'uPaletteEmber', ...palette.ember);
+    this._uniform3f(program, 'uPaletteFlame', ...palette.flame);
+    this._uniform3f(program, 'uPaletteHot', ...palette.hot);
+    this._uniform3f(program, 'uPaletteCore', ...palette.core);
+    this._uniform3f(program, 'uPaletteSmoke', ...palette.smoke);
+    this._uniform3f(program, 'uPaletteSmokeLight', ...palette.smokeLight);
+    this._uniform3f(program, 'uPaletteCloud', ...palette.cloud);
+    this._uniform3f(program, 'uPaletteDust', ...palette.dust);
+  }
+
+  _stepSimulation(stepTime, dt) {
+    const gl = this.gl;
+    const targets = this._targets;
+    const texelX = 1 / this.gridWidth;
+    const texelY = 1 / this.gridHeight;
+    const normalizedTime = clamp(stepTime / this.settings.duration, 0, 1.5);
+    const sourceCenter = this._sourceCenter();
+    const sourceUniforms = this._sourceUniformState();
+    const windAngle = this.settings.windDirection / 360 * TAU;
+    const wind = [
+      Math.sin(windAngle) * this.settings.windStrength * 0.085,
+      -Math.cos(windAngle) * this.settings.windStrength * 0.022,
+    ];
+
+    this._draw('advect', targets.velocity.write, (program) => {
+      this._texture(program, 'uVelocity', targets.velocity.read.texture, 0);
+      this._texture(program, 'uSource', targets.velocity.read.texture, 1);
+      this._uniform1f(program, 'uDt', dt);
+      this._uniform4f(program, 'uDecay', this.tier.velocityDecay, this.tier.velocityDecay, 1, 1);
+    }, this.gridWidth, this.gridHeight);
+    this._swap(targets.velocity);
+
+    this._draw('advect', targets.scalar.write, (program) => {
+      this._texture(program, 'uVelocity', targets.velocity.read.texture, 0);
+      this._texture(program, 'uSource', targets.scalar.read.texture, 1);
+      this._uniform1f(program, 'uDt', dt);
+      this._uniform4f(program, 'uDecay',
+        this.tier.scalarDecay,
+        this.tier.scalarDecay,
+        this.tier.scalarDecay,
+        this.tier.scalarDecay,
+      );
+    }, this.gridWidth, this.gridHeight);
+    this._swap(targets.scalar);
+
+    this._draw('curl', targets.curl, (program) => {
+      this._texture(program, 'uVelocity', targets.velocity.read.texture, 0);
+      this._uniform2f(program, 'uTexel', texelX, texelY);
+    }, this.gridWidth, this.gridHeight);
+
+    this._draw('force', targets.velocity.write, (program) => {
+      this._texture(program, 'uVelocity', targets.velocity.read.texture, 0);
+      this._texture(program, 'uScalar', targets.scalar.read.texture, 1);
+      this._texture(program, 'uCurl', targets.curl.texture, 2);
+      this._texture3D(program, 'uCurlDetail', this._detailTexture, 3);
+      this._uniform2f(program, 'uTexel', texelX, texelY);
+      this._uniform1f(program, 'uDt', dt);
+      this._uniform1f(program, 'uTime', stepTime);
+      this._uniform1f(program, 'uNormalizedTime', normalizedTime);
+      this._uniform1f(program, 'uEnergy', this.settings.energy);
+      this._uniform1f(program, 'uBuoyancy', this.settings.buoyancy);
+      this._uniform1f(program, 'uDensityLoading', this.settings.densityLoading);
+      this._uniform1f(program, 'uVorticity', this.tier.vorticity);
+      this._uniform1f(program, 'uReducedMotion', this.settings.reducedMotion ? 1 : 0);
+      this._uniform2f(program, 'uWind', wind[0], wind[1]);
+      this._uniform2f(program, 'uSourceCenter', sourceCenter[0], sourceCenter[1]);
+      this._bindSourceProfileUniforms(program, sourceUniforms);
+    }, this.gridWidth, this.gridHeight);
+    this._swap(targets.velocity);
+
+    this._draw('scalar', targets.scalar.write, (program) => {
+      this._texture(program, 'uScalar', targets.scalar.read.texture, 0);
+      this._texture3D(program, 'uCurlDetail', this._detailTexture, 1);
+      this._uniform1f(program, 'uDt', dt);
+      this._uniform1f(program, 'uTime', stepTime);
+      this._uniform1f(program, 'uNormalizedTime', normalizedTime);
+      this._uniform1f(program, 'uEnergy', this.settings.energy);
+      this._uniform1f(program, 'uSourceStrength', this.settings.sourceStrength);
+      this._uniform1f(program, 'uCooling', this.settings.cooling);
+      this._uniform1f(program, 'uSmokeConversion', this.settings.smokeConversion);
+      this._uniform1f(program, 'uDissipation', this.settings.dissipation);
+      this._uniform1f(program, 'uReducedMotion', this.settings.reducedMotion ? 1 : 0);
+      this._uniform2f(program, 'uSourceCenter', sourceCenter[0], sourceCenter[1]);
+      this._bindSourceProfileUniforms(program, sourceUniforms);
+    }, this.gridWidth, this.gridHeight);
+    this._swap(targets.scalar);
+
+    this._draw('divergence', targets.divergence, (program) => {
+      this._texture(program, 'uVelocity', targets.velocity.read.texture, 0);
+      this._uniform2f(program, 'uTexel', texelX, texelY);
+    }, this.gridWidth, this.gridHeight);
+
+    for (const pressureTarget of [targets.pressure.read, targets.pressure.write]) {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, pressureTarget.framebuffer);
+      gl.viewport(0, 0, this.gridWidth, this.gridHeight);
+      gl.clearColor(0, 0, 0, 0);
+      gl.clear(gl.COLOR_BUFFER_BIT);
+    }
+
+    for (let iteration = 0; iteration < this.tier.pressureIterations; iteration += 1) {
+      this._draw('jacobi', targets.pressure.write, (program) => {
+        this._texture(program, 'uPressure', targets.pressure.read.texture, 0);
+        this._texture(program, 'uDivergence', targets.divergence.texture, 1);
+        this._uniform2f(program, 'uTexel', texelX, texelY);
+      }, this.gridWidth, this.gridHeight);
+      this._swap(targets.pressure);
+    }
+
+    this._draw('project', targets.velocity.write, (program) => {
+      this._texture(program, 'uVelocity', targets.velocity.read.texture, 0);
+      this._texture(program, 'uPressure', targets.pressure.read.texture, 1);
+      this._uniform2f(program, 'uTexel', texelX, texelY);
+    }, this.gridWidth, this.gridHeight);
+    this._swap(targets.velocity);
+
+    // Projection changes the velocity field. Refresh both derived fields so
+    // the renderer, debug views, and metric readback inspect the projected
+    // state rather than the pre-projection force field.
+    this._draw('curl', targets.curl, (program) => {
+      this._texture(program, 'uVelocity', targets.velocity.read.texture, 0);
+      this._uniform2f(program, 'uTexel', texelX, texelY);
+    }, this.gridWidth, this.gridHeight);
+
+    this._draw('divergence', targets.divergence, (program) => {
+      this._texture(program, 'uVelocity', targets.velocity.read.texture, 0);
+      this._uniform2f(program, 'uTexel', texelX, texelY);
+    }, this.gridWidth, this.gridHeight);
+
+    // Tracers are a bounded GPU-only detail layer. They sample the projected
+    // velocity field but never write back into velocity, scalar, or pressure.
+    this._draw('tracerAdvect', targets.tracers.write, (program) => {
+      this._texture(program, 'uTracers', targets.tracers.read.texture, 0);
+      this._texture(program, 'uVelocity', targets.velocity.read.texture, 1);
+      this._texture3D(program, 'uCurlDetail', this._detailTexture, 2);
+      this._uniform1f(program, 'uDt', dt);
+      this._uniform1f(program, 'uTime', stepTime);
+      this._uniform1f(program, 'uNormalizedTime', normalizedTime);
+      this._uniform1f(program, 'uReducedMotion', this.settings.reducedMotion ? 1 : 0);
+      this._uniform2f(program, 'uSourceCenter', sourceCenter[0], sourceCenter[1]);
+      this._uniform1ui(program, 'uSeed', this.settings.seed);
+      this._uniform1i(program, 'uTracerType', TRACER_TYPE_IDS[this.profile.tracerType] ?? 0);
+      this._bindSourceProfileUniforms(program, sourceUniforms);
+    }, targets.tracers.count, 1);
+    this._swap(targets.tracers);
+  }
+
+  _draw(programName, target, configureUniforms, width, height) {
+    const gl = this.gl;
+    const program = this._programs[programName];
+    if (!program) throw new Error(`Missing fluid program: ${programName}.`);
+    gl.bindFramebuffer(gl.FRAMEBUFFER, target?.framebuffer || null);
+    gl.viewport(0, 0, width, height);
+    gl.useProgram(program.program);
+    gl.bindVertexArray(this._vao);
+    configureUniforms?.(program);
+    gl.drawArrays(gl.TRIANGLES, 0, 3);
+    this._drawCalls += 1;
+  }
+
+  _renderTracerPoints({ diagnostic, originX, originY, volumeScale, sourceCenter, layerVisibility }) {
+    const gl = this.gl;
+    const program = this._programs.tracerDisplay;
+    const tracers = this._targets?.tracers;
+    if (!program || !tracers?.read || tracers.count <= 0) return;
+
+    gl.bindFramebuffer(gl.FRAMEBUFFER, null);
+    gl.viewport(0, 0, this.width, this.height);
+    gl.useProgram(program.program);
+    gl.bindVertexArray(this._vao);
+    this._texture(program, 'uTracers', tracers.read.texture, 0);
+    this._texture(program, 'uScalar', this._targets.scalar.read.texture, 1);
+    this._uniform2f(program, 'uResolution', this.width, this.height);
+    this._uniform2f(program, 'uOrigin', originX, originY);
+    this._uniform2f(program, 'uVolumeScale', volumeScale[0], volumeScale[1]);
+    this._uniform2f(program, 'uSourceCenter', sourceCenter[0], sourceCenter[1]);
+    this._uniform1f(program, 'uReducedMotion', this.settings.reducedMotion ? 1 : 0);
+    this._uniform1i(program, 'uDiagnostic', diagnostic);
+    const tracerType = TRACER_TYPE_IDS[this.profile.tracerType] ?? 0;
+    this._uniform1i(program, 'uTracerType', tracerType);
+    this._uniform4f(program, 'uLayerVisibility', ...layerVisibility);
+    this._uniform3f(program, 'uTracerColorA', ...this.settings.palette.ember);
+    this._uniform3f(program, 'uTracerColorB', ...this.settings.palette.hot);
+    this._uniform3f(
+      program,
+      'uTracerColorC',
+      ...(tracerType === TRACER_TYPE_IDS['plasma-filament']
+        ? this.settings.palette.plasma
+        : this.settings.palette.dust),
+    );
+    gl.enable(gl.BLEND);
+    gl.blendEquation(gl.FUNC_ADD);
+    gl.blendFunc(gl.ONE, gl.ONE_MINUS_SRC_ALPHA);
+    gl.drawArrays(gl.POINTS, 0, tracers.count);
+    gl.disable(gl.BLEND);
+    this._drawCalls += 1;
+  }
+
+  _estimatedGpuBytes() {
+    if (!this._targets || !this._format) return this._detailSize ** 3 * 4;
+    const bytesPerTexel = 4 * (this._format.bytesPerChannel || 0);
+    const fieldBytes = bytesPerTexel > 0 ? this._allTargets().reduce(
+      (total, target) => total + target.width * target.height * bytesPerTexel,
+      0,
+    ) : 0;
+    const metricBytes = this._metricTarget
+      ? this._metricTarget.width * this._metricTarget.height * 4
+      : 0;
+    return fieldBytes + metricBytes + this._detailSize ** 3 * 4;
+  }
+
+  _assertNoGlError(stage) {
+    const gl = this.gl;
+    if (!gl) return;
+    const firstCode = gl.getError();
+    if (firstCode === gl.NO_ERROR) return;
+    const codes = [firstCode];
+    for (let index = 0; index < 7; index += 1) {
+      const code = gl.getError();
+      if (code === gl.NO_ERROR) break;
+      codes.push(code);
+    }
+    const names = codes.map((code) => glErrorName(gl, code));
+    this._lastGlError = {
+      code: firstCode,
+      name: names[0],
+      codes,
+      names,
+      stage,
+      stepIndex: this.stepIndex,
+    };
+    throw new Error(`WebGL2 ${names.join(', ')} during ${stage}.`);
+  }
+
+  _uniformLocation(program, name) {
+    if (!program.uniforms.has(name)) {
+      program.uniforms.set(name, this.gl.getUniformLocation(program.program, name));
+    }
+    return program.uniforms.get(name);
+  }
+
+  _uniform1f(program, name, value) {
+    const location = this._uniformLocation(program, name);
+    if (location !== null) this.gl.uniform1f(location, value);
+  }
+
+  _uniform1i(program, name, value) {
+    const location = this._uniformLocation(program, name);
+    if (location !== null) this.gl.uniform1i(location, value);
+  }
+
+  _uniform1ui(program, name, value) {
+    const location = this._uniformLocation(program, name);
+    if (location !== null) this.gl.uniform1ui(location, value >>> 0);
+  }
+
+  _uniform2f(program, name, x, y) {
+    const location = this._uniformLocation(program, name);
+    if (location !== null) this.gl.uniform2f(location, x, y);
+  }
+
+  _uniform3f(program, name, x, y, z) {
+    const location = this._uniformLocation(program, name);
+    if (location !== null) this.gl.uniform3f(location, x, y, z);
+  }
+
+  _uniform4f(program, name, x, y, z, w) {
+    const location = this._uniformLocation(program, name);
+    if (location !== null) this.gl.uniform4f(location, x, y, z, w);
+  }
+
+  _texture(program, name, texture, unit) {
+    const gl = this.gl;
+    gl.activeTexture(gl.TEXTURE0 + unit);
+    gl.bindTexture(gl.TEXTURE_2D, texture);
+    this._uniform1i(program, name, unit);
+  }
+
+  _texture3D(program, name, texture, unit) {
+    const gl = this.gl;
+    gl.activeTexture(gl.TEXTURE0 + unit);
+    gl.bindTexture(gl.TEXTURE_3D, texture);
+    this._uniform1i(program, name, unit);
+  }
+
+  _swap(pair) {
+    const previousRead = pair.read;
+    pair.read = pair.write;
+    pair.write = previousRead;
+  }
+
+  _sourceCenter() {
+    if (this.profile.preserveResearchSource) {
+      // Preserve the flagship's established generic low-airburst placement.
+      return [0.5, clamp(0.27 + this.settings.altitude * 0.17, 0.2, 0.48)];
+    }
+    // Other event families use normalized profile anchors. Altitude is only an
+    // artistic offset inside the bounded field, never a real height or depth.
+    const source = this.profile.source;
+    const altitudeResponse = this.profile.physicalFamilyId === 'ground-coupled' ? 0.045 : 0.08;
+    return [
+      clamp(source.centerX, 0.16, 0.84),
+      clamp(source.centerY + this.settings.altitude * altitudeResponse, 0.08, 0.76),
+    ];
+  }
+
+  _normalizedTime() {
+    return clamp(this.time / this.settings.duration, 0, 1);
+  }
+
+  _fallbackFirePhase() {
+    const t = this._normalizedTime();
+    return Math.max(0, 1 - clamp((t - 0.05) / 0.34, 0, 1));
+  }
+
+  _fallbackCloudPhase() {
+    const t = this._normalizedTime();
+    return clamp((t - 0.12) / 0.4, 0, 1) * (1 - clamp((t - 0.82) / 0.18, 0, 0.45));
+  }
+
+  _fallbackDissipationPhase() {
+    return clamp((this._normalizedTime() - 0.68) / 0.32, 0, 1);
+  }
+
+  _fallbackRisePhase() {
+    return clamp((this._normalizedTime() - 0.06) / 0.58, 0, 1);
+  }
+
+  _allTargets() {
+    if (!this._targets) return [];
+    const targets = [];
+    for (const key of ['velocity', 'scalar', 'pressure', 'tracers']) {
+      const pair = this._targets[key];
+      if (pair?.read) targets.push(pair.read);
+      if (pair?.write) targets.push(pair.write);
+    }
+    if (this._targets.divergence) targets.push(this._targets.divergence);
+    if (this._targets.curl) targets.push(this._targets.curl);
+    return targets;
+  }
+
+  _releaseTargets() {
+    if (!this.gl || !this._targets) {
+      this._targets = null;
+      return;
+    }
+    const gl = this.gl;
+    const targets = this._allTargets();
+    const framebuffers = new Set();
+    const textures = new Set();
+    for (const target of targets) {
+      if (target.framebuffer) framebuffers.add(target.framebuffer);
+      if (target.texture) textures.add(target.texture);
+    }
+    for (const framebuffer of framebuffers) gl.deleteFramebuffer(framebuffer);
+    for (const texture of textures) gl.deleteTexture(texture);
+    this._targets = null;
+  }
+
+  _releaseDetailTexture() {
+    if (this.gl && this._detailTexture) this.gl.deleteTexture(this._detailTexture);
+    this._detailTexture = null;
+    this._detailSize = 0;
+    this._detailSignature = '';
+  }
+
+  _releaseMetricResources() {
+    if (this.gl && this._metricTarget) {
+      if (this._metricTarget.framebuffer) this.gl.deleteFramebuffer(this._metricTarget.framebuffer);
+      if (this._metricTarget.texture) this.gl.deleteTexture(this._metricTarget.texture);
+    }
+    this._metricTarget = null;
+    this._metricPixels = null;
+    this._metricStepIndex = -1;
+  }
+
+  _releaseResources() {
+    if (!this.gl) {
+      this._targets = null;
+      this._detailTexture = null;
+      this._detailSize = 0;
+      this._detailSignature = '';
+      this._metricTarget = null;
+      this._metricPixels = null;
+      this._metricStepIndex = -1;
+      this._programs = Object.create(null);
+      this._vao = null;
+      return;
+    }
+    const gl = this.gl;
+    this._releaseTargets();
+    this._releaseDetailTexture();
+    this._releaseMetricResources();
+    for (const record of Object.values(this._programs || {})) {
+      if (record?.program) gl.deleteProgram(record.program);
+    }
+    this._programs = Object.create(null);
+    if (this._vao) gl.deleteVertexArray(this._vao);
+    this._vao = null;
+  }
+
+  _runtimeFailure(message, error) {
+    const reason = `${message}${error?.message ? ` ${error.message}` : ''}`.trim();
+    try {
+      this._releaseResources();
+    } catch {
+      // Preserve the original actionable failure if cleanup also encounters a
+      // damaged context. Context destruction will reclaim any remaining handles.
+    }
+    this.available = false;
+    this.reason = reason;
+  }
+
+  _handleContextLost(event) {
+    event?.preventDefault?.();
+    this._contextLost = true;
+    this.available = false;
+    this.reason = 'WebGL2 context lost; use Canvas2D until restoration completes.';
+    const contextLostCode = this.gl?.CONTEXT_LOST_WEBGL ?? 0x9242;
+    this._lastGlError = {
+      code: contextLostCode,
+      name: 'CONTEXT_LOST_WEBGL',
+      codes: [contextLostCode],
+      names: ['CONTEXT_LOST_WEBGL'],
+      stage: 'webglcontextlost event',
+      stepIndex: this.stepIndex,
+    };
+    this._targets = null;
+    this._detailTexture = null;
+    this._detailSize = 0;
+    this._detailSignature = '';
+    this._metricTarget = null;
+    this._metricPixels = null;
+    this._metricStepIndex = -1;
+    this._programs = Object.create(null);
+    this._vao = null;
+  }
+
+  _handleContextRestored() {
+    if (this.destroyed) return;
+    const restoreTime = this.time;
+    this._contextLost = false;
+    this.available = false;
+    this.gl = null;
+    if (this._initializeContext() && this.resize(this.width, this.height, this.tier.id)) {
+      this.seek(restoreTime);
+    }
+  }
+}
+
+export default ResearchFluidEngine;

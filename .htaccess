@@ -1,0 +1,52 @@
+# Explosion Dynamics Lab has no local rewrite rules. Parent-site canonical-host,
+# HTTPS, error-page, and routing rules continue to apply normally.
+
+<IfModule mod_mime.c>
+  AddType application/wasm .wasm
+</IfModule>
+
+# A previous wrong-root upload exposed editable source and a nested production
+# package. Keep those objects non-routable even when they remain on the host;
+# the active application is served only from content-addressed release trees.
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteRule ^(?:assets|scripts|tools|research|vendor|dist)(?:/|$) - [R=404,L,NC]
+  RewriteRule ^(?:README\.md|AUDIT-REPORT\.md|LOCAL-COPY-RECONCILIATION\.json|RESEARCH-NOTES\.md)$ - [R=404,L,NC]
+</IfModule>
+
+# The entry document must revalidate so it can deliver fresh versioned module
+# URLs immediately after a renderer deployment. Fingerprinted/versioned JS and
+# CSS may continue to use the parent site's long-lived asset cache policy.
+<IfModule mod_expires.c>
+  ExpiresActive On
+  ExpiresByType text/html "access plus 0 seconds"
+</IfModule>
+<IfModule mod_headers.c>
+  <FilesMatch "(?i)\.html?$">
+    Header set Cache-Control "no-cache, must-revalidate"
+  </FilesMatch>
+  <Files "deployment-manifest.json">
+    Header set Cache-Control "no-store"
+  </Files>
+
+  # All first-party runtime and local encoder paths are content-addressed by
+  # the production builder. They may therefore be cached immutably while the
+  # root HTML and manifest continue to revalidate.
+  <IfModule mod_setenvif.c>
+    SetEnvIf Request_URI "^/explosion-dynamics-lab/(releases|vendor-releases)/" edl_immutable=1
+  </IfModule>
+  Header set Cache-Control "public, max-age=31536000, immutable" env=edl_immutable
+</IfModule>
+
+# Exports are generated as browser Blob downloads and must never be hosted from
+# this directory. Block common recording and partial-download artifacts if one
+# is accidentally copied to production.
+<FilesMatch "(?i)\.(mp4|m4v|webm|mov|mkv|avi|part|partial|tmp|temp|crdownload)$">
+  <IfModule mod_authz_core.c>
+    Require all denied
+  </IfModule>
+  <IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+  </IfModule>
+</FilesMatch>

@@ -1,0 +1,38 @@
+# Operating-system and editor metadata
+.DS_Store
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*~
+
+# Local dependency and test artifacts
+node_modules/
+coverage/
+.cache/
+dist/
+browser-test-artifacts/
+debug-screenshots/
+*.log
+
+# Local operational and generated deployment records
+AUDIT-REPORT.md
+LOCAL-COPY-RECONCILIATION.json
+deployment-manifest.json
+
+# Browser recordings and temporary exports
+exports/
+recordings/
+*.mp4
+*.webm
+*.mov
+*.m4v
+*.mkv
+*.part
+*.partial
+*.tmp
+*.temp
+*.crdownload
+
+# Generated social-card working files (the final PNG is intentionally tracked)
+og-render.ppm
