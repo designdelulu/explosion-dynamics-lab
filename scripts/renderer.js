@@ -80,6 +80,7 @@ const DEFAULT_SETTINGS = Object.freeze({
   diagnostic: 'beauty',
   debugMetrics: false,
   viewMode: 'cinematic',
+  flowMode: 'off',
 });
 
 const QUALITY_ALIASES = Object.freeze({
@@ -106,6 +107,85 @@ const REFRACTION_GEOMETRY = Object.freeze({
   'fictional-plasma': Object.freeze({ aspect: 1, x: 0, y: 0 }),
   'nuclear-scale': Object.freeze({ aspect: 0.66, x: 0, y: 0 }),
 });
+
+/*
+ * Layered shockwave art direction per event family. All values are
+ * dimensionless multipliers over the existing normalized shock phase; none is
+ * a pressure, distance, or damage quantity.
+ *   bands        trailing contour bands behind the leading edge
+ *   spacing      radial gap between bands as a fraction of front radius
+ *   thickness    leading-edge stroke weight multiplier
+ *   opacity      overall shock opacity multiplier
+ *   aspect       vertical flattening of the front (1 = spherical)
+ *   irregularity angular radius noise so the front reads as matter, not vector art
+ *   chroma       subtle warm/cool separation on the leading edge
+ *   dust         dust-lift boundary strength behind the front (surface events)
+ *   groundRing   ground-reflected wave strength
+ *   condensation transient condensation-style ring for humid, elevated events
+ *   shellWidth   refractive shell width as a fraction of front radius
+ *   elongation/rotation/offsetX  directional stretch for traveling sources
+ */
+const SHOCK_FAMILY_PROFILES = Object.freeze({
+  'conventional-compact': Object.freeze({
+    bands: 3, spacing: 0.062, thickness: 1.2, opacity: 1.18, aspect: 0.6,
+    irregularity: 0.03, chroma: 0.34, dust: 1.25, groundRing: 1.05,
+    condensation: 0, shellWidth: 0.055,
+  }),
+  'industrial-combustion': Object.freeze({
+    bands: 2, spacing: 0.1, thickness: 0.8, opacity: 0.62, aspect: 0.68,
+    irregularity: 0.05, chroma: 0.16, dust: 0.55, groundRing: 0.55,
+    condensation: 0, shellWidth: 0.1,
+  }),
+  'ground-coupled': Object.freeze({
+    bands: 3, spacing: 0.055, thickness: 1.05, opacity: 0.95, aspect: 0.3,
+    irregularity: 0.05, chroma: 0.12, dust: 1.8, groundRing: 1.6,
+    condensation: 0, shellWidth: 0.045,
+  }),
+  meteor: Object.freeze({
+    bands: 3, spacing: 0.08, thickness: 1.05, opacity: 1, aspect: 0.58,
+    irregularity: 0.04, chroma: 0.5, dust: 0.75, groundRing: 0.85,
+    condensation: 0.4, shellWidth: 0.075, elongation: 1.22, rotation: -0.12, offsetX: 0.08,
+  }),
+  volcanic: Object.freeze({
+    bands: 0, spacing: 0, thickness: 0.6, opacity: 0.5, aspect: 0.52,
+    irregularity: 0.06, chroma: 0, dust: 0.9, groundRing: 0.4,
+    condensation: 0, shellWidth: 0, pulsed: true,
+  }),
+  'fictional-plasma': Object.freeze({
+    bands: 4, spacing: 0.048, thickness: 0.85, opacity: 1.15, aspect: 1,
+    irregularity: 0.018, chroma: 0.95, dust: 0, groundRing: 0.3,
+    condensation: 0, shellWidth: 0.07, spectral: true,
+  }),
+  'nuclear-scale': Object.freeze({
+    bands: 4, spacing: 0.058, thickness: 1.3, opacity: 1.25, aspect: 0.66,
+    irregularity: 0.026, chroma: 0.55, dust: 1.15, groundRing: 1.35,
+    condensation: 0.65, shellWidth: 0.095,
+  }),
+});
+
+/* Art-direction tuning defaults for the hidden ?visualDev=1 panel. Every value
+ * is a multiplier over the shipped look; 1 keeps the accepted appearance. */
+const DEFAULT_TUNING = Object.freeze({
+  shockBands: 1,
+  shockSpacing: 1,
+  shockOpacity: 1,
+  refraction: 1,
+  trailPersistence: 1,
+  flowDensity: 1,
+  flowLifetime: 1,
+  structuralIntensity: 1,
+  environmentDetail: 1,
+  cityDensity: 1,
+  dustResponse: 1,
+  structureResponse: 1,
+  capWidth: 1,
+  stemThickness: 1,
+  cameraPullback: 1,
+  exposure: 1,
+  envIllumination: 1,
+});
+
+const FLOW_MODES = new Set(['off', 'flow', 'field']);
 
 const DIAGNOSTIC_MODES = new Set([
   'beauty',
@@ -211,7 +291,7 @@ const BEHAVIOR_PROFILES = Object.freeze({
     fireEnd: 0.31, riseStart: 0.09, cloudStart: 0.27,
   },
   extreme: {
-    duration: 26, scale: 2.08, flash: 2.1, fireball: 1.82, shock: 2.05,
+    duration: 26, scale: 1.75, flash: 2.1, fireball: 1.82, shock: 2.05,
     dust: 1.35, debris: 0.42, cloud: 2, smoke: 1.72, column: 2.05,
     mushroom: 2.1, ejecta: 0.4, roll: 0.98, shake: 1.36, particles: 2200,
     fireEnd: 0.34, riseStart: 0.1, cloudStart: 0.27,
@@ -455,6 +535,7 @@ export class ExplosionRenderer {
     this.settings = {
       ...DEFAULT_SETTINGS,
       layers: { ...DEFAULT_LAYERS },
+      tuning: { ...DEFAULT_TUNING },
     };
     this._preset = getPresetRecord(this.settings.presetId);
     this._behavior = resolveBehavior(this._preset, this.settings.presetId);
@@ -529,7 +610,7 @@ export class ExplosionRenderer {
     const next = { ...this.settings };
 
     const stringKeys = [
-      'presetId', 'burst', 'environment', 'timeOfDay', 'paletteId', 'quality', 'diagnostic', 'viewMode',
+      'presetId', 'burst', 'environment', 'timeOfDay', 'paletteId', 'quality', 'diagnostic', 'viewMode', 'flowMode',
     ];
     for (const key of stringKeys) {
       if (partialSettings[key] !== undefined) next[key] = String(partialSettings[key]);
@@ -558,6 +639,16 @@ export class ExplosionRenderer {
     next.quality = QUALITY_ALIASES[next.quality] || 'balanced';
     next.diagnostic = DIAGNOSTIC_MODES.has(next.diagnostic) ? next.diagnostic : 'beauty';
     next.viewMode = next.viewMode === 'overview' ? 'overview' : 'cinematic';
+    next.flowMode = FLOW_MODES.has(next.flowMode) ? next.flowMode : 'off';
+
+    next.tuning = { ...(this.settings.tuning || DEFAULT_TUNING) };
+    if (partialSettings.tuning && typeof partialSettings.tuning === 'object') {
+      for (const key of Object.keys(DEFAULT_TUNING)) {
+        if (partialSettings.tuning[key] !== undefined) {
+          next.tuning[key] = clamp(finite(partialSettings.tuning[key], next.tuning[key]), 0, 3);
+        }
+      }
+    }
 
     const layerPatch = partialSettings.layers && typeof partialSettings.layers === 'object'
       ? partialSettings.layers
@@ -892,10 +983,19 @@ export class ExplosionRenderer {
       densityLoading: clamp(0.1 + finite(render.smoke, 1) * 0.055, 0.08, 0.25),
       cooling: clamp(0.17 + finite(render.smoke, 1) * 0.035, 0.14, 0.34),
       smokeConversion: clamp(0.58 + finite(render.smoke, 1) * 0.18, 0.52, 0.96),
-      dissipation: 0.997,
+      // Longer events keep their particulate aloft longer, so cloud lifetime
+      // scales with the preset timeline instead of one universal fade rate.
+      dissipation: clamp(
+        0.998 + finite(this._preset?.duration, 12) * 0.00003,
+        0.997,
+        0.9995,
+      ),
       tier: QUALITY_ALIASES[tier] || 'balanced',
       diagnostic: this.settings.diagnostic,
       debugMetrics: Boolean(this.settings.debugMetrics),
+      exposureBoost: clamp(finite(this.settings.tuning?.exposure, 1), 0.5, 1.6),
+      capWidthBoost: clamp(finite(this.settings.tuning?.capWidth, 1), 0.6, 1.6),
+      stemWidthBoost: clamp(finite(this.settings.tuning?.stemThickness, 1), 0.6, 1.6),
     };
   }
 
@@ -1334,7 +1434,8 @@ export class ExplosionRenderer {
     // walling against its sides. Landscape and desktop framing (aspect >= 1)
     // is unchanged.
     const aspectPullback = clamp(0.62 + 0.38 * (width / Math.max(1, height)), 0.75, 1);
-    const scale = energyScale * this._behavior.scale * cameraScale * aspectPullback;
+    const tunedPullback = clamp(finite(this.settings.tuning?.cameraPullback, 1), 0.6, 1.4);
+    const scale = energyScale * this._behavior.scale * cameraScale * aspectPullback / tunedPullback;
     const angleOffset = (this.settings.cameraAngle / 45) * width * 0.035;
     const originX = this._origin.x * width + angleOffset;
     const surfaceY = clamp(this._origin.y * height + (this.settings.cameraAngle / 45) * height * 0.025, height * 0.58, height * 0.88);
@@ -1433,7 +1534,7 @@ export class ExplosionRenderer {
       return;
     }
 
-    this._drawEnvironmentSilhouette(context, layout);
+    this._drawEnvironmentSilhouette(context, layout, phase);
     const environmentGround = this._environment.ground || palette.ground;
     const environmentHorizon = this._environment.horizon || palette.groundLight;
     const ground = context.createLinearGradient(0, surfaceY, 0, height + 12);
@@ -1444,74 +1545,414 @@ export class ExplosionRenderer {
     context.fillRect(-12, surfaceY, width + 24, height - surfaceY + 24);
 
     if (this.settings.layers.grid) this._drawPerspectiveGrid(context, layout);
+
+    // Qualitative atmospheric darkening: heavy particulate phases pull the sky
+    // down so the luminous core and cloud silhouette gain local contrast.
+    const smokeLoad = saturate(
+      phase.cloud * this._behavior.smoke * 0.4 + phase.surface * this._behavior.dust * 0.2,
+    ) * (1 - phase.dissipation * 0.6);
+    if (smokeLoad > 0.02 && this.settings.viewMode !== 'overview') {
+      const darkening = context.createLinearGradient(0, 0, 0, surfaceY);
+      darkening.addColorStop(0, `rgba(2,3,5,${(smokeLoad * 0.34).toFixed(3)})`);
+      darkening.addColorStop(0.7, `rgba(2,3,5,${(smokeLoad * 0.16).toFixed(3)})`);
+      darkening.addColorStop(1, 'rgba(2,3,5,0)');
+      context.fillStyle = darkening;
+      context.fillRect(-12, -12, width + 24, surfaceY + 24);
+    }
   }
 
-  _drawEnvironmentSilhouette(context, layout) {
-    const { width, height, surfaceY } = layout;
+  /**
+   * Fictional environment silhouettes with foreground/middle/background depth
+   * plus a stylized, qualitative environmental response driven by the phase.
+   * Nothing here maps to a real place, structure, or engineering quantity.
+   */
+  _drawEnvironmentSilhouette(context, layout, phase = this._phase) {
     const environment = String(this.settings.environment).toLowerCase();
-    const angleShift = this.settings.cameraAngle * 1.6;
     context.save();
-    context.fillStyle = colorWithAlpha(this._environment.ground || this._palette.ground, 0.98);
-    context.strokeStyle = colorWithAlpha(this._palette.grid, 0.16);
-    context.lineWidth = 1;
-
     if (environment.includes('city') || environment.includes('urban')) {
-      let x = -30 + angleShift;
-      let index = 0;
-      while (x < width + 30 && index < 42) {
-        const hash = hashString(`${this.settings.seed}:building:${index}`);
-        const buildingWidth = 12 + (hash % 21);
-        const buildingHeight = height * (0.035 + ((hash >>> 8) % 75) / 1000);
-        context.fillRect(x, surfaceY - buildingHeight, buildingWidth, buildingHeight + 1);
-        if (this.settings.quality !== 'mobile') {
-          context.fillStyle = colorWithAlpha(this._palette.horizon, 0.16);
-          for (let row = 0; row < 3; row += 1) {
-            context.fillRect(x + 4, surfaceY - buildingHeight + 6 + row * 9, 2, 2);
-          }
-          context.fillStyle = colorWithAlpha(this._environment.ground || this._palette.ground, 0.98);
-        }
-        x += buildingWidth + 5 + ((hash >>> 20) & 7);
-        index += 1;
-      }
+      this._drawCityEnvironment(context, layout, phase);
     } else if (environment.includes('mountain') || environment.includes('valley')) {
+      this._drawMountainEnvironment(context, layout, phase);
+    } else if (environment.includes('ocean') || environment.includes('water')) {
+      this._drawOceanEnvironment(context, layout, phase);
+    } else if (environment.includes('desert')) {
+      this._drawDesertEnvironment(context, layout, phase);
+    } else if (environment.includes('grid')) {
+      this._drawGridEnvironment(context, layout, phase);
+    } else {
+      this._drawRangeEnvironment(context, layout, phase);
+    }
+    context.restore();
+  }
+
+  /** Normalized ground-track of the pressure front used by response effects. */
+  _shockGroundFront(layout, phase) {
+    const maxRadius = layout.min * (0.58 + this._behavior.shock * 0.16) * layout.energyScale;
+    return {
+      radius: maxRadius * phase.shockProgress,
+      active: phase.shockAlpha > 0.008 || phase.shockProgress > 0.02,
+      strength: saturate(phase.shockAlpha * clamp(this._behavior.shock, 0.2, 2.2)),
+    };
+  }
+
+  /** Layered fictional skyline (working name: Meridian City). */
+  _drawCityEnvironment(context, layout, phase) {
+    const { width, height, surfaceY } = layout;
+    const tuning = this.settings.tuning || DEFAULT_TUNING;
+    const angleShift = this.settings.cameraAngle * 1.6;
+    const ambient = finite(this._timeSetting.ambient, 0.4);
+    const night = ambient < 0.5;
+    const detail = clamp(tuning.environmentDetail * tuning.cityDensity, 0.3, 2);
+    const mobile = this.settings.quality === 'mobile';
+    const front = this._shockGroundFront(layout, phase);
+    const response = saturate(front.strength * clamp(tuning.structureResponse, 0, 2))
+      * saturate(this._behavior.shock);
+    const groundColor = this._environment.ground || this._palette.ground;
+    const hazeColor = this._environment.horizon || this._palette.horizon;
+    const eventGlow = saturate(phase.flash * 0.8 + phase.fireAlpha * 0.35);
+
+    // Atmospheric haze band above the skyline.
+    const haze = context.createLinearGradient(0, surfaceY - height * 0.15, 0, surfaceY);
+    haze.addColorStop(0, colorWithAlpha(hazeColor, 0));
+    haze.addColorStop(1, colorWithAlpha(hazeColor, night ? 0.16 : 0.24));
+    context.fillStyle = haze;
+    context.fillRect(-12, surfaceY - height * 0.15, width + 24, height * 0.15);
+
+    const layers = [
+      { count: Math.round(52 * detail), minH: 0.018, maxH: 0.05, alpha: night ? 0.42 : 0.5, widthMin: 7, widthMax: 18, salt: 'far', detail: false, shift: angleShift * 0.4 },
+      { count: Math.round(34 * detail), minH: 0.03, maxH: 0.085, alpha: 0.78, widthMin: 11, widthMax: 26, salt: 'mid', detail: !mobile, shift: angleShift * 0.7 },
+      { count: Math.round(20 * detail), minH: 0.05, maxH: 0.135, alpha: 1, widthMin: 16, widthMax: 40, salt: 'near', detail: !mobile, shift: angleShift },
+    ];
+
+    for (let layerIndex = 0; layerIndex < layers.length; layerIndex += 1) {
+      const layer = layers[layerIndex];
+      const near = layerIndex === 2;
+      let x = -34 + layer.shift;
+      for (let index = 0; index < layer.count && x < width + 34; index += 1) {
+        const hash = hashString(`${this.settings.seed}:${layer.salt}:${index}`);
+        const buildingWidth = layer.widthMin + (hash % (layer.widthMax - layer.widthMin));
+        const buildingHeight = height * (layer.minH + ((hash >>> 8) % 1000) / 1000 * (layer.maxH - layer.minH));
+        const centerX = x + buildingWidth / 2;
+        const distanceFromEvent = Math.abs(centerX - layout.originX);
+
+        // Stylized pressure response: brief sway + facade dimming once the
+        // ground front has passed this silhouette. Qualitative only.
+        let sway = 0;
+        let passed = 0;
+        if (front.active && response > 0.02 && front.radius > 10) {
+          passed = smoothstep(distanceFromEvent, distanceFromEvent + layout.min * 0.05, front.radius);
+          const recency = Math.exp(-Math.max(0, front.radius - distanceFromEvent) / (layout.min * 0.3));
+          sway = Math.sin(phase.time * 11 + centerX * 0.13) * 2.4 * response * passed * recency * (near ? 1 : 0.4);
+        }
+
+        context.save();
+        if (sway) {
+          context.translate(centerX, surfaceY);
+          context.transform(1, 0, sway * 0.012, 1, 0, 0);
+          context.translate(-centerX, -surfaceY);
+        }
+        const facade = colorWithAlpha(groundColor, layer.alpha);
+        context.fillStyle = facade;
+        context.fillRect(x, surfaceY - buildingHeight, buildingWidth, buildingHeight + 1);
+
+        // Flash illumination on the event-facing edge.
+        if (eventGlow > 0.02 && !mobile) {
+          const towardEvent = centerX < layout.originX ? x + buildingWidth - 2.5 : x;
+          context.fillStyle = colorWithAlpha(this._palette.hot, eventGlow * (near ? 0.34 : 0.18) * (1 - passed * 0.5));
+          context.fillRect(towardEvent, surfaceY - buildingHeight, 2.5, buildingHeight);
+        }
+
+        if (layer.detail && buildingWidth >= 14) {
+          // Rooftop details on taller silhouettes.
+          if (near && ((hash >>> 16) & 3) === 0) {
+            context.fillStyle = facade;
+            context.fillRect(centerX - 1, surfaceY - buildingHeight - 7, 2, 7);
+          }
+          if (near && ((hash >>> 18) & 7) === 0) {
+            context.fillStyle = colorWithAlpha(groundColor, 0.9);
+            context.fillRect(x + 3, surfaceY - buildingHeight - 4, Math.min(9, buildingWidth * 0.4), 4);
+          }
+          // Window grid; lit at night, flash-brightened, blacked out after
+          // the front passes (a temporary, fictional outage impression).
+          const columns = Math.max(2, Math.floor(buildingWidth / 6));
+          const rows = Math.max(2, Math.floor(buildingHeight / 10));
+          const blackout = passed * response;
+          for (let row = 0; row < rows; row += 1) {
+            for (let column = 0; column < columns; column += 1) {
+              const windowHash = hashString(`${this.settings.seed}:w:${layer.salt}:${index}:${row}:${column}`);
+              const litBase = night ? (windowHash % 100) < 46 : (windowHash % 100) < 8;
+              const dark = ((windowHash >>> 8) % 100) / 100 < blackout;
+              const flicker = phase.flash > 0.05 && ((windowHash >>> 16) & 3) === 0;
+              if (!litBase && !flicker) continue;
+              const windowAlpha = dark ? 0.03 : (flicker ? 0.5 : night ? 0.34 : 0.16);
+              context.fillStyle = colorWithAlpha(
+                flicker ? this._palette.core : this._palette.ember,
+                windowAlpha * (near ? 1 : 0.7),
+              );
+              context.fillRect(
+                x + 2 + column * (buildingWidth - 4) / columns,
+                surfaceY - buildingHeight + 4 + row * (buildingHeight - 8) / rows,
+                1.6,
+                2.2,
+              );
+            }
+          }
+        }
+        context.restore();
+
+        // Street-level dust burst where the front has just arrived.
+        if (near && front.active && response > 0.04) {
+          const arriving = Math.exp(-((front.radius - distanceFromEvent) ** 2) / ((layout.min * 0.06) ** 2));
+          const burst = arriving * response * clamp(tuning.dustResponse, 0, 2);
+          if (burst > 0.03) {
+            const dustRadius = 7 + burst * layout.min * 0.03;
+            const dust = context.createRadialGradient(centerX, surfaceY, 0, centerX, surfaceY, dustRadius);
+            dust.addColorStop(0, colorWithAlpha(this._palette.dust, burst * 0.5));
+            dust.addColorStop(1, colorWithAlpha(this._palette.dust, 0));
+            context.fillStyle = dust;
+            context.beginPath();
+            context.ellipse(centerX, surfaceY - 2, dustRadius, dustRadius * 0.4, 0, 0, TAU);
+            context.fill();
+            // Roof debris silhouettes: brief dark specks above the roofline.
+            context.fillStyle = colorWithAlpha('#0a0b0d', burst * 0.7);
+            for (let speck = 0; speck < 3; speck += 1) {
+              const speckHash = hashString(`${this.settings.seed}:speck:${index}:${speck}`);
+              context.fillRect(
+                x + (speckHash % Math.max(1, buildingWidth)),
+                surfaceY - buildingHeight - 4 - (speckHash >>> 6) % 10,
+                1.6,
+                1.6,
+              );
+            }
+          }
+        }
+
+        x += buildingWidth + 4 + ((hash >>> 20) & 7);
+      }
+    }
+
+    // Street lighting pools at night, dimming inside the passed-front zone.
+    if (night && !mobile) {
+      for (let lamp = 0; lamp < Math.round(14 * detail); lamp += 1) {
+        const hash = hashString(`${this.settings.seed}:lamp:${lamp}`);
+        const lampX = (hash % 1000) / 1000 * width;
+        const outage = front.active
+          ? smoothstep(Math.abs(lampX - layout.originX), Math.abs(lampX - layout.originX) + layout.min * 0.04, front.radius) * response
+          : 0;
+        const lampAlpha = 0.24 * (1 - outage * 0.9);
+        if (lampAlpha <= 0.02) continue;
+        context.fillStyle = colorWithAlpha(this._palette.ember, lampAlpha);
+        context.beginPath();
+        context.arc(lampX, surfaceY - 3, 1.1, 0, TAU);
+        context.fill();
+      }
+    }
+  }
+
+  _drawMountainEnvironment(context, layout, phase) {
+    const { width, height, surfaceY } = layout;
+    const groundColor = this._environment.ground || this._palette.ground;
+    const hazeColor = this._environment.horizon || this._palette.horizon;
+    const ridges = [
+      { amplitude: 0.085, alpha: 0.34, salt: 'far', segments: 9, base: 0.055 },
+      { amplitude: 0.1, alpha: 0.62, salt: 'mid', segments: 11, base: 0.04 },
+      { amplitude: 0.12, alpha: 0.95, salt: 'near', segments: 13, base: 0.02 },
+    ];
+    for (const ridge of ridges) {
+      context.fillStyle = colorWithAlpha(groundColor, ridge.alpha);
       context.beginPath();
       context.moveTo(-20, surfaceY + 2);
-      for (let index = 0; index <= 12; index += 1) {
-        const x = -20 + index / 12 * (width + 40);
-        const hash = hashString(`${this.settings.seed}:ridge:${index}`);
-        const ridge = height * (0.035 + (hash % 100) / 830);
-        const valley = Math.abs(x / width - 0.52) * height * 0.09;
-        context.lineTo(x, surfaceY - ridge + valley);
+      for (let index = 0; index <= ridge.segments; index += 1) {
+        const x = -20 + index / ridge.segments * (width + 40);
+        const hash = hashString(`${this.settings.seed}:${ridge.salt}:${index}`);
+        const peak = height * (ridge.base + (hash % 100) / 100 * ridge.amplitude);
+        const valley = Math.abs(x / width - 0.52) * height * 0.07;
+        context.lineTo(x, surfaceY - peak + valley);
       }
       context.lineTo(width + 20, surfaceY + 4);
       context.closePath();
       context.fill();
-    } else if (environment.includes('ocean') || environment.includes('water')) {
-      context.strokeStyle = colorWithAlpha(this._palette.shock, 0.17);
-      for (let row = 0; row < 6; row += 1) {
-        const y = surfaceY + 4 + row * 7;
-        const step = Math.max(16, width / 96);
+      // Atmospheric perspective between ridge layers.
+      context.fillStyle = colorWithAlpha(hazeColor, (1 - ridge.alpha) * 0.16);
+      context.fillRect(-12, surfaceY - height * 0.14, width + 24, height * 0.14);
+    }
+    // Valley-contained dust response: pooled haze hugging the floor.
+    const surface = saturate(phase.surface * this._behavior.dust);
+    if (surface > 0.03) {
+      const pool = context.createLinearGradient(0, surfaceY - height * 0.05, 0, surfaceY);
+      pool.addColorStop(0, colorWithAlpha(this._palette.dust, 0));
+      pool.addColorStop(1, colorWithAlpha(this._palette.dust, surface * 0.26 * (1 - phase.dissipation * 0.5)));
+      context.fillStyle = pool;
+      context.fillRect(-12, surfaceY - height * 0.05, width + 24, height * 0.05 + 4);
+    }
+  }
+
+  _drawOceanEnvironment(context, layout, phase) {
+    const { width, height, surfaceY } = layout;
+    const front = this._shockGroundFront(layout, phase);
+    // Horizon moisture band.
+    const moisture = context.createLinearGradient(0, surfaceY - height * 0.06, 0, surfaceY);
+    moisture.addColorStop(0, colorWithAlpha(this._palette.shock, 0));
+    moisture.addColorStop(1, colorWithAlpha(this._palette.shock, 0.1));
+    context.fillStyle = moisture;
+    context.fillRect(-12, surfaceY - height * 0.06, width + 24, height * 0.06);
+    // Event-light reflection column on the water.
+    const glowStrength = saturate(phase.flash * 0.7 + phase.fireAlpha * phase.fireGrowth * 0.5);
+    if (glowStrength > 0.02) {
+      const reflection = context.createLinearGradient(0, surfaceY, 0, Math.min(height, surfaceY + height * 0.2));
+      reflection.addColorStop(0, colorWithAlpha(this._palette.hot, glowStrength * 0.4));
+      reflection.addColorStop(1, colorWithAlpha(this._palette.hot, 0));
+      context.fillStyle = reflection;
+      const reflectionWidth = layout.min * 0.16 * (0.5 + phase.fireGrowth);
+      context.fillRect(layout.originX - reflectionWidth / 2, surfaceY, reflectionWidth, height * 0.2);
+    }
+    // Animated swell lines with shock-displacement near the front.
+    context.strokeStyle = colorWithAlpha(this._palette.shock, 0.18);
+    context.lineWidth = 1;
+    for (let row = 0; row < 7; row += 1) {
+      const y = surfaceY + 4 + row * (6 + row * 1.6);
+      const step = Math.max(14, width / 110);
+      context.beginPath();
+      for (let x = -20; x <= width + 20; x += step) {
+        const distance = Math.abs(x - layout.originX);
+        const shockLift = front.active
+          ? Math.exp(-((front.radius * 0.92 - distance) ** 2) / ((layout.min * 0.05) ** 2)) * front.strength * 6
+          : 0;
+        const waveY = y + Math.sin(x * 0.03 + row * 1.7 + phase.time * 0.9) * 1.6 - shockLift;
+        if (x === -20) context.moveTo(x, waveY);
+        else context.lineTo(x, waveY);
+      }
+      context.stroke();
+    }
+    // Spray burst where the front crosses the surface.
+    if (front.active && front.strength > 0.05 && !this.reducedMotion) {
+      for (let jet = 0; jet < 10; jet += 1) {
+        const side = jet % 2 === 0 ? 1 : -1;
+        const x = layout.originX + side * front.radius * 0.9 * (0.75 + this._particleDepth[jet + 40] * 0.3);
+        if (x < -20 || x > width + 20) continue;
+        const sprayHeight = layout.min * 0.02 * front.strength * (0.5 + this._particleSize[jet + 40] * 0.6);
+        const spray = context.createLinearGradient(x, surfaceY, x, surfaceY - sprayHeight);
+        spray.addColorStop(0, colorWithAlpha(this._palette.shock, front.strength * 0.5));
+        spray.addColorStop(1, colorWithAlpha(this._palette.shock, 0));
+        context.fillStyle = spray;
+        context.fillRect(x - 1.4, surfaceY - sprayHeight, 2.8, sprayHeight);
+      }
+    }
+  }
+
+  _drawDesertEnvironment(context, layout, phase) {
+    const { width, height, surfaceY } = layout;
+    const groundColor = this._environment.ground || this._palette.ground;
+    const dustTint = this._environment.dustTint || this._palette.dust;
+    // Distant heat-haze band.
+    const haze = context.createLinearGradient(0, surfaceY - height * 0.05, 0, surfaceY);
+    haze.addColorStop(0, colorWithAlpha(dustTint, 0));
+    haze.addColorStop(1, colorWithAlpha(dustTint, 0.18));
+    context.fillStyle = haze;
+    context.fillRect(-12, surfaceY - height * 0.05, width + 24, height * 0.05);
+    // Three dune layers with increasing contrast.
+    const duneLayers = [
+      { amplitude: 0.02, alpha: 0.4, salt: 'dunefar', lift: 0.045 },
+      { amplitude: 0.032, alpha: 0.7, salt: 'dunemid', lift: 0.026 },
+      { amplitude: 0.045, alpha: 1, salt: 'dunenear', lift: 0.008 },
+    ];
+    for (const dune of duneLayers) {
+      context.fillStyle = colorWithAlpha(groundColor, dune.alpha);
+      context.beginPath();
+      context.moveTo(-20, surfaceY + 6);
+      for (let index = 0; index <= 8; index += 1) {
+        const x = -20 + index / 8 * (width + 40);
+        const hash = hashString(`${this.settings.seed}:${dune.salt}:${index}`);
+        const crest = height * ((hash % 100) / 100 * dune.amplitude + dune.lift * 0.2);
+        const controlX = x - (width + 40) / 16;
+        const previousHash = hashString(`${this.settings.seed}:${dune.salt}:${index - 1}`);
+        const previousCrest = height * ((previousHash % 100) / 100 * dune.amplitude + dune.lift * 0.2);
+        context.quadraticCurveTo(controlX, surfaceY - Math.max(crest, previousCrest) - 2, x, surfaceY - crest);
+      }
+      context.lineTo(width + 20, surfaceY + 6);
+      context.closePath();
+      context.fill();
+    }
+    // Heat shimmer above the horizon while the fireball is hot.
+    if (!this.reducedMotion && phase.fireAlpha > 0.05) {
+      context.strokeStyle = colorWithAlpha(this._palette.hot, phase.fireAlpha * 0.07);
+      context.lineWidth = 1;
+      for (let band = 0; band < 3; band += 1) {
+        const y = surfaceY - 6 - band * 5;
         context.beginPath();
-        for (let x = -20; x <= width + 20; x += step) {
-          const waveY = y + Math.sin(x * 0.035 + row) * 1.5;
+        for (let x = -20; x <= width + 20; x += 26) {
+          const waveY = y + Math.sin(x * 0.05 + phase.time * 3.4 + band * 2) * 1.4;
           if (x === -20) context.moveTo(x, waveY);
           else context.lineTo(x, waveY);
         }
         context.stroke();
       }
-    } else if (environment.includes('desert')) {
-      context.beginPath();
-      context.moveTo(-20, surfaceY + 3);
-      context.bezierCurveTo(width * 0.16, surfaceY - height * 0.035, width * 0.28, surfaceY + 4, width * 0.43, surfaceY - height * 0.025);
-      context.bezierCurveTo(width * 0.61, surfaceY - height * 0.055, width * 0.77, surfaceY + 5, width + 20, surfaceY - height * 0.02);
-      context.lineTo(width + 20, surfaceY + 8);
-      context.lineTo(-20, surfaceY + 8);
-      context.closePath();
-      context.fill();
-    } else {
-      context.fillRect(-20, surfaceY - 2, width + 40, 4);
     }
-    context.restore();
+  }
+
+  /** Generic instrumented test range: towers, markers, and a service road. */
+  _drawRangeEnvironment(context, layout, phase) {
+    const { width, height, surfaceY } = layout;
+    const groundColor = this._environment.ground || this._palette.ground;
+    const detail = clamp((this.settings.tuning || DEFAULT_TUNING).environmentDetail, 0.3, 2);
+    context.fillStyle = colorWithAlpha(groundColor, 0.98);
+    context.fillRect(-20, surfaceY - 2, width + 40, 4);
+    if (this.settings.quality === 'mobile' || detail < 0.45) return;
+    const front = this._shockGroundFront(layout, phase);
+    // Distant instrument towers (generic lattice silhouettes, no insignia).
+    const towers = Math.round(5 * detail);
+    for (let tower = 0; tower < towers; tower += 1) {
+      const hash = hashString(`${this.settings.seed}:tower:${tower}`);
+      const towerX = 40 + (hash % 1000) / 1000 * (width - 80);
+      if (Math.abs(towerX - layout.originX) < layout.min * 0.09) continue;
+      const towerHeight = height * (0.03 + ((hash >>> 10) % 40) / 1000);
+      const lean = front.active
+        ? smoothstep(Math.abs(towerX - layout.originX), Math.abs(towerX - layout.originX) + layout.min * 0.05, front.radius)
+          * front.strength * (towerX < layout.originX ? -3 : 3)
+        : 0;
+      context.strokeStyle = colorWithAlpha(groundColor, 0.85);
+      context.lineWidth = 1.2;
+      context.beginPath();
+      context.moveTo(towerX - 3, surfaceY);
+      context.lineTo(towerX + lean, surfaceY - towerHeight);
+      context.lineTo(towerX + 3, surfaceY);
+      context.moveTo(towerX - 2, surfaceY - towerHeight * 0.45);
+      context.lineTo(towerX + 2 + lean * 0.5, surfaceY - towerHeight * 0.45);
+      context.stroke();
+    }
+    // Range markers along the ground.
+    context.fillStyle = colorWithAlpha(this._palette.grid, 0.3);
+    for (let marker = 0; marker < Math.round(9 * detail); marker += 1) {
+      const hash = hashString(`${this.settings.seed}:marker:${marker}`);
+      const markerX = (hash % 1000) / 1000 * width;
+      context.fillRect(markerX, surfaceY - 4, 1.4, 4);
+    }
+    // Service road converging toward the horizon.
+    context.strokeStyle = colorWithAlpha(this._palette.grid, 0.14);
+    context.lineWidth = 1;
+    context.beginPath();
+    context.moveTo(width * 0.16, height + 10);
+    context.lineTo(width * 0.44, surfaceY);
+    context.moveTo(width * 0.3, height + 10);
+    context.lineTo(width * 0.47, surfaceY);
+    context.stroke();
+  }
+
+  /** Analytical dark-grid stage: depth ticks and a clean reference horizon. */
+  _drawGridEnvironment(context, layout) {
+    const { width, surfaceY } = layout;
+    context.fillStyle = colorWithAlpha(this._environment.ground || this._palette.ground, 0.98);
+    context.fillRect(-20, surfaceY - 2, width + 40, 4);
+    context.strokeStyle = colorWithAlpha(this._palette.grid, 0.4);
+    context.lineWidth = 1;
+    for (let tick = 0; tick <= 10; tick += 1) {
+      const x = tick / 10 * width;
+      const tall = tick % 5 === 0;
+      context.beginPath();
+      context.moveTo(x, surfaceY - (tall ? 8 : 4));
+      context.lineTo(x, surfaceY);
+      context.stroke();
+    }
   }
 
   _drawPerspectiveGrid(context, layout) {
@@ -1543,7 +1984,7 @@ export class ExplosionRenderer {
     if (diagnostic) return;
     if (layers.flash || layers.thermal) this._drawAtmosphericLight(glow, layout, phase);
     if (layers.thermal || layers.fireball) this._drawSurfaceReflection(glow, layout, phase);
-    if (layers.shock) this._drawFamilyShock(glow, layout, phase);
+    if (layers.shock) this._drawFamilyShock(glow, matter, layout, phase);
     if (layers.thermal) this._drawThermal(glow, layout, phase);
     if (layers.fireball && researchFluid) {
       this._drawFamilyEarlyEffects(glow, matter, layout, phase, quality);
@@ -1559,9 +2000,10 @@ export class ExplosionRenderer {
       this._drawParticles(matter, layout, phase, activeCount, quality);
     }
     if (this._behavior.key === 'meteorAir' || this._behavior.key === 'meteorImpact') {
-      this._drawMeteorTrail(glow, matter, layout, phase);
+      this._drawMeteorTrail(glow, matter, layout, phase, quality);
     }
     if (this._behavior.key === 'volcanic') this._drawVolcanoVent(glow, matter, layout, phase);
+    if (this.settings.flowMode !== 'off') this._drawFlowOverlay(glow, layout, phase, quality);
 
     if (!direct) {
       const pixelWidth = this._layerWidth;
@@ -1584,38 +2026,229 @@ export class ExplosionRenderer {
     );
   }
 
-  _drawFamilyShock(context, layout, phase) {
-    const family = this._eventFamilyId();
-    if (family === 'fictional-plasma') {
-      if (phase.shockAlpha <= 0.003) return;
-      const radius = Math.max(2, layout.min * 0.62 * phase.shockProgress * layout.energyScale);
-      context.save();
-      context.strokeStyle = colorWithAlpha(this._palette.plasma, phase.shockAlpha * 0.72);
-      context.lineWidth = Math.max(0.8, 3.4 * (1 - phase.shockProgress));
-      context.beginPath();
-      context.arc(layout.originX, layout.eventY, radius, 0, TAU);
-      context.stroke();
-      context.restore();
+  _shockProfile() {
+    return SHOCK_FAMILY_PROFILES[this._eventFamilyId()] || SHOCK_FAMILY_PROFILES['conventional-compact'];
+  }
+
+  /** Deterministic angular irregularity so the front reads as a physical shell. */
+  _shockWobble(angle, band, spread) {
+    const seedPhase = (this.settings.seed % 251) * 0.13;
+    return (
+      Math.sin(angle * 3 + seedPhase + band * 2.1) * 0.52
+      + Math.sin(angle * 7 - seedPhase * 1.7 + band * 4.3) * 0.31
+      + Math.sin(angle * 13 + seedPhase * 2.9 + band) * 0.17
+    ) * spread;
+  }
+
+  _traceShockBand(context, radius, aspect, wobble, band, startAngle = 0, endAngle = TAU) {
+    const segments = 44;
+    context.beginPath();
+    for (let segment = 0; segment <= segments; segment += 1) {
+      const angle = startAngle + (segment / segments) * (endAngle - startAngle);
+      const modulated = radius * (1 + this._shockWobble(angle, band, wobble));
+      const x = Math.cos(angle) * modulated;
+      const y = Math.sin(angle) * modulated * aspect;
+      if (segment === 0) context.moveTo(x, y);
+      else context.lineTo(x, y);
+    }
+  }
+
+  _drawFamilyShock(glow, matter, layout, phase) {
+    const profile = this._shockProfile();
+    if (profile.pulsed) {
+      this._drawPulsedShock(glow, layout, phase, profile);
       return;
     }
+    this._drawLayeredShock(glow, matter, layout, phase, profile);
+  }
 
-    if (family === 'meteor') {
-      if (phase.shockAlpha <= 0.003) return;
-      const radius = Math.max(2, layout.min * 0.72 * phase.shockProgress * layout.energyScale);
-      context.save();
-      context.translate(layout.originX + radius * 0.08, layout.eventY);
-      context.rotate(-0.12);
-      context.scale(1.24, 0.58);
-      context.strokeStyle = colorWithAlpha(this._palette.shock, phase.shockAlpha * 0.62);
-      context.lineWidth = Math.max(0.8, 4.2 * (1 - phase.shockProgress));
-      context.beginPath();
-      context.arc(0, 0, radius, Math.PI * 0.92, Math.PI * 2.08);
-      context.stroke();
-      context.restore();
-      return;
+  /**
+   * Layered pressure-front visualization: refractive shell, bright leading
+   * edge with chromatic separation, trailing contour bands, ground-reflected
+   * wave, dust-lift boundary, and an optional condensation-style ring. All
+   * geometry is the same normalized expanding shell as before; only the
+   * rendering is richer. Stylized and qualitative throughout.
+   */
+  _drawLayeredShock(glow, matter, layout, phase, profile) {
+    if (phase.shockAlpha <= 0.003) return;
+    const tuning = this.settings.tuning || DEFAULT_TUNING;
+    const behavior = this._behavior;
+    const progress = phase.shockProgress;
+    const maxRadius = layout.min * (0.58 + behavior.shock * 0.16) * layout.energyScale;
+    const radius = Math.max(2, maxRadius * progress);
+    const baseAlpha = saturate(phase.shockAlpha * clamp(behavior.shock, 0.2, 2.2))
+      * clamp(profile.opacity * tuning.shockOpacity, 0, 2);
+    if (baseAlpha <= 0.004) return;
+    const aspect = layout.elevated && !profile.spectral
+      ? Math.min(1, profile.aspect + 0.18)
+      : profile.aspect;
+    const wobble = profile.irregularity * (0.5 + progress * 0.9);
+    const centerX = layout.originX + radius * (profile.offsetX || 0);
+    const centerY = layout.eventY;
+    const shockColor = profile.spectral ? this._palette.plasma : this._palette.shock;
+
+    glow.save();
+    glow.globalCompositeOperation = 'screen';
+    glow.translate(centerX, centerY);
+    // The airborne shell stops at the surface; the ground-reflected wave and
+    // dust-lift boundary carry the interaction below the horizon line.
+    glow.beginPath();
+    glow.rect(-radius * 2.6, -radius * 2.6, radius * 5.2, (layout.surfaceY + 3 - centerY) + radius * 2.6);
+    glow.clip();
+    if (profile.rotation) glow.rotate(profile.rotation);
+    if (profile.elongation) glow.scale(profile.elongation, 1);
+
+    // 1 · Refractive shell: a wide translucent annulus around the front.
+    if (profile.shellWidth > 0) {
+      const shell = radius * profile.shellWidth * (2.6 - progress * 1.4) * clamp(tuning.refraction, 0, 2.5);
+      if (shell > 1.5) {
+        const gradient = glow.createRadialGradient(0, 0, Math.max(0, radius - shell), 0, 0, radius + shell * 0.7);
+        gradient.addColorStop(0, colorWithAlpha(shockColor, 0));
+        gradient.addColorStop(0.55, colorWithAlpha(shockColor, baseAlpha * 0.1));
+        gradient.addColorStop(0.82, colorWithAlpha(shockColor, baseAlpha * 0.2));
+        gradient.addColorStop(1, colorWithAlpha(shockColor, 0));
+        glow.fillStyle = gradient;
+        glow.save();
+        glow.scale(1, aspect);
+        glow.beginPath();
+        glow.arc(0, 0, radius + shell * 0.7, 0, TAU);
+        glow.fill();
+        glow.restore();
+      }
     }
 
-    this._drawShock(context, layout, phase);
+    // 2 · Chromatic separation just inside/outside the leading edge.
+    const chroma = profile.chroma * baseAlpha * 0.3;
+    if (chroma > 0.006 && !this.reducedMotion) {
+      const warm = profile.spectral ? this._palette.plasma : this._palette.ember;
+      const cool = profile.spectral ? this._palette.core : this._palette.shock;
+      glow.lineWidth = Math.max(0.7, 1.9 * (1 - progress));
+      glow.strokeStyle = colorWithAlpha(warm, chroma);
+      this._traceShockBand(glow, radius * 0.986, aspect, wobble, 0);
+      glow.stroke();
+      glow.strokeStyle = colorWithAlpha(cool, chroma * 0.85);
+      this._traceShockBand(glow, radius * 1.014, aspect, wobble, 0);
+      glow.stroke();
+    }
+
+    // 3 · Leading compression front: thin bright core over a soft halo.
+    glow.strokeStyle = colorWithAlpha(shockColor, baseAlpha * 0.24);
+    glow.lineWidth = Math.max(1.6, 7.5 * (1 - progress) * profile.thickness * behavior.shockThickness);
+    this._traceShockBand(glow, radius, aspect, wobble, 0);
+    glow.stroke();
+    glow.strokeStyle = colorWithAlpha(shockColor, baseAlpha * 0.78);
+    glow.lineWidth = Math.max(0.8, 2.6 * (1 - progress * 0.7) * profile.thickness);
+    this._traceShockBand(glow, radius, aspect, wobble, 0);
+    glow.stroke();
+
+    // 4 · Trailing contour bands with independent fade and slight lag growth.
+    const bandCount = Math.round(clamp(profile.bands * tuning.shockBands, 0, 5));
+    for (let band = 1; band <= bandCount; band += 1) {
+      const lag = profile.spacing * tuning.shockSpacing * (band + band * band * 0.22);
+      const bandRadius = radius * (1 - lag);
+      if (bandRadius < 4) continue;
+      const bandFade = (1 - band / (bandCount + 1.4)) * (1 - progress * 0.42);
+      const bandAlpha = baseAlpha * 0.34 * bandFade;
+      if (bandAlpha <= 0.004) continue;
+      glow.strokeStyle = colorWithAlpha(shockColor, bandAlpha);
+      glow.lineWidth = Math.max(0.7, (2.1 - band * 0.28) * (1 - progress * 0.55) * profile.thickness);
+      this._traceShockBand(glow, bandRadius, aspect, wobble * (1 + band * 0.35), band);
+      glow.stroke();
+    }
+    glow.restore();
+
+    // 5 · Ground-reflected wave: a paired surface arc slightly behind the front.
+    if (profile.groundRing > 0.05 && (!layout.elevated || progress > 0.12)) {
+      const groundAlpha = baseAlpha * 0.34 * profile.groundRing;
+      const groundRadius = radius * (profile.elongation || 1);
+      glow.save();
+      glow.globalCompositeOperation = 'screen';
+      glow.strokeStyle = colorWithAlpha(shockColor, groundAlpha);
+      glow.lineWidth = Math.max(0.8, 2.6 * (1 - progress));
+      glow.beginPath();
+      glow.ellipse(layout.originX, layout.surfaceY + 2, groundRadius * 0.94, groundRadius * 0.1, 0, Math.PI, TAU);
+      glow.stroke();
+      glow.strokeStyle = colorWithAlpha(shockColor, groundAlpha * 0.45);
+      glow.lineWidth = Math.max(0.7, 1.7 * (1 - progress));
+      glow.beginPath();
+      glow.ellipse(layout.originX, layout.surfaceY + 2, groundRadius * 0.78, groundRadius * 0.082, 0, Math.PI, TAU);
+      glow.stroke();
+      glow.restore();
+    }
+
+    // 6 · Dust-lift boundary: particulate raised from the surface just behind
+    // the traveling front. Deterministic streaks from the fixed particle pool.
+    const dustStrength = profile.dust * behavior.dust * tuning.dustResponse;
+    if (matter && dustStrength > 0.08 && !layout.buried && progress > 0.08 && progress < 0.98) {
+      const streaks = Math.max(6, Math.round(16 * clamp(tuning.dustResponse, 0, 2)));
+      const frontX = radius * 0.92 * (profile.elongation || 1);
+      matter.save();
+      for (let index = 0; index < streaks; index += 1) {
+        const side = index % 2 === 0 ? 1 : -1;
+        const along = 0.4 + this._particleDepth[index + 24] * 0.58;
+        const x = layout.originX + side * frontX * along;
+        if (x < -30 || x > layout.width + 30) continue;
+        const heightScale = (1 - along * 0.55) * dustStrength;
+        const streakHeight = layout.min * 0.028 * heightScale * (0.6 + this._particleSize[index + 24] * 0.5)
+          * Math.sin(Math.PI * saturate(progress * 1.35 - along * 0.3));
+        if (streakHeight < 1.2) continue;
+        const alpha = baseAlpha * 0.5 * (1 - along * 0.5);
+        const dustGradient = matter.createLinearGradient(x, layout.surfaceY, x, layout.surfaceY - streakHeight);
+        dustGradient.addColorStop(0, colorWithAlpha(this._palette.dust, alpha));
+        dustGradient.addColorStop(1, colorWithAlpha(this._palette.dust, 0));
+        matter.fillStyle = dustGradient;
+        const streakWidth = Math.max(1.6, layout.min * 0.008 * (0.5 + this._particleSize[index + 24] * 0.6));
+        matter.fillRect(x - streakWidth / 2, layout.surfaceY - streakHeight, streakWidth, streakHeight);
+      }
+      matter.restore();
+    }
+
+    // 7 · Condensation-style ring for humid, elevated events at mid-expansion.
+    if (profile.condensation > 0.05 && layout.elevated && !this.reducedMotion) {
+      const window = Math.sin(Math.PI * saturate((progress - 0.26) / 0.44));
+      if (window > 0.02) {
+        const ringAlpha = baseAlpha * 0.3 * profile.condensation * window;
+        const ringRadius = radius * 0.56;
+        glow.save();
+        glow.globalCompositeOperation = 'screen';
+        const ring = glow.createRadialGradient(centerX, centerY, ringRadius * 0.72, centerX, centerY, ringRadius);
+        ring.addColorStop(0, colorWithAlpha(this._palette.core, 0));
+        ring.addColorStop(0.72, colorWithAlpha(this._palette.core, ringAlpha));
+        ring.addColorStop(1, colorWithAlpha(this._palette.core, 0));
+        glow.fillStyle = ring;
+        glow.beginPath();
+        glow.ellipse(centerX, centerY, ringRadius, ringRadius * 0.42, 0, 0, TAU);
+        glow.fill();
+        glow.restore();
+      }
+    }
+  }
+
+  /** Volcanic pressure behavior: repeated weak surges rather than one ring. */
+  _drawPulsedShock(glow, layout, phase, profile) {
+    if (phase.time <= 0.05) return;
+    const behavior = this._behavior;
+    const period = 2.6;
+    const maxRadius = layout.min * 0.2 * layout.energyScale;
+    glow.save();
+    glow.globalCompositeOperation = 'screen';
+    for (let pulse = 0; pulse < 3; pulse += 1) {
+      const emitTime = pulse * period + (this.settings.seed % 7) * 0.11;
+      const age = (phase.time - emitTime) % (period * 3);
+      if (age < 0 || age > period * 1.5) continue;
+      const pulseProgress = age / (period * 1.5);
+      const pulseRadius = Math.max(2, maxRadius * (0.25 + pulseProgress * 0.75));
+      const alpha = saturate((1 - pulseProgress) * 0.3 * profile.opacity * (1 - phase.dissipation));
+      if (alpha <= 0.008) continue;
+      glow.strokeStyle = colorWithAlpha(this._palette.shock, alpha * clamp(behavior.shock * 3, 0.2, 1));
+      glow.lineWidth = Math.max(0.8, 2.2 * (1 - pulseProgress));
+      glow.save();
+      glow.translate(layout.originX, layout.surfaceY - layout.min * 0.02);
+      this._traceShockBand(glow, pulseRadius, profile.aspect, profile.irregularity, pulse);
+      glow.stroke();
+      glow.restore();
+    }
+    glow.restore();
   }
 
   _drawFamilyEarlyEffects(glow, matter, layout, phase, quality) {
@@ -1734,27 +2367,184 @@ export class ExplosionRenderer {
   }
 
   _drawMeteorEarly(glow, matter, layout, phase, quality) {
-    const duration = this._behavior.key === 'meteorImpact' ? 1.55 : 1.15;
-    const visibility = (1 - smoothstep(duration * 0.52, duration, phase.time))
-      * saturate(phase.flash + phase.fireAlpha * 0.45);
-    if (visibility <= 0.003) return;
-    const length = layout.min * 0.22 * layout.scale;
-    const radius = layout.min * 0.055 * layout.scale * (0.35 + phase.fireGrowth * 0.65);
-    glow.save();
-    glow.translate(layout.originX, layout.eventY);
-    glow.rotate(-0.62);
-    const streak = glow.createLinearGradient(-length, 0, radius, 0);
-    streak.addColorStop(0, colorWithAlpha(this._palette.flame, 0));
-    streak.addColorStop(0.58, colorWithAlpha(this._palette.hot, visibility * 0.38));
-    streak.addColorStop(1, colorWithAlpha(this._palette.core, visibility * 0.9));
-    glow.fillStyle = streak;
-    glow.beginPath();
-    glow.ellipse(-length * 0.3, 0, length * 0.72, radius * 0.7, 0, 0, TAU);
-    glow.fill();
-    glow.restore();
+    // The volumetric entry trail is handled by _drawMeteorTrail for the whole
+    // descent; this early hook only adds the surface response for impacts.
     if (this._behavior.key === 'meteorImpact') {
-      this._drawGroundCoupledEarly(glow, matter, layout, phase, quality, duration);
+      this._drawGroundCoupledEarly(glow, matter, layout, phase, quality, 1.55);
     }
+  }
+
+  /**
+   * Deterministic entry trajectory. Returns the head position at `time`
+   * seconds plus the unit direction of travel. The meteor arrives at the
+   * event origin at `arrival` seconds after detonation; before detonation the
+   * head waits off-screen (rendered only as a subtle distant object).
+   */
+  _meteorTrajectory(layout, time) {
+    const seedLean = ((this.settings.seed % 89) / 89 - 0.5) * 0.3;
+    const arrival = this._behavior.key === 'meteorImpact' ? 0.62 : 0.5;
+    const travel = layout.min * 1.15;
+    const targetX = layout.originX;
+    const targetY = layout.eventY;
+    // Straight-line entry from the upper corner chosen by the seed, with a
+    // seeded lean so different seeds produce different entry angles.
+    const side = (this.settings.seed % 2 === 0) ? 1 : -1;
+    const originX = targetX + side * travel * (0.62 + seedLean);
+    const originY = targetY - travel * 0.92;
+    const progress = saturate(time / arrival);
+    // Subtle acceleration into the lower atmosphere.
+    const eased = progress * progress * (3 - 2 * progress) * 0.35 + progress * 0.65;
+    const x = lerp(originX, targetX, eased);
+    const y = lerp(originY, targetY, eased);
+    const dirX = targetX - originX;
+    const dirY = targetY - originY;
+    const magnitude = Math.hypot(dirX, dirY) || 1;
+    return {
+      x, y, arrival, progress,
+      startX: originX, startY: originY,
+      ux: dirX / magnitude, uy: dirY / magnitude,
+    };
+  }
+
+  _drawVolumetricMeteorTrail(glow, matter, layout, phase, quality) {
+    const behavior = this._behavior;
+    const tuning = this.settings.tuning || DEFAULT_TUNING;
+    const trajectory = this._meteorTrajectory(layout, phase.time);
+    const persistence = clamp(tuning.trailPersistence, 0.4, 2.2);
+
+    // Pre-detonation: only a subtle distant object, never a finished trail.
+    if (phase.time <= 0.001) {
+      glow.save();
+      glow.globalCompositeOperation = 'screen';
+      const hint = glow.createRadialGradient(
+        trajectory.startX, trajectory.startY, 0,
+        trajectory.startX, trajectory.startY, 5,
+      );
+      hint.addColorStop(0, colorWithAlpha(this._palette.core, 0.5));
+      hint.addColorStop(1, colorWithAlpha(this._palette.core, 0));
+      glow.fillStyle = hint;
+      glow.beginPath();
+      glow.arc(trajectory.startX, trajectory.startY, 5, 0, TAU);
+      glow.fill();
+      glow.restore();
+      return;
+    }
+
+    const fadeStart = trajectory.arrival + 1.4 * persistence;
+    const fadeEnd = trajectory.arrival + 3.4 * persistence;
+    const trailFade = 1 - smoothstep(fadeStart, fadeEnd, phase.time);
+    if (trailFade <= 0.004) return;
+
+    const headX = trajectory.x;
+    const headY = trajectory.y;
+    const headActive = trajectory.progress < 1;
+    const trailSpan = Math.hypot(headX - trajectory.startX, headY - trajectory.startY);
+    const blobBudget = Math.max(12, Math.round(30 * Math.max(0.5, quality)));
+    const baseRadius = layout.min * 0.011 * layout.scale;
+    const lateral = { x: -trajectory.uy, y: trajectory.ux };
+    const seedPhase = (this.settings.seed % 173) * 0.37;
+
+    // Smoky wake first (matter layer) so the luminous sheath reads on top.
+    matter.save();
+    for (let blob = 0; blob < blobBudget; blob += 1) {
+      const along = blob / (blobBudget - 1);
+      const distanceBack = along * trailSpan;
+      if (distanceBack < baseRadius * 2) continue;
+      const wobble = Math.sin(along * 21 + seedPhase) * 0.55 + Math.sin(along * 47 + seedPhase * 2.3) * 0.3;
+      const age = saturate((phase.time - trajectory.arrival * (1 - along)) / 2.2);
+      const drift = layout.windX * layout.min * 0.05 * age;
+      const x = headX - trajectory.ux * distanceBack + lateral.x * wobble * baseRadius * (1 + along * 6) + drift;
+      const y = headY - trajectory.uy * distanceBack + lateral.y * wobble * baseRadius * (1 + along * 6) - age * layout.min * 0.008;
+      const radius = baseRadius * (1.1 + along * 4.2) * (0.75 + age * 0.6);
+      const alpha = trailFade * 0.16 * (1 - along * 0.55) * behavior.smoke;
+      if (alpha <= 0.004) continue;
+      const puff = matter.createRadialGradient(x, y, 0, x, y, radius);
+      puff.addColorStop(0, colorWithAlpha(this._palette.smoke, alpha));
+      puff.addColorStop(1, colorWithAlpha(this._palette.smoke, 0));
+      matter.fillStyle = puff;
+      matter.beginPath();
+      matter.arc(x, y, radius, 0, TAU);
+      matter.fill();
+    }
+    matter.restore();
+
+    // Heated volumetric core: overlapping soft gradients along the path.
+    glow.save();
+    glow.globalCompositeOperation = 'screen';
+    const luminousSpan = Math.min(trailSpan, layout.min * (headActive ? 0.5 : 0.34));
+    const luminousFade = headActive ? 1 : 1 - smoothstep(trajectory.arrival, fadeStart, phase.time) * 0.65;
+    for (let blob = 0; blob < blobBudget; blob += 1) {
+      const along = blob / (blobBudget - 1);
+      const distanceBack = along * luminousSpan;
+      const wobble = Math.sin(along * 33 + seedPhase * 1.7) * 0.3;
+      const x = headX - trajectory.ux * distanceBack + lateral.x * wobble * baseRadius * (1 + along * 2.4);
+      const y = headY - trajectory.uy * distanceBack + lateral.y * wobble * baseRadius * (1 + along * 2.4);
+      const radius = baseRadius * (0.9 + along * 2.4);
+      const heat = (1 - along) * luminousFade * trailFade;
+      const alpha = heat * (0.4 + 0.28 * Math.sin(along * 59 + seedPhase * 3.1));
+      if (alpha <= 0.006) continue;
+      const core = glow.createRadialGradient(x, y, 0, x, y, radius);
+      core.addColorStop(0, colorWithAlpha(this._palette.core, alpha * 0.8));
+      core.addColorStop(0.45, colorWithAlpha(this._palette.hot, alpha * 0.5));
+      core.addColorStop(1, colorWithAlpha(this._palette.flame, 0));
+      glow.fillStyle = core;
+      glow.beginPath();
+      glow.arc(x, y, radius, 0, TAU);
+      glow.fill();
+    }
+
+    // Plasma sheath and motion-blurred head.
+    if (headActive) {
+      const headRadius = baseRadius * 2.1;
+      const sheath = glow.createRadialGradient(headX, headY, 0, headX, headY, headRadius * 3.2);
+      sheath.addColorStop(0, colorWithAlpha(this._palette.core, 0.95));
+      sheath.addColorStop(0.3, colorWithAlpha(this._palette.hot, 0.6));
+      sheath.addColorStop(0.66, colorWithAlpha(this._palette.plasma, 0.2));
+      sheath.addColorStop(1, colorWithAlpha(this._palette.plasma, 0));
+      glow.fillStyle = sheath;
+      glow.beginPath();
+      glow.arc(headX, headY, headRadius * 3.2, 0, TAU);
+      glow.fill();
+      // Directional blur streak through the head.
+      const blurLength = headRadius * 7;
+      const streak = glow.createLinearGradient(
+        headX - trajectory.ux * blurLength, headY - trajectory.uy * blurLength,
+        headX + trajectory.ux * headRadius * 1.6, headY + trajectory.uy * headRadius * 1.6,
+      );
+      streak.addColorStop(0, colorWithAlpha(this._palette.hot, 0));
+      streak.addColorStop(0.7, colorWithAlpha(this._palette.hot, 0.34));
+      streak.addColorStop(1, colorWithAlpha(this._palette.core, 0.85));
+      glow.strokeStyle = streak;
+      glow.lineCap = 'round';
+      glow.lineWidth = headRadius * 1.15;
+      glow.beginPath();
+      glow.moveTo(headX - trajectory.ux * blurLength, headY - trajectory.uy * blurLength);
+      glow.lineTo(headX + trajectory.ux * headRadius * 1.2, headY + trajectory.uy * headRadius * 1.2);
+      glow.stroke();
+
+      // Fragmentation: small diverging shards in the final third of entry.
+      if (trajectory.progress > 0.55) {
+        const shards = 3;
+        for (let shard = 0; shard < shards; shard += 1) {
+          const bias = this._particleBias[shard + 6];
+          const shardProgress = saturate((trajectory.progress - 0.55) / 0.45);
+          const spread = layout.min * 0.045 * shardProgress * (0.4 + Math.abs(bias));
+          const sx = headX - trajectory.ux * spread * 2.4 + lateral.x * bias * spread;
+          const sy = headY - trajectory.uy * spread * 2.4 + lateral.y * bias * spread;
+          const shardAlpha = (1 - shardProgress * 0.5) * 0.55;
+          const shardRadius = baseRadius * (0.5 + Math.abs(bias) * 0.45);
+          const shardGlow = glow.createRadialGradient(sx, sy, 0, sx, sy, shardRadius * 2.4);
+          shardGlow.addColorStop(0, colorWithAlpha(this._palette.core, shardAlpha));
+          shardGlow.addColorStop(0.6, colorWithAlpha(this._palette.ember, shardAlpha * 0.4));
+          shardGlow.addColorStop(1, colorWithAlpha(this._palette.ember, 0));
+          glow.fillStyle = shardGlow;
+          glow.beginPath();
+          glow.arc(sx, sy, shardRadius * 2.4, 0, TAU);
+          glow.fill();
+        }
+      }
+    }
+    glow.restore();
   }
 
   _drawVolcanicEarly(glow, matter, layout, phase, quality) {
@@ -1841,7 +2631,8 @@ export class ExplosionRenderer {
       : 0;
     const intensity = saturate(
       (flashContribution * 0.64 + thermalContribution)
-      * Math.max(0.2, this._behavior.atmosphericLight),
+      * Math.max(0.2, this._behavior.atmosphericLight)
+      * clamp(finite(this.settings.tuning?.envIllumination, 1), 0.2, 2),
     );
     if (intensity <= 0.002) return;
     const radius = layout.min * (0.35 + this._behavior.fireball * 0.15) * layout.energyScale;
@@ -1925,7 +2716,7 @@ export class ExplosionRenderer {
   }
 
   _drawResearchRefraction(context, sourceCanvas, layout, phase, dpr) {
-    if (this.reducedMotion || phase.shockAlpha <= 0.015 || phase.shockProgress >= 0.72) return;
+    if (this.reducedMotion || phase.shockAlpha <= 0.015 || phase.shockProgress >= 0.85) return;
     const scratch = this._refractionCanvas;
     const scratchContext = this._refractionContext;
     if (!scratch || !scratchContext || !sourceCanvas) return;
@@ -1953,7 +2744,8 @@ export class ExplosionRenderer {
     context.ellipse(centerX, centerY, outerRadius, outerRadius * aspect, 0, 0, TAU);
     context.ellipse(centerX, centerY, innerRadius, innerRadius * aspect, 0, 0, TAU);
     context.clip('evenodd');
-    context.globalAlpha = Math.min(0.34, phase.shockAlpha * 0.22);
+    const refractionBoost = clamp(finite(this.settings.tuning?.refraction, 1), 0, 2.5);
+    context.globalAlpha = Math.min(0.44, phase.shockAlpha * 0.3 * refractionBoost);
     context.drawImage(
       scratch,
       0,
@@ -1968,36 +2760,189 @@ export class ExplosionRenderer {
     context.restore();
   }
 
-  _drawShock(context, layout, phase) {
-    if (phase.shockAlpha <= 0.003) return;
-    // Shock front: an expanding normalized ellipse with a faint reflected surface arc.
-    const maxRadius = layout.min * (0.58 + this._behavior.shock * 0.16) * layout.energyScale;
-    const radius = Math.max(2, maxRadius * phase.shockProgress);
-    const alpha = phase.shockAlpha * clamp(this._behavior.shock, 0.2, 2.2);
-    context.save();
-    context.translate(layout.originX, layout.eventY);
-    context.scale(1, 0.66);
-    context.strokeStyle = colorWithAlpha(this._palette.shock, alpha * 0.65);
-    context.lineWidth = Math.max(1, (5 * (1 - phase.shockProgress) + 0.8) * this._behavior.shockThickness);
-    context.beginPath();
-    context.arc(0, 0, radius, Math.PI * 1.02, Math.PI * 1.98);
-    context.stroke();
-    context.strokeStyle = colorWithAlpha(this._palette.shock, alpha * 0.16);
-    context.lineWidth *= 4;
-    context.beginPath();
-    context.arc(0, 0, radius * 0.99, Math.PI * 1.04, Math.PI * 1.96);
-    context.stroke();
-    context.restore();
+  /**
+   * Analytic advection field used by the flow overlays. It mirrors the same
+   * normalized phase quantities that drive the visible simulation (shock
+   * expansion, buoyant column, cap circulation, ground outflow, wind), so
+   * streamlines curve with the motion the viewer actually sees. Values are
+   * screen-space display velocities only.
+   */
+  _flowVelocity(x, y, layout, phase, scratch) {
+    const behavior = this._behavior;
+    const dx = x - layout.originX;
+    const dy = y - layout.eventY;
+    const flatDy = dy / 0.66;
+    const distance = Math.hypot(dx, flatDy) + 0.001;
+    let vx = 0;
+    let vy = 0;
 
-    if (!layout.elevated || phase.shockProgress > 0.12) {
-      context.save();
-      context.strokeStyle = colorWithAlpha(this._palette.shock, alpha * 0.28);
-      context.lineWidth = Math.max(0.7, 2.4 * (1 - phase.shockProgress));
-      context.beginPath();
-      context.ellipse(layout.originX, layout.surfaceY + 2, radius * 0.92, radius * 0.105, 0, Math.PI, TAU);
-      context.stroke();
-      context.restore();
+    // Expanding pressure front: strongest in a band around the current radius.
+    const maxRadius = layout.min * (0.58 + behavior.shock * 0.16) * layout.energyScale;
+    const front = Math.max(6, maxRadius * phase.shockProgress);
+    const bandWidth = front * 0.24 + 10;
+    const frontWeight = Math.exp(-((distance - front) ** 2) / (bandWidth * bandWidth))
+      * phase.shockAlpha * behavior.shock;
+    vx += (dx / distance) * frontWeight * 46;
+    vy += (flatDy / distance) * frontWeight * 30;
+
+    // Buoyant column: upward flow inside the stem envelope.
+    const rise = layout.min * 0.2 * behavior.column * layout.scale * phase.rise;
+    const capY = layout.eventY - rise;
+    const stemWidth = layout.min * (0.035 + behavior.column * 0.03) * layout.scale;
+    if (y > capY - stemWidth && y < layout.surfaceY + 4 && rise > 4) {
+      const columnWeight = Math.exp(-(dx * dx) / (stemWidth * stemWidth * 2.2)) * phase.rise;
+      vy -= columnWeight * 34 * behavior.column;
+      vx += columnWeight * layout.windX * 22;
+      // Entrainment: gentle inflow toward the stem at low altitude.
+      vx += -Math.sign(dx) * Math.exp(-Math.abs(dx) / (stemWidth * 3.2)) * columnWeight * 8;
     }
+
+    // Cap circulation for mushroom-capable families: paired counter vortices.
+    if (behavior.mushroom > 0.15 && phase.cloud > 0.05 && rise > 8) {
+      const capRadius = layout.min * 0.07 * layout.scale * behavior.cloud * (0.35 + 0.65 * phase.cloud) * 1.4;
+      for (const side of [-1, 1]) {
+        const cx = layout.originX + side * capRadius * 0.85 + layout.windX * layout.min * 0.1;
+        const cy = capY;
+        const rx = x - cx;
+        const ry = y - cy;
+        const vortexDistance = Math.hypot(rx, ry) + 0.001;
+        const falloff = Math.exp(-(vortexDistance * vortexDistance) / (capRadius * capRadius * 1.6));
+        const spin = side * 30 * phase.cloud * behavior.mushroom;
+        vx += (-ry / vortexDistance) * falloff * spin;
+        vy += (rx / vortexDistance) * falloff * spin;
+      }
+    }
+
+    // Ground outflow behind the surface-reflected wave.
+    if (!layout.buried && y > layout.surfaceY - layout.min * 0.05 && phase.surface > 0.03) {
+      const groundWeight = Math.exp(-Math.abs(y - layout.surfaceY) / (layout.min * 0.03))
+        * phase.surface * behavior.dust;
+      vx += Math.sign(dx || 1) * groundWeight * 20;
+      vy -= groundWeight * 6;
+    }
+
+    // Ambient wind drift.
+    vx += layout.windX * 14 * (behavior.windResponse || 0.7);
+
+    scratch.vx = vx;
+    scratch.vy = vy;
+    return scratch;
+  }
+
+  /**
+   * Optional flow overlays. 'flow' adds restrained streamlines that follow the
+   * analytic field above; 'field' adds pressure contours and shock-normal
+   * markers in a scientific-visualization register. Qualitative, no units.
+   */
+  _drawFlowOverlay(glow, layout, phase, quality) {
+    const mode = this.settings.flowMode;
+    if (mode === 'off' || phase.normalized <= 0.001) return;
+    const tuning = this.settings.tuning || DEFAULT_TUNING;
+    const structural = clamp(tuning.structuralIntensity, 0, 2.5);
+    if (structural <= 0.02) return;
+    const isField = mode === 'field';
+    const scratch = { vx: 0, vy: 0 };
+    const activity = saturate(
+      phase.shockAlpha * 1.2 + phase.rise * 0.9 + phase.cloud * 0.7 + phase.surface * 0.5,
+    ) * (1 - phase.dissipation * 0.6);
+    if (activity <= 0.015) return;
+
+    glow.save();
+    glow.globalCompositeOperation = 'screen';
+
+    // Streamlines seeded deterministically around the event.
+    const lineBudget = Math.round(
+      (isField ? 30 : 20) * clamp(tuning.flowDensity, 0, 2.5) * Math.max(0.45, quality),
+    );
+    const steps = Math.round(15 * clamp(tuning.flowLifetime, 0.4, 2.2));
+    const stepSize = Math.max(3, layout.min * 0.009);
+    for (let line = 0; line < lineBudget; line += 1) {
+      const angle = this._particleAngle[line];
+      const radiusFraction = 0.15 + this._particleDepth[line] * 0.85;
+      const maxRadius = layout.min * (0.58 + this._behavior.shock * 0.16) * layout.energyScale;
+      const startRadius = maxRadius * phase.shockProgress * radiusFraction
+        + this._particleSize[line] * layout.min * 0.02;
+      let x = layout.originX + Math.cos(angle) * startRadius;
+      let y = layout.eventY + Math.sin(angle) * startRadius * 0.66
+        - this._particleRise[line] * layout.min * 0.05 * phase.rise;
+      if (y > layout.surfaceY + 6) y = layout.surfaceY - this._particleDepth[line] * layout.min * 0.02;
+      let previousX = x;
+      let previousY = y;
+      let drawn = 0;
+      glow.beginPath();
+      glow.moveTo(x, y);
+      let speedSum = 0;
+      let upSum = 0;
+      for (let step = 0; step < steps; step += 1) {
+        this._flowVelocity(x, y, layout, phase, scratch);
+        const speed = Math.hypot(scratch.vx, scratch.vy);
+        if (speed < 1.4) break;
+        x += (scratch.vx / speed) * stepSize;
+        y += (scratch.vy / speed) * stepSize;
+        if (x < -20 || x > layout.width + 20 || y < -20 || y > layout.surfaceY + layout.min * 0.05) break;
+        glow.lineTo(x, y);
+        speedSum += speed;
+        upSum += -scratch.vy;
+        previousX = x;
+        previousY = y;
+        drawn += 1;
+      }
+      if (drawn < 3) continue;
+      const meanSpeed = speedSum / drawn;
+      const buoyant = upSum > 0;
+      const lineAlpha = saturate(activity * (0.1 + Math.min(0.32, meanSpeed / 220)))
+        * structural * (isField ? 1 : 0.75);
+      glow.strokeStyle = colorWithAlpha(
+        buoyant ? this._palette.ember : this._palette.shock,
+        lineAlpha,
+      );
+      glow.lineWidth = 0.7 + this._particleSize[line] * 0.45;
+      glow.stroke();
+      // Direction cue: a small head dot at the streamline tip.
+      if (isField && drawn > 5) {
+        glow.fillStyle = colorWithAlpha(this._palette.text, lineAlpha * 1.4);
+        glow.beginPath();
+        glow.arc(previousX, previousY, 1.1, 0, TAU);
+        glow.fill();
+      }
+    }
+
+    if (isField) {
+      // Pressure contours: fading irregular bands beyond the front.
+      const maxRadius = layout.min * (0.58 + this._behavior.shock * 0.16) * layout.energyScale;
+      const front = maxRadius * phase.shockProgress;
+      if (front > 12 && phase.shockAlpha > 0.01) {
+        glow.save();
+        glow.translate(layout.originX, layout.eventY);
+        for (let contour = 0; contour < 4; contour += 1) {
+          const contourRadius = front * (1.12 + contour * 0.16);
+          const contourAlpha = phase.shockAlpha * 0.2 * (1 - contour / 4.6) * structural;
+          if (contourAlpha <= 0.006) continue;
+          glow.strokeStyle = colorWithAlpha(this._palette.grid, contourAlpha);
+          glow.lineWidth = 0.8;
+          glow.setLineDash([5, 7]);
+          this._traceShockBand(glow, contourRadius, 0.66, 0.02, contour + 5);
+          glow.stroke();
+        }
+        glow.setLineDash([]);
+        // Shock-normal markers on the leading edge.
+        const ticks = 14;
+        glow.strokeStyle = colorWithAlpha(this._palette.text, phase.shockAlpha * 0.34 * structural);
+        glow.lineWidth = 1;
+        for (let tick = 0; tick < ticks; tick += 1) {
+          const tickAngle = (tick / ticks) * TAU;
+          const inner = front * (1 + this._shockWobble(tickAngle, 0, 0.02));
+          const cosA = Math.cos(tickAngle);
+          const sinA = Math.sin(tickAngle) * 0.66;
+          glow.beginPath();
+          glow.moveTo(cosA * inner, sinA * inner);
+          glow.lineTo(cosA * (inner + 7), sinA * (inner + 7));
+          glow.stroke();
+        }
+        glow.restore();
+      }
+    }
+    glow.restore();
   }
 
   _drawFireball(context, layout, phase, quality) {
@@ -2075,12 +3020,16 @@ export class ExplosionRenderer {
     const behavior = this._behavior;
     if (phase.rise <= 0.002 || behavior.cloud <= 0.02) return;
     // Cloud formation: buoyant rise plus deterministic lobes and horizontal wind drift.
+    const tuning = this.settings.tuning || DEFAULT_TUNING;
+    const mushroom = behavior.mushroom > 0.2;
     const rise = layout.min * 0.2 * behavior.column * layout.scale * phase.rise;
     const drift = layout.windX * layout.min * 0.16 * phase.rise * phase.rise;
     const capX = layout.originX + drift;
     const capY = layout.eventY - rise;
-    const stemWidth = layout.min * 0.022 * layout.scale * Math.max(0.35, behavior.column);
-    const capRadius = layout.min * 0.07 * layout.scale * behavior.cloud * (0.35 + 0.65 * phase.cloud);
+    const stemWidth = layout.min * (mushroom ? 0.034 : 0.022) * layout.scale
+      * Math.max(0.35, behavior.column) * clamp(tuning.stemThickness, 0.5, 2);
+    const capRadius = layout.min * 0.07 * layout.scale * behavior.cloud
+      * (0.35 + 0.65 * phase.cloud) * (mushroom ? clamp(tuning.capWidth, 0.5, 2) : 1);
     const cloudAlpha = saturate((phase.rise + phase.cloud) * 0.62) * (1 - phase.dissipation * 0.42);
 
     context.save();
@@ -2103,13 +3052,13 @@ export class ExplosionRenderer {
     );
     context.stroke();
 
-    const lobeCount = Math.max(7, Math.round((15 + behavior.mushroom * 10) * quality));
+    const lobeCount = Math.max(7, Math.round((15 + behavior.mushroom * 14) * quality));
     for (let index = 0; index < Math.min(MAX_CLOUD_LOBES, lobeCount); index += 1) {
-      const mushroomStretch = behavior.mushroom > 0.2 ? 1.55 : 1;
+      const mushroomStretch = mushroom ? 1.85 : 1;
       const turbulence = Math.sin(phase.time * 0.38 + this._lobePhase[index]) * capRadius * 0.07;
       const x = capX + this._lobeX[index] * capRadius * mushroomStretch + turbulence;
-      const y = capY + this._lobeY[index] * capRadius * (behavior.mushroom > 0.2 ? 0.55 : 0.82);
-      const radius = Math.max(2, capRadius * 0.24 * this._lobeSize[index]);
+      const y = capY + this._lobeY[index] * capRadius * (mushroom ? 0.52 : 0.82);
+      const radius = Math.max(2, capRadius * (mushroom ? 0.28 : 0.24) * this._lobeSize[index]);
       const puff = context.createRadialGradient(x - radius * 0.2, y - radius * 0.22, 0, x, y, radius);
       const light = index % 4 === 0 ? this._palette.smokeLight : this._palette.cloud;
       puff.addColorStop(0, colorWithAlpha(light, cloudAlpha * 0.62));
@@ -2121,11 +3070,40 @@ export class ExplosionRenderer {
       context.fill();
     }
 
-    if (behavior.mushroom > 0.2 && phase.cloud > 0.12) {
-      context.strokeStyle = colorWithAlpha(this._palette.smokeLight, cloudAlpha * 0.22);
-      context.lineWidth = Math.max(1, capRadius * 0.07);
+    if (mushroom && phase.cloud > 0.12) {
+      // Toroidal under-cap shading: a darker occluded band beneath the cap.
+      const underCap = context.createRadialGradient(capX, capY + capRadius * 0.42, capRadius * 0.2, capX, capY + capRadius * 0.42, capRadius * 1.5);
+      underCap.addColorStop(0, colorWithAlpha('#0b0a09', cloudAlpha * 0.3));
+      underCap.addColorStop(0.7, colorWithAlpha('#0b0a09', cloudAlpha * 0.12));
+      underCap.addColorStop(1, colorWithAlpha('#0b0a09', 0));
+      context.fillStyle = underCap;
       context.beginPath();
-      context.ellipse(capX, capY + capRadius * 0.06, capRadius * 1.45, capRadius * 0.36, 0, Math.PI * 0.08, Math.PI * 0.92);
+      context.ellipse(capX, capY + capRadius * 0.42, capRadius * 1.5, capRadius * 0.4, 0, 0, TAU);
+      context.fill();
+
+      // Outer roll-down: lobes curling beneath the cap rim on both sides.
+      const rollProgress = saturate(phase.cloud * 1.15);
+      for (const side of [-1, 1]) {
+        for (let roll = 0; roll < 3; roll += 1) {
+          const rollAngle = 0.3 + roll * 0.42;
+          const rollX = capX + side * capRadius * (1.5 - roll * 0.16) * (0.9 + rollProgress * 0.4);
+          const rollY = capY + capRadius * (0.2 + Math.sin(rollAngle) * 0.5 * rollProgress);
+          const rollRadius = Math.max(2, capRadius * (0.3 - roll * 0.06));
+          const rollPuff = context.createRadialGradient(rollX, rollY, 0, rollX, rollY, rollRadius);
+          rollPuff.addColorStop(0, colorWithAlpha(this._palette.cloud, cloudAlpha * 0.5 * rollProgress));
+          rollPuff.addColorStop(1, colorWithAlpha(this._palette.smoke, 0));
+          context.fillStyle = rollPuff;
+          context.beginPath();
+          context.arc(rollX, rollY, rollRadius, 0, TAU);
+          context.fill();
+        }
+      }
+
+      // Sunlit cap rim.
+      context.strokeStyle = colorWithAlpha(this._palette.smokeLight, cloudAlpha * 0.3);
+      context.lineWidth = Math.max(1, capRadius * 0.08);
+      context.beginPath();
+      context.ellipse(capX, capY - capRadius * 0.08, capRadius * 1.62, capRadius * 0.42, 0, Math.PI * 1.06, Math.PI * 1.94);
       context.stroke();
     }
     context.restore();
@@ -2242,30 +3220,8 @@ export class ExplosionRenderer {
     context.restore();
   }
 
-  _drawMeteorTrail(glow, matter, layout, phase) {
-    const visibility = 1 - smoothstep(0.04, 0.22, phase.normalized);
-    if (visibility <= 0.002) return;
-    const endX = layout.originX;
-    const endY = layout.eventY;
-    const length = layout.min * 0.45;
-    const startX = endX - length * 0.62;
-    const startY = endY - length;
-    const trail = glow.createLinearGradient(startX, startY, endX, endY);
-    trail.addColorStop(0, colorWithAlpha(this._palette.flame, 0));
-    trail.addColorStop(0.7, colorWithAlpha(this._palette.ember, visibility * 0.38));
-    trail.addColorStop(1, colorWithAlpha(this._palette.core, visibility * 0.92));
-    glow.strokeStyle = trail;
-    glow.lineWidth = Math.max(2, layout.scale * 9 * visibility);
-    glow.beginPath();
-    glow.moveTo(startX, startY);
-    glow.quadraticCurveTo(lerp(startX, endX, 0.55), lerp(startY, endY, 0.45), endX, endY);
-    glow.stroke();
-    matter.strokeStyle = colorWithAlpha(this._palette.smoke, visibility * 0.34);
-    matter.lineWidth = Math.max(3, layout.scale * 13 * visibility);
-    matter.beginPath();
-    matter.moveTo(startX - 8, startY - 6);
-    matter.lineTo(endX - length * 0.08, endY - length * 0.12);
-    matter.stroke();
+  _drawMeteorTrail(glow, matter, layout, phase, quality = 1) {
+    this._drawVolumetricMeteorTrail(glow, matter, layout, phase, quality);
   }
 
   _drawVolcanoVent(glow, matter, layout, phase) {
