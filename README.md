@@ -2,7 +2,7 @@
 
 An interactive hybrid WebGL2 and Canvas experiment for observing stylized
 fireballs, shock fronts, surface interaction, rising columns, cloud formation,
-and atmospheric drift across twelve high-energy visual archetypes.
+and atmospheric drift across sixteen high-energy visual archetypes.
 
 [Open the live Explosion Dynamics Lab](https://www.ericbarker.co/explosion-dynamics-lab/)
 
@@ -10,8 +10,16 @@ and atmospheric drift across twelve high-energy visual archetypes.
 
 ## Highlights
 
-- Twelve materially different conventional, industrial, cosmic, geologic,
-  fictional, and approximate nuclear-scale timelines
+- Sixteen materially different conventional, industrial, cosmic, geologic,
+  fictional, approximate nuclear-scale, and broad historical-reference timelines
+- Layered family-specific shockwave rendering: refractive shell, chromatic
+  leading edge, trailing contour bands, ground-reflected wave, dust-lift
+  boundary, and condensation-style rings
+- Optional flow overlays (Cinematic + flow lines, Scientific field view) that
+  trace the same normalized motion the beauty render uses
+- A layered fictional skyline (working name "Meridian City") and richer desert,
+  ocean, mountain, test-range, and analytical-grid environments with stylized,
+  qualitative pressure-response behavior
 - Cinematic profile and abstract effects-overview views
 - Deterministic seeded scenes that can be paused, scrubbed, replayed, and
   rendered at a fixed export timestep
@@ -72,8 +80,13 @@ response, and camera treatment. They are behavioral presets, not color swaps.
 | Nuclear Airburst — Research Model | Approximate elevated flash and shock followed by a field-driven fireball, rising column, rolling cap, cooling smoke, and wind deformation | 29.5 s |
 | Nuclear Ground Burst | Approximate nuclear-scale surface event with denser dust and wind-driven particulate | 37.0 s |
 | Extreme Historical-Scale Nuclear Visualization | Temporally compressed, abstract visualization of the upper historical atmospheric-test scale | 47.5 s |
+| Early Fission Test Scale | Broad early-test reference: hard dawn flash, dusty skirt, compact developing cap | 26.0 s |
+| Hiroshima-Scale Historical Reference | Broad early-airburst reference: narrow stem, fast compact cap, little surface dust | 30.0 s |
+| Castle Bravo-Scale Historical Reference | Broad thermonuclear surface reference: wide slow fireball, squat stem, spreading umbrella | 42.0 s |
+| Tsar Bomba-Scale Historical Reference | Broad largest-test reference: prolonged flash, colossal clean cap, distant framing | 54.0 s |
 
-The nuclear-scale entries use broad public visual archetypes only. They contain
+The nuclear-scale entries — including the four historical visual-reference
+presets — use broad public visual archetypes only. They contain
 no weapon-design, targeting, casualty, or operational information. The
 fuel-air-style entry is likewise only a visual archetype and contains no
 substance, ratio, ignition, or construction guidance.
@@ -214,7 +227,7 @@ particulate-heavy or extreme-scale scenes:
 
 ### Normalized cube-root visual approximation
 
-The broad scene scale uses a dimensionless cube-root curve to keep the twelve
+The broad scene scale uses a dimensionless cube-root curve to keep the sixteen
 very different display indices legible in one viewport. For display energy
 `E = preset.relativeVisualEnergy × visualEnergyMultiplier`, the normalized term
 is:
@@ -253,7 +266,7 @@ Run the dependency-free syntax and regression suite in another terminal:
 ./scripts/deploy-production.sh test
 ```
 
-The suite checks all 12 preset contracts, safety scope, distinct phase
+The suite checks all 16 preset contracts, safety scope, distinct phase
 fingerprints, bounded detail budgets, deterministic random/noise helpers,
 seven-family fluid-profile, source-primitive, palette-uniform, adaptive-budget,
 GPU-tracer, and fixed-step numerical contracts; all-preset fail-closed exports;

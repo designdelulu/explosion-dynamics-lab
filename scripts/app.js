@@ -36,6 +36,10 @@ const DIRECT_VIEW_MODE = ["cinematic", "overview"].includes(query.get("mode"))
 const DIRECT_QUALITY = ["mobile", "balanced", "high"].includes(query.get("quality"))
   ? query.get("quality")
   : null;
+const DIRECT_FLOW_MODE = ["off", "flow", "field"].includes(query.get("flow"))
+  ? query.get("flow")
+  : null;
+const VISUAL_DEV = query.get("visualDev") === "1";
 const directSeedValue = Number(query.get("seed"));
 const DIRECT_SEED = Number.isInteger(directSeedValue) && directSeedValue >= 1 && directSeedValue <= 999999999
   ? directSeedValue
@@ -120,6 +124,7 @@ const elements = {
   cameraAngleOutput: $("#cameraAngleOutput"),
   density: $("#densityRange"),
   densityOutput: $("#densityOutput"),
+  flowMode: $("#flowModeSelect"),
   quality: $("#qualitySelect"),
   researchDiagnostics: $("#researchDiagnostics"),
   diagnostic: $("#diagnosticSelect"),
@@ -271,6 +276,7 @@ const state = {
   environment: DEFAULT_ENVIRONMENT_ID,
   timeOfDay: DEFAULT_TIME_ID,
   viewMode: DIRECT_VIEW_MODE || "cinematic",
+  flowMode: DIRECT_FLOW_MODE || "off",
   burst: "surface",
   energy: 1,
   altitude: 0.02,
@@ -299,6 +305,97 @@ const state = {
   speed: 1,
   exporting: false
 };
+
+/*
+ * Art-direction multipliers surfaced by the hidden ?visualDev=1 panel. Every
+ * value is a look multiplier over the shipped appearance (1 = shipped look);
+ * none exposes real-world damage, optimization, or targeting parameters.
+ */
+const visualTuning = {
+  shockBands: 1,
+  shockSpacing: 1,
+  shockOpacity: 1,
+  refraction: 1,
+  trailPersistence: 1,
+  flowDensity: 1,
+  flowLifetime: 1,
+  structuralIntensity: 1,
+  environmentDetail: 1,
+  cityDensity: 1,
+  dustResponse: 1,
+  structureResponse: 1,
+  capWidth: 1,
+  stemThickness: 1,
+  cameraPullback: 1,
+  exposure: 1,
+  envIllumination: 1
+};
+
+function buildVisualDevPanel() {
+  const panel = document.createElement("aside");
+  panel.id = "visualDevPanel";
+  panel.setAttribute("aria-label", "Visual development art-direction controls");
+  panel.style.cssText = [
+    "position:fixed", "right:12px", "bottom:12px", "z-index:60", "width:250px",
+    "max-height:70vh", "overflow-y:auto", "background:rgba(6,8,12,0.92)",
+    "border:1px solid rgba(140,160,190,0.25)", "border-radius:10px",
+    "padding:12px 14px", "font:11px/1.5 'JetBrains Mono', ui-monospace, monospace",
+    "color:#dce3ec"
+  ].join(";");
+  const heading = document.createElement("strong");
+  heading.textContent = "VISUAL DEV · look multipliers";
+  heading.style.cssText = "display:block;margin-bottom:8px;font-size:11px;letter-spacing:0.06em;";
+  panel.append(heading);
+  const groups = [
+    ["Shock band count", "shockBands", 0, 2],
+    ["Shock band spacing", "shockSpacing", 0.4, 2],
+    ["Shock opacity", "shockOpacity", 0, 2],
+    ["Refraction intensity", "refraction", 0, 2.5],
+    ["Trail persistence", "trailPersistence", 0.4, 2.2],
+    ["Flow-line density", "flowDensity", 0, 2.5],
+    ["Flow-line lifetime", "flowLifetime", 0.4, 2.2],
+    ["Structural-line intensity", "structuralIntensity", 0, 2.5],
+    ["Environment detail", "environmentDetail", 0.3, 2],
+    ["City density", "cityDensity", 0.3, 2],
+    ["Dust response", "dustResponse", 0, 2],
+    ["Structural response", "structureResponse", 0, 2],
+    ["Mushroom cap width", "capWidth", 0.6, 1.6],
+    ["Stem thickness", "stemThickness", 0.6, 1.6],
+    ["Camera pullback", "cameraPullback", 0.6, 1.4],
+    ["Exposure", "exposure", 0.5, 1.6],
+    ["Environment illumination", "envIllumination", 0.2, 2]
+  ];
+  for (const [label, key, min, max] of groups) {
+    const row = document.createElement("label");
+    row.style.cssText = "display:block;margin-bottom:6px;";
+    const caption = document.createElement("span");
+    caption.style.cssText = "display:flex;justify-content:space-between;gap:8px;";
+    const name = document.createElement("span");
+    name.textContent = label;
+    const value = document.createElement("output");
+    value.textContent = visualTuning[key].toFixed(2);
+    caption.append(name, value);
+    const slider = document.createElement("input");
+    slider.type = "range";
+    slider.min = String(min);
+    slider.max = String(max);
+    slider.step = "0.05";
+    slider.value = String(visualTuning[key]);
+    slider.style.cssText = "width:100%;";
+    slider.addEventListener("input", () => {
+      visualTuning[key] = Number(slider.value);
+      value.textContent = visualTuning[key].toFixed(2);
+      scheduleRendererFrame({ configure: true });
+    });
+    row.append(caption, slider);
+    panel.append(row);
+  }
+  const note = document.createElement("p");
+  note.textContent = "Art-direction only. No physical, damage, or targeting values.";
+  note.style.cssText = "margin-top:8px;opacity:0.6;";
+  panel.append(note);
+  document.body.append(panel);
+}
 
 let timeline = [];
 let lastFrame = performance.now();
@@ -470,10 +567,12 @@ function configureRenderer() {
     cameraAngle: state.cameraAngle,
     density: state.density,
     quality: state.quality,
+    flowMode: state.flowMode,
     diagnostic: state.diagnostic,
     debugMetrics: DEBUG_FLUID,
     seed: state.seed,
-    layers: { ...state.layers }
+    layers: { ...state.layers },
+    tuning: { ...visualTuning }
   };
   renderer.configure(settings);
   proceduralRenderer?.configure(settings);
@@ -708,6 +807,11 @@ function updateSettingsFromControls() {
   state.cameraAngle = Number(elements.cameraAngle.value);
   state.density = Number(elements.density.value);
   state.quality = elements.quality.value;
+  if (elements.flowMode) {
+    state.flowMode = ["off", "flow", "field"].includes(elements.flowMode.value)
+      ? elements.flowMode.value
+      : "off";
+  }
   state.diagnostic = elements.diagnostic.value;
   if (elements.debugFluidView) elements.debugFluidView.value = state.diagnostic;
   state.paletteId = elements.palette.value;
@@ -716,6 +820,7 @@ function updateSettingsFromControls() {
   state.layers = Object.fromEntries($$("[data-layer]").map((input) => [input.dataset.layer, input.checked]));
   if (state.quality !== previousQuality) replaceUrlParameter("quality", state.quality);
   if (state.seed !== previousSeed) replaceUrlParameter("seed", state.seed);
+  replaceUrlParameter("flow", state.flowMode === "off" ? null : state.flowMode);
   updateControlOutputs();
   scheduleRendererFrame({ configure: true });
 }
@@ -1104,6 +1209,7 @@ function bindControls() {
     elements.cameraDistance,
     elements.cameraAngle,
     elements.density,
+    elements.flowMode,
     elements.quality,
     elements.diagnostic,
     elements.palette,
@@ -1337,6 +1443,7 @@ function initialize() {
   populateSelect(elements.environment, ENVIRONMENTS);
   populateSelect(elements.timeOfDay, TIME_SETTINGS);
   elements.density.value = String(state.density);
+  if (elements.flowMode) elements.flowMode.value = state.flowMode;
   elements.quality.value = state.quality;
   elements.seed.value = String(state.seed);
   elements.diagnostic.value = state.diagnostic;
@@ -1366,6 +1473,7 @@ function initialize() {
   bindCanvasInteraction();
   bindKeyboard();
   bindResearchCanvasLifecycle();
+  if (VISUAL_DEV) buildVisualDevPanel();
   applyPreset(INITIAL_PRESET_ID, {
     announce: false,
     track: false

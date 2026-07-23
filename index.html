@@ -57,7 +57,7 @@
           "url": "https://www.ericbarker.co/"
         },
         "featureList": [
-          "Twelve visually distinct high-energy event presets",
+          "Sixteen visually distinct high-energy event presets",
           "Cinematic profile and abstract effects-overview modes",
           "Deterministic timeline scrubbing and seeded replay",
           "Local PNG and genuine MP4 export"
@@ -307,6 +307,14 @@
             <span><span>Detail density</span><output id="densityOutput">100%</output></span>
             <input id="densityRange" type="range" min="35" max="140" step="5" value="100">
           </label>
+          <label class="field field--row">
+            <span class="field__label">Flow overlays</span>
+            <select id="flowModeSelect">
+              <option value="off" selected>Cinematic · off</option>
+              <option value="flow">Cinematic + flow lines</option>
+              <option value="field">Scientific field view</option>
+            </select>
+          </label>
           <div class="field-pair">
             <label class="field">
               <span class="field__label">Visual quality</span>
@@ -447,6 +455,8 @@
         <p>An airburst forms in the atmosphere without a crater, while a ground impact emphasizes ejecta, surface displacement, and a persistent dust plume. The volcanic preset replaces the detonation flash with a sustained eruptive column and falling ash-like particulate.</p>
         <h3>Nuclear-scale visualizations</h3>
         <p>The nuclear-scale presets use broad public visual archetypes: intense flash, rapid fireball growth, shock-front propagation, column rise, and mushroom-cloud formation. A ground burst carries more surface dust than an airburst. These are approximate visual categories only—not yield calculators, damage models, or weapon simulations.</p>
+        <h3>Historical visual-reference presets</h3>
+        <p>Four presets reference broad, publicly known historical test-scale categories—early fission, early airburst, thermonuclear surface, and the largest atmospheric test. They differ in flash duration, fireball growth, stem and cap proportion, dust loading, camera framing, and timeline length. Each is a stylized visual scale category shown over fictional terrain; none contains device details, locations, targeting, damage, or casualty information.</p>
         <h3>Nuclear Airburst — Research Model</h3>
         <p>The flagship airburst combines an analytical early shock with a deterministic WebGL2 velocity, temperature, and density field for the later fireball, rising column, and cloud cap. Its browser solver adapts published computer-graphics methods for smoke, fire, turbulence, and volume rendering on normalized fields; it is research-inspired, simplified, and non-predictive.</p>
       </div>
