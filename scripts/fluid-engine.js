@@ -220,6 +220,9 @@ const BASE_PROFILE = Object.freeze({
     emissionCurve: 1,
   }),
   quality: Object.freeze({ grid: 1, pressure: 1, rays: 1, tracers: 1, detail: 1 }),
+  // Broad-plume research controls. mode 0 keeps every shipped preset on its
+  // exact current behavior; only the Tsar historical reference opts in.
+  plume: Object.freeze({ mode: 0, expansion: 0, vortex: 0, persistence: 0, widen: 0 }),
 });
 
 function defineFluidProfile(presetId, profileId, overrides = {}) {
@@ -234,6 +237,7 @@ function defineFluidProfile(presetId, profileId, overrides = {}) {
     physics: { ...BASE_PROFILE.physics, ...(overrides.physics || {}) },
     volume: { ...BASE_PROFILE.volume, ...(overrides.volume || {}) },
     quality: { ...BASE_PROFILE.quality, ...(overrides.quality || {}) },
+    plume: { ...BASE_PROFILE.plume, ...(overrides.plume || {}) },
   });
 }
 
@@ -454,10 +458,17 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       eventFamilyId: 'nuclear-scale', eventFamily: 'Nuclear scale · largest historical reference', profileKind: 15,
       tracerType: 'atmospheric',
       sourcePrimitives: ['radial-impulse', 'ring-source', 'vertical-jet', 'turbulent-source-cluster', 'paired-cap-vortices'],
-      source: { centerY: 0.4, radius: 0.098, aspectX: 1.12, aspectY: 0.95, onsetEnd: 0.06, sustainEnd: 0.85, pulseFrequency: 1.2, radial: 1.18, vertical: 1.46, turbulence: 1.4, heat: 1.5, smoke: 1.42, incandescent: 1.35, dust: 0.4, ringRadius: 1.85, clusterSpread: 1.7, capScale: 1.58, capRoll: 1.42 },
-      physics: { buoyancy: 1.02, densityLoading: 1.05, windCoupling: 1.35, vorticity: 1.48, velocityRetention: 0.9965, cooling: 0.62, smokeConversion: 1.02, scalarRetention: 0.9998 },
-      volume: { scaleX: 1.36, scaleY: 1.42, depth: 1.48, opacity: 1.3, shadow: 1.45, bloom: 1.6, distortion: 1.3, erosion: 0.85, noiseScale: 0.9, dustVisibility: 0.5, exposure: 1.22, toneMap: 0.06, backgroundIllumination: 0.5, emissionCurve: 0.76 },
+      // 2026-07 Tsar research pass: balance radial against vertical injection so
+      // the column is no longer a pencil jet, lower the source so the cap has
+      // vertical room, convert incandescence to smoke sooner (smoke body, not a
+      // persistent white fireball), and feed more smoke overall.
+      source: { centerY: 0.32, radius: 0.112, aspectX: 1.2, aspectY: 0.92, onsetEnd: 0.06, sustainEnd: 0.88, pulseFrequency: 1.2, radial: 1.42, vertical: 1.12, turbulence: 1.45, heat: 1.4, smoke: 1.72, incandescent: 1.12, dust: 0.42, ringRadius: 1.85, clusterSpread: 1.7, capScale: 1.62, capRoll: 1.46 },
+      physics: { buoyancy: 1.0, densityLoading: 1.02, windCoupling: 1.3, vorticity: 1.5, velocityRetention: 0.997, cooling: 0.66, smokeConversion: 1.32, scalarRetention: 0.9998 },
+      // Roll off the highlights (higher toneMap, lower exposure/bloom) so the
+      // hot phase reads as a structured fireball instead of a flat white disc.
+      volume: { scaleX: 1.4, scaleY: 1.42, depth: 1.48, opacity: 1.34, shadow: 1.5, bloom: 1.12, distortion: 1.32, erosion: 0.82, noiseScale: 0.86, dustVisibility: 0.52, exposure: 1.0, toneMap: 0.24, backgroundIllumination: 0.46, emissionCurve: 0.88 },
       quality: { grid: 1.14, pressure: 1.18, rays: 1.2, tracers: 1.44, detail: 1.28 },
+      plume: { mode: 1, expansion: 0.9, vortex: 1.0, persistence: 0.55, widen: 0.6 },
     },
   ),
 });
@@ -706,6 +717,12 @@ uniform vec4 uSeedOffsetsB;
 uniform vec4 uProfilePhysics;
 uniform vec4 uProfileDecay;
 uniform vec4 uProfileAux;
+// Tsar-scale broad-plume research controls. uPlumeMode is 0 for every shipped
+// preset except the Tsar historical reference, so this block is inert
+// (byte-identical behavior) for all other events. uPlumeParams packs
+// (expansion, vortexStrength, persistence, columnWiden).
+uniform float uPlumeMode;
+uniform vec4 uPlumeParams;
 `;
 
 const SOURCE_PROFILE_FUNCTIONS = `
@@ -1076,6 +1093,71 @@ void main() {
   velocity.y -= ceiling * smoothstep(0.09, 0.26, rimDistance)
     * (smoke + dust * 0.6) * 0.55 * uProfileAux.y * uDt;
 
+  // ---- Tsar-scale broad turbulent plume (research proof of concept) ----
+  // Inert unless uPlumeMode is set (Tsar historical reference only). Combines
+  // three paper-grounded mechanisms to break the narrow rising tube into a
+  // broad, coherent, asymmetric mushroom body:
+  //   1. Gas-expansion outward turning (Nguyen/Fedkiw/Jensen 2002, Fig 6-7):
+  //      reacting/rising material turns outward, giving visual fullness.
+  //   2. A rising, scale-separated, ASYMMETRIC vortex-particle population
+  //      (Selle/Rasmussen/Fedkiw 2005, Fig 2 recipe: vortices seeded tangent
+  //      to an upward cylinder during expansion), evaluated analytically as a
+  //      handful of Gaussian vortices so grid confinement has large-scale
+  //      structure to sustain instead of amplifying nothing.
+  //   3. Altitude-dependent column widening so the stem thickens with height.
+  // All quantities are normalized visual motion cues — no blast/damage model.
+  if (uPlumeMode > 0.5) {
+    float plumeActivity = clamp(temperature * 0.2 + smoke * 0.72 + incandescent * 0.32, 0.0, 1.2);
+    float heightAbove = clamp((vUv.y - uSourceCenter.y) / 0.52, 0.0, 1.2);
+    float lateral = vUv.x - uSourceCenter.x;
+    float lateralSign = sign(lateral + uSeedOffsetsA.x * 0.015 + 0.0001);
+
+    // 1 + 3 · Expansion / column widening: outward push that grows with
+    // altitude, weighted by local plume presence, so a cauliflower body and a
+    // thick stem develop instead of a pencil column.
+    float widenBand = smoothstep(0.015, 0.12, heightAbove)
+      * (1.0 - smoothstep(0.85, 1.15, heightAbove));
+    float expansion = plumeActivity * widenBand
+      * (0.35 + heightAbove * 0.85);
+    velocity.x += lateralSign * expansion * uPlumeParams.x * motionScale * uDt * 60.0;
+    // A gentle upward feed inside the widened core keeps the stem continuous
+    // with the cap rather than pinching off.
+    float coreBand = exp(-lateral * lateral / max(0.004, uSourceShape.x * uSourceShape.x * 9.0));
+    velocity.y += coreBand * plumeActivity * uPlumeParams.w
+      * (0.4 + 0.6 * (1.0 - heightAbove)) * motionScale * uDt * 30.0;
+
+    // 2 · Rising asymmetric vortex-particle ring. A small set of analytic
+    // Gaussian vortices climbs with the plume; seeded offsets make radii,
+    // heights and strengths unequal so the silhouette rolls asymmetrically
+    // and never shows two mirrored curls.
+    float ringRise = mix(0.08, 0.46, smoothstep(0.02, 0.5, uNormalizedTime));
+    float ringLife = smoothstep(0.015, 0.08, uNormalizedTime)
+      * (1.0 - smoothstep(0.72, 1.15, uNormalizedTime));
+    float ringStrength = uPlumeParams.y * ringLife * motionScale;
+    if (ringStrength > 0.0001) {
+      // Four vortices: two forming the primary cap torus (unequal), two
+      // smaller secondary rolls higher up. Offsets come from the existing
+      // deterministic seed vectors, so replay is exact.
+      vec4 vxA = vec4( 0.11 + uSeedOffsetsA.y * 0.03,  ringRise + uSeedOffsetsA.z * 0.05,  1.00, 0.085);
+      vec4 vxB = vec4(-0.13 + uSeedOffsetsA.w * 0.03,  ringRise + uSeedOffsetsB.x * 0.05, -0.86, 0.10);
+      vec4 vxC = vec4( 0.07 + uSeedOffsetsB.y * 0.025, ringRise + 0.14 + uSeedOffsetsB.z * 0.04,  0.62, 0.06);
+      vec4 vxD = vec4(-0.06 + uSeedOffsetsB.w * 0.025, ringRise + 0.17 + uSeedOffsetsA.x * 0.04, -0.54, 0.055);
+      vec2 acc = vec2(0.0);
+      for (int i = 0; i < 4; i++) {
+        vec4 vtx = i == 0 ? vxA : i == 1 ? vxB : i == 2 ? vxC : vxD;
+        vec2 center = uSourceCenter + vec2(vtx.x, vtx.y);
+        vec2 d = vUv - center;
+        float r2 = vtx.w * vtx.w;
+        float w = exp(-dot(d, d) / max(0.0006, r2));
+        vec2 tangent = vec2(-d.y, d.x) / max(length(d), 0.004);
+        acc += tangent * (vtx.z * w);
+      }
+      velocity += acc * ringStrength * (0.06 + 0.03 * uEnergy) * uDt * 60.0;
+    }
+    float speedCap = length(velocity);
+    if (speedCap > 1.55) velocity *= 1.55 / speedCap;
+  }
+
   velocity *= pow(clamp(uProfileDecay.x, 0.9, 1.0), uDt * 60.0);
   velocity *= boundaryMask(vUv);
   float speed = length(velocity);
@@ -1121,7 +1203,14 @@ void main() {
   temperature = max(0.0,
     temperature * exp(-uCooling * uProfileDecay.y * uDt * (0.42 + smoke * 0.08)) - radiativeLoss
   );
-  smoke *= pow(clamp(uDissipation * uProfileDecay.w, 0.9, 1.0), uDt * 60.0);
+  // Tsar-scale persistence (uPlumeParams.z): the monumental cloud must retain
+  // visible mass across its long timeline, so smoke dissipation is nudged
+  // toward unity for the Tsar reference only (inert elsewhere). Deferred
+  // dissipation is a documented CG smoke technique (Fedkiw/Stam/Jensen 2001:
+  // low numerical dissipation keeps large plumes alive).
+  float smokeRetention = uDissipation * uProfileDecay.w;
+  if (uPlumeMode > 0.5) smokeRetention = mix(smokeRetention, 1.0, clamp(uPlumeParams.z, 0.0, 0.9));
+  smoke *= pow(clamp(smokeRetention, 0.9, 1.0), uDt * 60.0);
   dust *= pow(clamp(uDissipation * uProfileDecay.w - 0.0015, 0.88, 1.0), uDt * 60.0);
   incandescent *= exp(-uCooling * uProfileDecay.y * uDt * 1.65);
 
@@ -1132,11 +1221,17 @@ void main() {
   // The top margin absorbs far more gently than the sides so a developed cap
   // resting near the stratification ceiling persists through the late
   // timeline instead of being silently destroyed.
-  float sideGuard = smoothstep(0.0, 0.12, vUv.x)
-    * smoothstep(0.0, 0.12, 1.0 - vUv.x);
-  float topGuard = smoothstep(0.0, 0.055, 1.0 - vUv.y);
+  // The broad Tsar cap spreads wider and higher than other events, so its
+  // side/top guard bands are narrowed for that profile only — otherwise the
+  // umbrella's outer edges would be absorbed before they finish rolling.
+  float sideMargin = uPlumeMode > 0.5 ? 0.075 : 0.12;
+  float topMargin = uPlumeMode > 0.5 ? 0.035 : 0.055;
+  float sideGuard = smoothstep(0.0, sideMargin, vUv.x)
+    * smoothstep(0.0, sideMargin, 1.0 - vUv.x);
+  float topGuard = smoothstep(0.0, topMargin, 1.0 - vUv.y);
+  float topRetain = uPlumeMode > 0.5 ? 0.985 : 0.965;
   float guardRetention = mix(pow(0.8, uDt * 60.0), 1.0, sideGuard)
-    * mix(pow(0.965, uDt * 60.0), 1.0, topGuard);
+    * mix(pow(topRetain, uDt * 60.0), 1.0, topGuard);
   temperature *= guardRetention;
   smoke *= guardRetention;
   incandescent *= guardRetention;
@@ -2055,6 +2150,7 @@ function physicalSignature(settings, tier) {
     settings.smokeConversion,
     settings.dissipation,
     settings.capWidthBoost,
+    settings.profileId,
     tierRuntimeSignature(tier),
   ].join('|');
 }
@@ -2940,6 +3036,16 @@ export class ResearchFluidEngine {
     this._uniform4f(program, 'uProfilePhysics', ...state.physics);
     this._uniform4f(program, 'uProfileDecay', ...state.decay);
     this._uniform4f(program, 'uProfileAux', ...state.profileAux);
+    const plume = this.profile.plume || { mode: 0, expansion: 0, vortex: 0, persistence: 0, widen: 0 };
+    this._uniform1f(program, 'uPlumeMode', plume.mode > 0 ? 1 : 0);
+    this._uniform4f(
+      program,
+      'uPlumeParams',
+      finite(plume.expansion, 0),
+      finite(plume.vortex, 0),
+      finite(plume.persistence, 0),
+      finite(plume.widen, 0),
+    );
   }
 
   _bindVolumeProfileUniforms(program) {
