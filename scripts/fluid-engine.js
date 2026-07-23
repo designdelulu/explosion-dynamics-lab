@@ -604,8 +604,11 @@ vec4 sampleField(sampler2D field, vec2 uv) {
 }
 
 float boundaryMask(vec2 uv) {
-  vec2 lower = smoothstep(vec2(0.0), vec2(0.018), uv);
-  vec2 upper = smoothstep(vec2(0.0), vec2(0.018), 1.0 - uv);
+  // Wider, softer damping margins on the open sides and top behave like an
+  // absorbing outflow boundary; the ground margin stays narrow so surface
+  // interaction is preserved.
+  vec2 lower = smoothstep(vec2(0.0), vec2(0.03, 0.018), uv);
+  vec2 upper = smoothstep(vec2(0.0), vec2(0.03, 0.06), 1.0 - uv);
   return lower.x * lower.y * upper.x * upper.y;
 }
 `;
@@ -1060,6 +1063,19 @@ void main() {
   dust *= pow(clamp(uDissipation * uProfileDecay.w - 0.0015, 0.88, 1.0), uDt * 60.0);
   incandescent *= exp(-uCooling * uProfileDecay.y * uDt * 1.65);
 
+  // Open-boundary guard band: material entering the outer side/top margins is
+  // absorbed instead of piling against the domain wall, so the plume can
+  // never form a flat wall-shaped silhouette. The ground boundary is exempt —
+  // surface interaction keeps its material.
+  float guard = smoothstep(0.0, 0.12, vUv.x)
+    * smoothstep(0.0, 0.12, 1.0 - vUv.x)
+    * smoothstep(0.0, 0.12, 1.0 - vUv.y);
+  float guardRetention = mix(pow(0.8, uDt * 60.0), 1.0, guard);
+  temperature *= guardRetention;
+  smoke *= guardRetention;
+  incandescent *= guardRetention;
+  dust *= guardRetention;
+
   float afterOnset = step(0.000001, uTime);
   float flashEnvelope = exp(-uNormalizedTime * 54.0) * afterOnset;
   float fireEnvelope = smoothstep(0.0, 0.012, uNormalizedTime)
@@ -1383,7 +1399,11 @@ void main() {
   float plume = clamp(mix(maskedPlume, rawPlume, diagnostic), 0.0, 1.0);
   float lifetimeScale = uTracerType == 4 || uTracerType == 5 ? 1.5 : (uTracerType == 6 ? 0.62 : 1.0);
   float ageFade = 1.0 - smoothstep(2.4 * lifetimeScale, 4.8 * lifetimeScale, state.z);
-  float alpha = mix(plume * 0.34, 0.88, diagnostic) * ageFade;
+  // Tracer points share the domain-edge extinction of the volume (beauty
+  // view only — diagnostics keep full visibility for verification).
+  float edgeFade = smoothstep(0.0, 0.12, state.x) * smoothstep(0.0, 0.12, 1.0 - state.x)
+    * smoothstep(0.0, 0.16, 1.0 - state.y) * smoothstep(0.0, 0.03, state.y);
+  float alpha = mix(plume * 0.34, 0.88, diagnostic) * ageFade * mix(edgeFade, 1.0, diagnostic);
   vec3 warm = mix(uTracerColorA, uTracerColorB,
     clamp(scalar.r + scalar.b, 0.0, 1.0));
   float particulate = clamp(scalar.a * 0.75 + scalar.g * 0.22, 0.0, 1.0);
@@ -1468,6 +1488,23 @@ vec3 toneMap(vec3 color) {
     (color * (2.43 * color + 0.59) + 0.14), 0.0, 1.0);
   vec3 reinhard = color / (vec3(1.0) + color);
   return mix(aces, reinhard, clamp(uVolumeProfile2.y, 0.0, 1.0));
+}
+
+// Organic extinction toward the simulation-domain boundary. Wide, nonlinear,
+// seeded-asymmetric side and top zones with low-frequency wobble dissolve
+// density, emission, scattering, and bloom well before the computational
+// edge, so no rectangular or capsule silhouette can ever appear. The ground
+// edge keeps a deliberately narrow band to preserve surface contact.
+float edgeExtinction(vec2 uv, float wobble, float asymmetry) {
+  float leftWidth = clamp(0.2 + asymmetry + wobble * 0.06, 0.09, 0.34);
+  float rightWidth = clamp(0.2 - asymmetry - wobble * 0.05, 0.09, 0.34);
+  float topWidth = clamp(0.26 + wobble * 0.07, 0.14, 0.38);
+  float side = smoothstep(0.0, leftWidth, uv.x)
+    * smoothstep(0.0, rightWidth, 1.0 - uv.x);
+  float top = smoothstep(0.0, topWidth, 1.0 - uv.y);
+  float ground = smoothstep(0.0, 0.04, uv.y);
+  float mask = side * top * ground;
+  return mask * mask * (3.0 - 2.0 * mask);
 }
 
 float velocityGlyph(vec2 localUv, vec2 velocity) {
@@ -1595,6 +1632,14 @@ void main() {
   vec3 sourceRadiance = heatRamp(sourceHeat)
     * clamp(sourceLightSample.b * uLayerVisibility.x + sourceHeat * 0.12, 0.0, 2.0);
   float seedPhase = float(uSeed & 1023u) / 1023.0;
+  // Deterministic low-frequency boundary variation: the extinction border
+  // drifts slowly and differs between seeds, never reading as one straight
+  // fade distance on all sides.
+  float boundaryWobble = decodeCurlDetail(sampleCurlDetail(
+    uCurlDetail,
+    vec3(localUv * vec2(1.3, 1.7), seedPhase + uTime * 0.0012)
+  )).z;
+  float sideAsymmetry = (fract(seedPhase * 7.31) - 0.5) * 0.06;
   float inverseSteps = 1.0 / float(max(uRaySteps, 1));
   const int MAX_RAY_STEPS = 48;
   for (int index = 0; index < MAX_RAY_STEPS; index += 1) {
@@ -1630,12 +1675,10 @@ void main() {
     layerUv.y += depth * depth * 0.011 * uVolumeProfile1.y;
     layerUv += curlOffset * 0.019 * radialWeight;
 
-    // Fade density toward the simulation-domain edges so clamped samples never
-    // duplicate into visible bands or a hard box around the volume.
-    float layerFade = smoothstep(0.0, 0.05, layerUv.x)
-      * smoothstep(0.0, 0.05, 1.0 - layerUv.x)
-      * smoothstep(0.0, 0.03, layerUv.y)
-      * smoothstep(0.0, 0.09, 1.0 - layerUv.y);
+    // Organic extinction toward the domain edges: clamped samples can never
+    // duplicate into visible bands, and density dissolves long before the
+    // computational boundary.
+    float layerFade = edgeExtinction(layerUv, boundaryWobble, sideAsymmetry);
     vec4 scalar = sampleField(uScalar, layerUv);
     float smokeDensity = max(0.0, scalar.g * 0.9 * uLayerVisibility.y);
     float dustDensity = max(0.0,
@@ -1699,9 +1742,12 @@ void main() {
     emission += uPaletteCore
       * pow(clamp((temperature - 1.5) * 0.85, 0.0, 1.0), 2.0)
       * (0.4 + incandescent * 0.45);
-    float edgeScatter = pow(max(0.0, 1.0 - radialWeight), 1.7) * smoke * 0.12;
+    // Every radiance source is masked by the same extinction as density —
+    // saturated emission can never outline the domain where alpha has faded.
+    emission *= layerFade;
+    float edgeScatter = pow(max(0.0, 1.0 - radialWeight), 1.7) * smoke * 0.12 * layerFade;
     vec3 fireScatter = sourceRadiance * smoke * lightTransmittance
-      * (0.085 + forwardLobe * 0.15);
+      * (0.085 + forwardLobe * 0.15) * layerFade;
     vec3 layerColor = smokeColor * smoke + emission + fireScatter
       + mix(uPaletteSmokeLight, uPaletteCore, 0.18) * edgeScatter;
     accumulated += transmittance * alpha * layerColor;
@@ -1723,7 +1769,10 @@ void main() {
       + neighbor.b * uLayerVisibility.x;
     bloom += heatRamp(neighborHeat) * neighbor.b * uLayerVisibility.x;
   }
-  accumulated += bloom * 0.018 * uPhase.x * uVolumeProfile0.w;
+  // Bloom is extracted after the same boundary extinction so it can never
+  // spread clipped edge pixels back into view.
+  accumulated += bloom * 0.018 * uPhase.x * uVolumeProfile0.w
+    * edgeExtinction(distortedUv, boundaryWobble, sideAsymmetry);
   accumulated += uPaletteBackground * uVolumeProfile2.z * (1.0 - transmittance) * 0.12;
 
   // Density governs opacity across the fire-to-cloud handoff. Phase values
@@ -1735,12 +1784,10 @@ void main() {
     1.08
   );
   float atmosphericFade = 1.0 - clamp(uPhase.z * 0.46, 0.0, 0.58);
-  // Soften the outer volume boundary so the simulation rectangle itself can
-  // never appear as a hard box against the analytical environment behind it.
-  float domainFade = smoothstep(0.0, 0.035, localUv.x)
-    * smoothstep(0.0, 0.035, 1.0 - localUv.x)
-    * smoothstep(0.0, 0.025, localUv.y)
-    * smoothstep(0.0, 0.07, 1.0 - localUv.y);
+  // The composite alpha shares the organic extinction (gently, as its square
+  // root — per-layer density and emission already carry the full mask), so
+  // the volume rectangle can never appear against the environment behind it.
+  float domainFade = sqrt(edgeExtinction(localUv, boundaryWobble, sideAsymmetry));
   float alpha = clamp((1.0 - transmittance) * atmosphericFade * domainFade, 0.0, 0.98);
   vec3 mapped = toneMap(accumulated * illuminationEnvelope);
   outputColor = vec4(mapped * alpha, alpha);

@@ -1329,7 +1329,12 @@ export class ExplosionRenderer {
       ? LabData.cubeRootScale(this.settings.energy, 1)
       : Math.cbrt(Math.max(0.05, this.settings.energy));
     const cameraScale = clamp(1.55 - this.settings.cameraDistance / 180, 0.55, 1.35);
-    const scale = energyScale * this._behavior.scale * cameraScale;
+    // Automatic pullback on narrow (portrait) viewports: large events keep
+    // their full silhouette inside the padded render domain instead of
+    // walling against its sides. Landscape and desktop framing (aspect >= 1)
+    // is unchanged.
+    const aspectPullback = clamp(0.62 + 0.38 * (width / Math.max(1, height)), 0.75, 1);
+    const scale = energyScale * this._behavior.scale * cameraScale * aspectPullback;
     const angleOffset = (this.settings.cameraAngle / 45) * width * 0.035;
     const originX = this._origin.x * width + angleOffset;
     const surfaceY = clamp(this._origin.y * height + (this.settings.cameraAngle / 45) * height * 0.025, height * 0.58, height * 0.88);
