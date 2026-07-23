@@ -42,7 +42,7 @@ const uniqueIds = (items, label) => {
   for (const id of ids) assert.equal(id, safeSlug(id), `${label} ID is not a safe slug: ${id}`);
 };
 
-assert.equal(EVENT_PRESETS.length, 12, "Exactly 12 educational presets are required");
+assert.equal(EVENT_PRESETS.length, 16, "Exactly 16 educational presets are required");
 assert.strictEqual(PRESETS, EVENT_PRESETS, "PRESETS should be the canonical preset alias");
 assert.ok(PALETTES.length >= 6 && PALETTES.length <= 7, "Expected 6–7 palettes");
 assert.ok(ENVIRONMENTS.length >= 6, "Expected at least six generic environments");
@@ -80,7 +80,11 @@ const requiredPresetIds = [
   "fictional-plasma-burst",
   "low-yield-nuclear-airburst",
   "nuclear-ground-burst",
-  "extreme-historical-scale"
+  "extreme-historical-scale",
+  "early-fission-test-scale",
+  "hiroshima-scale-reference",
+  "castle-bravo-scale-reference",
+  "tsar-bomba-scale-reference"
 ];
 assert.deepEqual(
   EVENT_PRESETS.map(({ id }) => id),
@@ -244,7 +248,7 @@ assert.deepEqual(
     meteor: 2,
     volcanic: 1,
     "fictional-plasma": 1,
-    "nuclear-scale": 3,
+    "nuclear-scale": 7,
   },
   "Preset-to-family membership changed unexpectedly",
 );

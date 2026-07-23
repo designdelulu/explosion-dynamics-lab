@@ -289,6 +289,30 @@ export const EVENT_RENDERER_MODELS = deepFreeze({
     family: "Nuclear scale · extreme historical",
     profileId: "extreme-historical-fluid-v1",
     sourcePrimitives: ["radial-impulse", "ring-source", "vertical-jet", "multiple-offset-kernels", "paired-cap-vortices"]
+  },
+  "early-fission-test-scale": {
+    familyId: "nuclear-scale",
+    family: "Nuclear scale · early fission reference",
+    profileId: "early-fission-reference-fluid-v1",
+    sourcePrimitives: ["radial-impulse", "ground-sheet", "vertical-jet", "paired-cap-vortices"]
+  },
+  "hiroshima-scale-reference": {
+    familyId: "nuclear-scale",
+    family: "Nuclear scale · early airburst reference",
+    profileId: "hiroshima-scale-reference-fluid-v1",
+    sourcePrimitives: ["radial-impulse", "vertical-jet", "multiple-offset-kernels", "paired-cap-vortices"]
+  },
+  "castle-bravo-scale-reference": {
+    familyId: "nuclear-scale",
+    family: "Nuclear scale · thermonuclear surface reference",
+    profileId: "castle-bravo-scale-reference-fluid-v1",
+    sourcePrimitives: ["radial-impulse", "ring-source", "ground-sheet", "vertical-jet", "paired-cap-vortices"]
+  },
+  "tsar-bomba-scale-reference": {
+    familyId: "nuclear-scale",
+    family: "Nuclear scale · largest historical reference",
+    profileId: "tsar-bomba-scale-reference-fluid-v1",
+    sourcePrimitives: ["radial-impulse", "ring-source", "vertical-jet", "turbulent-source-cluster", "paired-cap-vortices"]
   }
 });
 
@@ -418,8 +442,8 @@ export const PALETTES = deepFreeze([
 export const ENVIRONMENTS = deepFreeze([
   {
     id: "abstract-city",
-    name: "Abstract City",
-    description: "A fictional low-detail skyline used only to provide visual scale.",
+    name: "Meridian City — Fictional",
+    description: "A layered, entirely fictional skyline (working name Meridian City) used only to provide visual scale and stylized response.",
     ground: "#171b20",
     horizon: "#38414a",
     dustTint: "#70757a",
@@ -880,6 +904,141 @@ export const EVENT_PRESETS = deepFreeze([
       ["mushroom-development", 12.8, 45.2, 1.86],
       ["atmospheric-drift", 20, 47.5, 1.32],
       ["dissipation", 37, 47.5, 0.64]
+    ])
+  }),
+  createPreset({
+    id: "early-fission-test-scale",
+    name: "Early Fission Test Scale",
+    shortName: "Early Fission Scale",
+    category: "nuclear-scale-visual",
+    burstType: "surface",
+    description: "A broad visual reference for the earliest fission-test scale: a hard dawn flash, compact fireball, dusty skirt, and a modest early mushroom column over an open fictional desert.",
+    educationalNote: "Early test imagery is dominated by the pre-dawn flash, a fast compact fireball, and a dust-heavy low stem; the cap here stays smaller and dirtier than later archetypes.",
+    safetyNote: "A broad public visual scale category only. No device design, geometry, materials, siting, or performance information is included or implied.",
+    relativeVisualEnergy: 60,
+    energyLabel: "Early fission visual category",
+    energyRange: [0.7, 1.2],
+    duration: 26,
+    defaultEnvironmentId: "desert",
+    defaultTimeId: "dawn",
+    defaultPaletteId: "white-hot",
+    defaultAltitude: 0.04,
+    particleBudget: { low: 1050, balanced: 2300, high: 4300 },
+    render: { flash: 1.86, fireballRadius: 0.96, fireballGrowth: 1.5, shockRadius: 1.3, shockThickness: 0.5, surfaceInteraction: 1.28, debris: 0.7, dust: 1.42, smoke: 1.05, columnRise: 1.12, cloudSpread: 0.92, turbulence: 1.18, windResponse: 0.66, atmosphericLight: 1.66, heatDistortion: 1.22, cameraShake: 1.05 },
+    overview: { luminous: 0.82, innerWave: 1.05, outerWave: 1.3, particulate: 1.15 },
+    phases: phaseList([
+      ["detonation", 0, 0.14, 1, "outExpo"],
+      ["peak-flash", 0, 0.95, 1.86, "outExpo"],
+      ["fireball-expansion", 0.03, 3.2, 1.18, "outCubic"],
+      ["shock-front", 0.1, 7.4, 1.28, "outCubic"],
+      ["surface-interaction", 0.06, 8.8, 1.26],
+      ["dust-debris", 0.15, 13.6, 1.38],
+      ["column-rise", 1, 16.4, 1.14],
+      ["cloud-formation", 3.6, 20.5, 1.02],
+      ["mushroom-development", 6.2, 22.4, 0.96],
+      ["atmospheric-drift", 11.5, 26, 0.7],
+      ["dissipation", 19, 26, 0.72]
+    ])
+  }),
+  createPreset({
+    id: "hiroshima-scale-reference",
+    name: "Hiroshima-Scale Historical Reference",
+    shortName: "Hiroshima-Scale Reference",
+    category: "nuclear-scale-visual",
+    burstType: "airburst",
+    description: "A broad historical-scale airburst reference: an intense elevated flash, rapidly climbing narrow column, and the classic tall, compact mushroom silhouette over an abstract range.",
+    educationalNote: "Compared with later thermonuclear archetypes, this early-airburst category shows a narrower stem, a smaller cap, faster cap definition, and far less surface dust because the burst is elevated.",
+    safetyNote: "Historical scale is contextual and visual only. No targeting, location, damage, casualty, or weapon-design information is included.",
+    relativeVisualEnergy: 85,
+    energyLabel: "Early airburst visual category",
+    energyRange: [0.7, 1.2],
+    duration: 30,
+    defaultEnvironmentId: "flat-range",
+    defaultTimeId: "day",
+    defaultPaletteId: "white-hot",
+    defaultAltitude: 0.34,
+    particleBudget: { low: 1150, balanced: 2500, high: 4700 },
+    render: { flash: 1.78, fireballRadius: 1.08, fireballGrowth: 1.44, shockRadius: 1.46, shockThickness: 0.52, surfaceInteraction: 0.42, debris: 0.12, dust: 0.5, smoke: 1.08, columnRise: 1.52, cloudSpread: 1.18, turbulence: 1.2, windResponse: 0.9, atmosphericLight: 1.72, heatDistortion: 1.3, cameraShake: 1 },
+    overview: { luminous: 0.9, innerWave: 1.16, outerWave: 1.46, particulate: 0.6 },
+    phases: phaseList([
+      ["detonation", 0, 0.15, 1, "outExpo"],
+      ["peak-flash", 0, 1.05, 1.78, "outExpo"],
+      ["fireball-expansion", 0.04, 4.1, 1.3, "outCubic"],
+      ["shock-front", 0.11, 8.6, 1.44, "outCubic"],
+      ["surface-interaction", 0.85, 6.6, 0.4],
+      ["column-rise", 1.4, 19.2, 1.5],
+      ["cloud-formation", 4.4, 24.6, 1.34],
+      ["mushroom-development", 7.2, 26.8, 1.4],
+      ["atmospheric-drift", 12.6, 30, 0.84],
+      ["dissipation", 22.5, 30, 0.66]
+    ])
+  }),
+  createPreset({
+    id: "castle-bravo-scale-reference",
+    name: "Castle Bravo-Scale Historical Reference",
+    shortName: "Castle Bravo-Scale Reference",
+    category: "nuclear-scale-visual",
+    burstType: "surface",
+    description: "A broad thermonuclear surface-test reference: an enormous slow-blooming fireball, a wide moisture-laden shock shell over open water, and a massive flattened cap with a thick stem.",
+    educationalNote: "Surface-coupled thermonuclear test imagery reads wider and dirtier than an elevated burst: a broad fireball, heavy lofted material, a squat stem, and an umbrella cap that keeps spreading.",
+    safetyNote: "A public visual scale category with no test-site geography, device details, fallout modeling, or any predictive content.",
+    relativeVisualEnergy: 520,
+    energyLabel: "Thermonuclear surface visual category",
+    energyRange: [0.55, 1.05],
+    duration: 42,
+    defaultEnvironmentId: "ocean",
+    defaultTimeId: "dawn",
+    defaultPaletteId: "white-hot",
+    defaultAltitude: 0.02,
+    particleBudget: { low: 1750, balanced: 3800, high: 7100 },
+    render: { flash: 1.92, fireballRadius: 1.62, fireballGrowth: 1.06, shockRadius: 1.74, shockThickness: 0.82, surfaceInteraction: 1.38, debris: 0.62, dust: 1.34, smoke: 1.62, columnRise: 1.5, cloudSpread: 1.86, turbulence: 1.42, windResponse: 1.18, atmosphericLight: 1.9, heatDistortion: 1.52, cameraShake: 1.35 },
+    overview: { luminous: 1.12, innerWave: 1.4, outerWave: 1.76, particulate: 1.3 },
+    phases: phaseList([
+      ["detonation", 0, 0.2, 1, "outExpo"],
+      ["peak-flash", 0, 1.8, 1.92, "outExpo"],
+      ["fireball-expansion", 0.05, 7.4, 1.6, "outCubic"],
+      ["shock-front", 0.16, 14.8, 1.72, "outCubic"],
+      ["surface-interaction", 0.1, 12.6, 1.36],
+      ["dust-debris", 0.4, 21.5, 1.28],
+      ["column-rise", 1.9, 30.5, 1.5],
+      ["cloud-formation", 6.2, 36.4, 1.78],
+      ["mushroom-development", 10.8, 38.6, 1.72],
+      ["atmospheric-drift", 17.5, 42, 1.18],
+      ["dissipation", 32, 42, 0.66]
+    ])
+  }),
+  createPreset({
+    id: "tsar-bomba-scale-reference",
+    name: "Tsar Bomba-Scale Historical Reference",
+    shortName: "Tsar Bomba-Scale Reference",
+    category: "nuclear-scale-visual",
+    burstType: "high-air",
+    description: "The upper end of the historical atmospheric-test scale: a prolonged elevated flash, a colossal clean fireball, and a towering long-lived cap seen from a deliberately distant camera.",
+    educationalNote: "The largest historical airburst category is shown elevated and comparatively clean: little surface dust, an immense slow cap, extreme atmospheric illumination, and the longest visible timeline.",
+    safetyNote: "Historical scale appears only as broad visual context. No yield engineering, delivery, targeting, damage, or casualty content exists here.",
+    relativeVisualEnergy: 900,
+    energyLabel: "Largest historical visual category",
+    energyRange: [0.5, 0.95],
+    duration: 54,
+    defaultEnvironmentId: "mountain-valley",
+    defaultTimeId: "day",
+    defaultPaletteId: "white-hot",
+    defaultAltitude: 0.56,
+    particleBudget: { low: 1950, balanced: 4300, high: 7900 },
+    render: { flash: 2, fireballRadius: 1.8, fireballGrowth: 1.02, shockRadius: 1.92, shockThickness: 0.92, surfaceInteraction: 0.52, debris: 0.2, dust: 0.62, smoke: 1.62, columnRise: 1.96, cloudSpread: 1.94, turbulence: 1.42, windResponse: 1.24, atmosphericLight: 2, heatDistortion: 1.72, cameraShake: 1.5 },
+    overview: { luminous: 1.26, innerWave: 1.6, outerWave: 1.96, particulate: 0.98 },
+    phases: phaseList([
+      ["detonation", 0, 0.24, 1, "outExpo"],
+      ["peak-flash", 0, 2.6, 2, "outExpo"],
+      ["fireball-expansion", 0.06, 9.8, 1.78, "outCubic"],
+      ["shock-front", 0.2, 20.5, 1.9, "outCubic"],
+      ["surface-interaction", 1.6, 15.8, 0.5],
+      ["dust-debris", 2.2, 26.4, 0.6],
+      ["column-rise", 2.6, 43.5, 1.96],
+      ["cloud-formation", 8.4, 48.6, 1.9],
+      ["mushroom-development", 14.5, 51.5, 1.94],
+      ["atmospheric-drift", 23, 54, 1.36],
+      ["dissipation", 42, 54, 0.62]
     ])
   })
 ]);

@@ -191,6 +191,7 @@ const BASE_PROFILE = Object.freeze({
     trailLength: 0,
     clusterSpread: 1,
     capScale: 1,
+    capRoll: 1,
   }),
   physics: Object.freeze({
     buoyancy: 1,
@@ -371,7 +372,9 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       // 2026-07-23 visual pass: widen the rendered volume so the domain's
       // pixel aspect stops stretching the fireball into an egg and the cap
       // has lateral room; slow cooling so the hot history persists into the
-      // rising column.
+      // rising column. Cap circulation and umbrella roll are strengthened so
+      // the classic silhouette reads from the cap alone.
+      source: { capScale: 1.22, capRoll: 1.25 },
       physics: { buoyancy: 0.88, cooling: 0.78, scalarRetention: 1 },
       volume: { scaleX: 1.48, scaleY: 1.04, shadow: 1.18, exposure: 1.06 },
     },
@@ -398,8 +401,63 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       sourcePrimitives: ['radial-impulse', 'ring-source', 'vertical-jet', 'multiple-offset-kernels', 'paired-cap-vortices'],
       source: { centerY: 0.37, radius: 0.092, aspectX: 1.15, aspectY: 0.92, onsetEnd: 0.055, sustainEnd: 0.78, pulseFrequency: 1.4, radial: 1.22, vertical: 1.38, turbulence: 1.48, heat: 1.42, smoke: 1.45, incandescent: 1.3, dust: 0.75, ringRadius: 1.75, clusterSpread: 1.62, capScale: 1.32 },
       physics: { buoyancy: 0.98, densityLoading: 1.12, windCoupling: 1.42, vorticity: 1.5, velocityRetention: 0.996, cooling: 0.68, smokeConversion: 1.08, scalarRetention: 0.9997 },
-      volume: { scaleX: 1.5, scaleY: 1.66, depth: 1.42, opacity: 1.34, shadow: 1.5, bloom: 1.52, distortion: 1.28, erosion: 0.88, noiseScale: 0.92, dustVisibility: 1, exposure: 1.18, toneMap: 0.08, backgroundIllumination: 0.44, emissionCurve: 0.78 },
+      volume: { scaleX: 1.34, scaleY: 1.4, depth: 1.42, opacity: 1.34, shadow: 1.5, bloom: 1.52, distortion: 1.28, erosion: 0.88, noiseScale: 0.92, dustVisibility: 1, exposure: 1.18, toneMap: 0.08, backgroundIllumination: 0.44, emissionCurve: 0.78 },
       quality: { grid: 1.12, pressure: 1.16, rays: 1.18, tracers: 1.42, detail: 1.25 },
+    },
+  ),
+  // Historical visual-reference profiles. Each uses only broad public visual
+  // characteristics (flash duration, cloud proportion, dust loading, timeline
+  // pacing); none encodes device, yield-engineering, or targeting information.
+  'early-fission-test-scale': defineFluidProfile(
+    'early-fission-test-scale',
+    'early-fission-reference-fluid-v1',
+    {
+      eventFamilyId: 'nuclear-scale', eventFamily: 'Nuclear scale · early fission reference', profileKind: 12,
+      tracerType: 'particulate',
+      sourcePrimitives: ['radial-impulse', 'ground-sheet', 'vertical-jet', 'paired-cap-vortices'],
+      source: { centerY: 0.21, groundLevel: 0.18, radius: 0.06, aspectX: 1.18, aspectY: 0.8, onsetEnd: 0.05, sustainEnd: 0.46, radial: 1.15, vertical: 1.2, turbulence: 1.05, heat: 1.18, smoke: 1.05, incandescent: 1.05, dust: 1.6, capScale: 0.88, capRoll: 0.85 },
+      physics: { buoyancy: 0.84, densityLoading: 1.3, windCoupling: 0.92, vorticity: 1.3, velocityRetention: 0.988, cooling: 1.05, smokeConversion: 1.15, scalarRetention: 0.998 },
+      volume: { scaleX: 1.34, scaleY: 1.12, depth: 1.05, opacity: 1.3, shadow: 1.35, bloom: 1.02, distortion: 1.02, erosion: 1.08, noiseScale: 1.22, dustVisibility: 1.6, exposure: 1.05, toneMap: 0.08, backgroundIllumination: 0.2, emissionCurve: 0.88 },
+      quality: { grid: 1, pressure: 1, rays: 1, tracers: 1.1, detail: 1 },
+    },
+  ),
+  'hiroshima-scale-reference': defineFluidProfile(
+    'hiroshima-scale-reference',
+    'hiroshima-scale-reference-fluid-v1',
+    {
+      eventFamilyId: 'nuclear-scale', eventFamily: 'Nuclear scale · early airburst reference', profileKind: 13,
+      tracerType: 'thermal',
+      sourcePrimitives: ['radial-impulse', 'vertical-jet', 'multiple-offset-kernels', 'paired-cap-vortices'],
+      source: { centerY: 0.33, radius: 0.06, aspectX: 0.95, aspectY: 0.9, onsetEnd: 0.05, sustainEnd: 0.42, radial: 1.05, vertical: 1.32, turbulence: 0.95, heat: 1.22, smoke: 1.02, incandescent: 1.1, dust: 0.42, clusterSpread: 1.1, capScale: 0.96, capRoll: 1.05 },
+      physics: { buoyancy: 0.94, densityLoading: 0.98, windCoupling: 0.98, vorticity: 1.18, velocityRetention: 0.992, cooling: 0.85, smokeConversion: 1.05, scalarRetention: 0.999 },
+      volume: { scaleX: 1.32, scaleY: 1.22, depth: 1.05, opacity: 1.12, shadow: 1.22, bloom: 1.18, distortion: 1.1, erosion: 1, noiseScale: 1.12, dustVisibility: 0.55, exposure: 1.1, backgroundIllumination: 0.3, emissionCurve: 0.82 },
+      quality: { grid: 1, pressure: 1, rays: 1.02, tracers: 1.08, detail: 1 },
+    },
+  ),
+  'castle-bravo-scale-reference': defineFluidProfile(
+    'castle-bravo-scale-reference',
+    'castle-bravo-scale-reference-fluid-v1',
+    {
+      eventFamilyId: 'nuclear-scale', eventFamily: 'Nuclear scale · thermonuclear surface reference', profileKind: 14,
+      tracerType: 'atmospheric',
+      sourcePrimitives: ['radial-impulse', 'ring-source', 'ground-sheet', 'vertical-jet', 'paired-cap-vortices'],
+      source: { centerY: 0.2, groundLevel: 0.18, radius: 0.088, aspectX: 1.5, aspectY: 0.85, onsetEnd: 0.06, sustainEnd: 0.72, pulseFrequency: 1.6, radial: 1.26, vertical: 1.4, turbulence: 1.35, heat: 1.35, smoke: 1.6, incandescent: 1.22, dust: 1.72, ringRadius: 1.6, capScale: 1.42, capRoll: 1.3 },
+      physics: { buoyancy: 0.96, densityLoading: 1.32, windCoupling: 1.3, vorticity: 1.42, velocityRetention: 0.995, cooling: 0.72, smokeConversion: 1.15, scalarRetention: 0.9996 },
+      volume: { scaleX: 1.36, scaleY: 1.34, depth: 1.35, opacity: 1.42, shadow: 1.55, bloom: 1.32, distortion: 1.22, erosion: 0.92, noiseScale: 1.02, dustVisibility: 1.55, exposure: 1.1, toneMap: 0.1, backgroundIllumination: 0.34, emissionCurve: 0.84 },
+      quality: { grid: 1.08, pressure: 1.1, rays: 1.12, tracers: 1.3, detail: 1.15 },
+    },
+  ),
+  'tsar-bomba-scale-reference': defineFluidProfile(
+    'tsar-bomba-scale-reference',
+    'tsar-bomba-scale-reference-fluid-v1',
+    {
+      eventFamilyId: 'nuclear-scale', eventFamily: 'Nuclear scale · largest historical reference', profileKind: 15,
+      tracerType: 'atmospheric',
+      sourcePrimitives: ['radial-impulse', 'ring-source', 'vertical-jet', 'turbulent-source-cluster', 'paired-cap-vortices'],
+      source: { centerY: 0.4, radius: 0.098, aspectX: 1.12, aspectY: 0.95, onsetEnd: 0.06, sustainEnd: 0.85, pulseFrequency: 1.2, radial: 1.18, vertical: 1.46, turbulence: 1.4, heat: 1.5, smoke: 1.42, incandescent: 1.35, dust: 0.4, ringRadius: 1.85, clusterSpread: 1.7, capScale: 1.58, capRoll: 1.42 },
+      physics: { buoyancy: 1.02, densityLoading: 1.05, windCoupling: 1.35, vorticity: 1.48, velocityRetention: 0.9965, cooling: 0.62, smokeConversion: 1.02, scalarRetention: 0.9998 },
+      volume: { scaleX: 1.36, scaleY: 1.42, depth: 1.48, opacity: 1.3, shadow: 1.45, bloom: 1.6, distortion: 1.3, erosion: 0.85, noiseScale: 0.9, dustVisibility: 0.5, exposure: 1.22, toneMap: 0.06, backgroundIllumination: 0.5, emissionCurve: 0.76 },
+      quality: { grid: 1.14, pressure: 1.18, rays: 1.2, tracers: 1.44, detail: 1.28 },
     },
   ),
 });
@@ -971,8 +1029,12 @@ void main() {
     uWind.x * capDevelopment * 0.42,
     mix(0.075, 0.43, capDevelopment)
   );
-  float capHalfWidth = mix(0.052, 0.155, capDevelopment);
-  float vortexRadius = mix(0.055, 0.13, capDevelopment);
+  // Profile-scaled cap geometry: capScale (uProfileAux.x) widens the paired
+  // vortex separation and radius so large historical archetypes develop a
+  // broader, deeper cap while the preserved research profile stays identical.
+  float capGeometryScale = mix(1.0, uProfileAux.x, 0.55);
+  float capHalfWidth = mix(0.052, 0.155, capDevelopment) * capGeometryScale;
+  float vortexRadius = mix(0.055, 0.13, capDevelopment) * mix(1.0, uProfileAux.x, 0.4);
   vec2 leftDelta = vUv - (capCenter - vec2(capHalfWidth, 0.0));
   vec2 rightDelta = vUv - (capCenter + vec2(capHalfWidth, 0.0));
   vec2 leftScaled = leftDelta / vec2(vortexRadius, vortexRadius * 0.82);
@@ -1012,7 +1074,7 @@ void main() {
   // downward away from the stem, rounding the crown into cap vortices.
   float rimDistance = abs(vUv.x - uSourceCenter.x);
   velocity.y -= ceiling * smoothstep(0.09, 0.26, rimDistance)
-    * (smoke + dust * 0.6) * 0.55 * uDt;
+    * (smoke + dust * 0.6) * 0.55 * uProfileAux.y * uDt;
 
   velocity *= pow(clamp(uProfileDecay.x, 0.9, 1.0), uDt * 60.0);
   velocity *= boundaryMask(vUv);
@@ -1067,10 +1129,14 @@ void main() {
   // absorbed instead of piling against the domain wall, so the plume can
   // never form a flat wall-shaped silhouette. The ground boundary is exempt —
   // surface interaction keeps its material.
-  float guard = smoothstep(0.0, 0.12, vUv.x)
-    * smoothstep(0.0, 0.12, 1.0 - vUv.x)
-    * smoothstep(0.0, 0.12, 1.0 - vUv.y);
-  float guardRetention = mix(pow(0.8, uDt * 60.0), 1.0, guard);
+  // The top margin absorbs far more gently than the sides so a developed cap
+  // resting near the stratification ceiling persists through the late
+  // timeline instead of being silently destroyed.
+  float sideGuard = smoothstep(0.0, 0.12, vUv.x)
+    * smoothstep(0.0, 0.12, 1.0 - vUv.x);
+  float topGuard = smoothstep(0.0, 0.055, 1.0 - vUv.y);
+  float guardRetention = mix(pow(0.8, uDt * 60.0), 1.0, sideGuard)
+    * mix(pow(0.965, uDt * 60.0), 1.0, topGuard);
   temperature *= guardRetention;
   smoke *= guardRetention;
   incandescent *= guardRetention;
@@ -1102,10 +1168,10 @@ void main() {
     // arrives after the incandescent phase instead of graying it out, and the
     // hot channels run longer so the white-to-orange-to-smoke history reads.
     float lateSmoke = smoothstep(0.05, 0.13, uNormalizedTime)
-      * (1.0 - smoothstep(0.42, 0.82, uNormalizedTime));
+      * (1.0 - smoothstep(0.5, 0.92, uNormalizedTime));
     temperature += source * core * (flashEnvelope * 2.2 + fireEnvelope * 0.42) * uDt * 8.0;
     incandescent += source * core * (flashEnvelope * 1.5 + fireEnvelope * 0.7) * uDt * 3.4;
-    smoke += source * core * lateSmoke * uDt * 0.62;
+    smoke += source * core * lateSmoke * uDt * 0.8;
 
     // The dust shell is a generic visual interaction cue. Airburst altitude keeps
     // it deliberately subordinate to the rising thermal/smoke volume.
@@ -1960,6 +2026,8 @@ function normalizeSettings(settings = {}, previous = RESEARCH_FLUID_DEFAULTS) {
     cooling: clamp(finite(settings.cooling, previous.cooling), 0.04, 0.8),
     smokeConversion: clamp(finite(settings.smokeConversion, previous.smokeConversion), 0.1, 1.5),
     dissipation: clamp(finite(settings.dissipation, previous.dissipation), 0.94, 1),
+    exposureBoost: clamp(finite(settings.exposureBoost, previous.exposureBoost ?? 1), 0.5, 1.6),
+    capWidthBoost: clamp(finite(settings.capWidthBoost, previous.capWidthBoost ?? 1), 0.6, 1.6),
     tier: normalizeTier(settings.tier ?? previous.tier).id,
     diagnostic: settings.diagnostic ?? previous.diagnostic,
   };
@@ -1986,6 +2054,7 @@ function physicalSignature(settings, tier) {
     settings.cooling,
     settings.smokeConversion,
     settings.dissipation,
+    settings.capWidthBoost,
     tierRuntimeSignature(tier),
   ].join('|');
 }
@@ -2220,9 +2289,11 @@ export class ResearchFluidEngine {
         1.15,
       ),
       clamp(
+        // The vertical cap keeps the full plume silhouette — stem, cap, and
+        // umbrella roll — inside the frame even for the largest archetypes.
         minimumDimension * 0.78 * sceneScale * this.profile.volume.scaleY / this.height,
         0.08,
-        1.65,
+        1.0,
       ),
     ];
     const phaseValues = [
@@ -2267,7 +2338,11 @@ export class ResearchFluidEngine {
         this._uniform2f(program, 'uSourceCenter', sourceCenter[0], sourceCenter[1]);
         this._uniform4f(program, 'uPhase', ...phaseValues);
         this._uniform1f(program, 'uTime', this.simulationTime);
-        this._uniform1f(program, 'uExposure', 1.02 + this.settings.energy * 0.12);
+        this._uniform1f(
+          program,
+          'uExposure',
+          (1.02 + this.settings.energy * 0.12) * (this.settings.exposureBoost || 1),
+        );
         this._uniform1f(program, 'uReducedMotion', this.settings.reducedMotion ? 1 : 0);
         this._uniform1i(program, 'uDiagnostic', diagnostic);
         this._uniform1i(program, 'uRaySteps', raySteps);
@@ -2842,7 +2917,12 @@ export class ResearchFluidEngine {
         this.profile.physics.smokeConversion,
         this.profile.physics.scalarRetention,
       ],
-      profileAux: [source.capScale, 0, 0, 0],
+      profileAux: [
+        source.capScale * clamp(finite(this.settings.capWidthBoost, 1), 0.6, 1.6),
+        finite(source.capRoll, 1),
+        0,
+        0,
+      ],
     };
   }
 
@@ -2912,9 +2992,11 @@ export class ResearchFluidEngine {
     const sourceCenter = this._sourceCenter();
     const sourceUniforms = this._sourceUniformState();
     const windAngle = this.settings.windDirection / 360 * TAU;
+    // Softened coupling keeps late clouds drifting believably instead of
+    // accelerating out of the simulation domain before the timeline ends.
     const wind = [
-      Math.sin(windAngle) * this.settings.windStrength * 0.085,
-      -Math.cos(windAngle) * this.settings.windStrength * 0.022,
+      Math.sin(windAngle) * this.settings.windStrength * 0.052,
+      -Math.cos(windAngle) * this.settings.windStrength * 0.016,
     ];
 
     this._draw('advect', targets.velocity.write, (program) => {
