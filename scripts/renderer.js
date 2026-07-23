@@ -1537,14 +1537,21 @@ export class ExplosionRenderer {
     this._drawEnvironmentSilhouette(context, layout, phase);
     const environmentGround = this._environment.ground || palette.ground;
     const environmentHorizon = this._environment.horizon || palette.groundLight;
+    const environment = String(this.settings.environment).toLowerCase();
+    // The bright horizon seam is softened on natural terrain so the ground
+    // reads as receding land, not a lit strip.
+    const naturalGround = !environment.includes('grid');
     const ground = context.createLinearGradient(0, surfaceY, 0, height + 12);
-    ground.addColorStop(0, colorWithAlpha(environmentHorizon, 0.64));
-    ground.addColorStop(0.08, environmentGround);
+    ground.addColorStop(0, colorWithAlpha(environmentHorizon, naturalGround ? 0.16 : 0.64));
+    ground.addColorStop(naturalGround ? 0.04 : 0.08, environmentGround);
     ground.addColorStop(1, '#030405');
     context.fillStyle = ground;
     context.fillRect(-12, surfaceY, width + 24, height - surfaceY + 24);
 
-    if (this.settings.layers.grid) this._drawPerspectiveGrid(context, layout);
+    // The analytical reference grid belongs to the scientific dark-grid stage
+    // and the overview mode. On cinematic natural terrain it read as a
+    // prototype artifact, so it is suppressed there.
+    if (this.settings.layers.grid && !naturalGround) this._drawPerspectiveGrid(context, layout);
 
     // Qualitative atmospheric darkening: heavy particulate phases pull the sky
     // down so the luminous core and cloud silhouette gain local contrast.
@@ -1749,33 +1756,72 @@ export class ExplosionRenderer {
     }
   }
 
+  /** Smooth multi-octave ridge height in 0..1 from a continuous noise field. */
+  _ridgeHeight(x, salt, octaves = 3) {
+    let value = 0;
+    let amplitude = 0.62;
+    let frequency = 0.9;
+    for (let octave = 0; octave < octaves; octave += 1) {
+      const scaled = x * frequency;
+      const cell = Math.floor(scaled);
+      const frac = scaled - cell;
+      const smooth = frac * frac * (3 - 2 * frac);
+      const a = (hashString(`${this.settings.seed}:${salt}:${octave}:${cell}`) % 1000) / 1000;
+      const b = (hashString(`${this.settings.seed}:${salt}:${octave}:${cell + 1}`) % 1000) / 1000;
+      value += lerp(a, b, smooth) * amplitude;
+      amplitude *= 0.5;
+      frequency *= 2.1;
+    }
+    return value;
+  }
+
+  /**
+   * Layered fictional mountain valley built from a continuous height-noise
+   * field (not triangles): four ridge planes recede with atmospheric
+   * perspective — distant planes are lighter, hazier, and lower-contrast —
+   * over a soft sky-haze band. Unlocated and generic.
+   */
   _drawMountainEnvironment(context, layout, phase) {
     const { width, height, surfaceY } = layout;
     const groundColor = this._environment.ground || this._palette.ground;
     const hazeColor = this._environment.horizon || this._palette.horizon;
+    // Distant sky-haze band grounds the ridge line into the horizon.
+    const skyHaze = context.createLinearGradient(0, surfaceY - height * 0.2, 0, surfaceY);
+    skyHaze.addColorStop(0, colorWithAlpha(hazeColor, 0));
+    skyHaze.addColorStop(1, colorWithAlpha(hazeColor, 0.22));
+    context.fillStyle = skyHaze;
+    context.fillRect(-12, surfaceY - height * 0.2, width + 24, height * 0.2);
+
     const ridges = [
-      { amplitude: 0.085, alpha: 0.34, salt: 'far', segments: 9, base: 0.055 },
-      { amplitude: 0.1, alpha: 0.62, salt: 'mid', segments: 11, base: 0.04 },
-      { amplitude: 0.12, alpha: 0.95, salt: 'near', segments: 13, base: 0.02 },
+      { salt: 'ridgeA', amp: 0.05, base: 0.075, haze: 0.5, contrast: 0.42, octaves: 2, freq: 0.7 },
+      { salt: 'ridgeB', amp: 0.075, base: 0.055, haze: 0.32, contrast: 0.66, octaves: 3, freq: 1.0 },
+      { salt: 'ridgeC', amp: 0.1, base: 0.032, haze: 0.16, contrast: 0.85, octaves: 3, freq: 1.35 },
+      { salt: 'ridgeD', amp: 0.125, base: 0.012, haze: 0.05, contrast: 1, octaves: 4, freq: 1.7 },
     ];
+    const step = Math.max(5, Math.round(width / 190));
     for (const ridge of ridges) {
-      context.fillStyle = colorWithAlpha(groundColor, ridge.alpha);
+      context.save();
       context.beginPath();
-      context.moveTo(-20, surfaceY + 2);
-      for (let index = 0; index <= ridge.segments; index += 1) {
-        const x = -20 + index / ridge.segments * (width + 40);
-        const hash = hashString(`${this.settings.seed}:${ridge.salt}:${index}`);
-        const peak = height * (ridge.base + (hash % 100) / 100 * ridge.amplitude);
-        const valley = Math.abs(x / width - 0.52) * height * 0.07;
-        context.lineTo(x, surfaceY - peak + valley);
+      context.moveTo(-20, surfaceY + 4);
+      for (let x = -20; x <= width + 20; x += step) {
+        const noise = this._ridgeHeight((x / width) * 6 * ridge.freq, ridge.salt, ridge.octaves);
+        const valley = Math.abs(x / width - 0.5) * height * 0.05;
+        const peak = height * (ridge.base + noise * ridge.amp) - valley;
+        context.lineTo(x, surfaceY - peak);
       }
       context.lineTo(width + 20, surfaceY + 4);
       context.closePath();
+      // Atmospheric perspective: distant ridges fade toward the haze color.
+      const bodyAlpha = 0.55 + ridge.contrast * 0.4;
+      const body = context.createLinearGradient(0, surfaceY - height * 0.15, 0, surfaceY);
+      body.addColorStop(0, colorWithAlpha(hazeColor, ridge.haze * 0.7));
+      body.addColorStop(0.55, colorWithAlpha(groundColor, bodyAlpha * (0.6 + ridge.contrast * 0.4)));
+      body.addColorStop(1, colorWithAlpha(groundColor, bodyAlpha));
+      context.fillStyle = body;
       context.fill();
-      // Atmospheric perspective between ridge layers.
-      context.fillStyle = colorWithAlpha(hazeColor, (1 - ridge.alpha) * 0.16);
-      context.fillRect(-12, surfaceY - height * 0.14, width + 24, height * 0.14);
+      context.restore();
     }
+
     // Valley-contained dust response: pooled haze hugging the floor.
     const surface = saturate(phase.surface * this._behavior.dust);
     if (surface > 0.03) {
