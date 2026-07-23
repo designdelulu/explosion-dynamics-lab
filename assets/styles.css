@@ -402,27 +402,34 @@ body.compare-renderers #researchCanvas {
 }
 
 .telemetry {
-  position: absolute;
-  left: 50%;
   display: flex;
   overflow: hidden;
+  align-items: stretch;
+  align-self: center;
+  /* In-flow flex child centered between the brand and the actions: it can
+     shrink and never overlaps its neighbors on tablet widths, unlike the
+     previous absolutely-centered capsule. */
+  margin-inline: auto;
   border: 1px solid var(--line);
   border-radius: 999px;
   background: rgba(7, 9, 13, .68);
   box-shadow: 0 14px 50px rgba(0, 0, 0, .26);
   backdrop-filter: blur(18px) saturate(130%);
-  transform: translateX(-50%);
 }
 
 .telemetry__item {
   display: flex;
   align-items: baseline;
+  align-content: center;
+  flex-wrap: wrap;
   gap: 7px;
   min-height: 36px;
-  padding: 0 12px;
+  padding: 5px 12px;
   border-right: 1px solid var(--line);
   font-family: var(--mono);
+  font-variant-numeric: tabular-nums;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .telemetry__item:last-child {
@@ -651,6 +658,25 @@ body.compare-renderers #researchCanvas {
   opacity: 0;
   transform: translateX(calc(100% + 30px));
   pointer-events: none;
+}
+
+/* Sheet presentation — applied by the capability resolver (body.panel-sheet)
+   on all narrow layouts and on portrait touch layouts of any width, so an
+   iPad in portrait gets a dismissible bottom sheet instead of a permanent
+   desktop side panel. Width is capped so large tablets get a centered sheet. */
+body.panel-sheet .control-panel {
+  top: auto;
+  right: max(10px, calc(50vw - 310px));
+  bottom: max(8px, env(safe-area-inset-bottom));
+  left: max(10px, calc(50vw - 310px));
+  width: auto;
+  max-height: min(78svh, 780px);
+  border-radius: 18px;
+  transform-origin: bottom;
+}
+
+body.panel-sheet .control-panel.is-closed {
+  transform: translateY(calc(100% + 18px));
 }
 
 .panel-head {
@@ -1179,10 +1205,34 @@ input[type="range"]::-moz-range-thumb {
 }
 
 .sim-footer__keys {
-  display: flex;
+  /* Keyboard shortcuts are capability-gated: shown on genuine pointer
+     desktops, or in any mode once a real key press proves a keyboard exists
+     (body.keyboard-detected, set at runtime). Touch-only devices never see
+     keyboard-only instructions by default. */
+  display: none;
   align-items: center;
   gap: 7px;
   font: 400 8px/1 var(--mono);
+}
+
+body.mode-desktop-pointer .sim-footer__keys,
+body.keyboard-detected .sim-footer__keys {
+  display: flex;
+}
+
+.sim-footer__touch {
+  display: none;
+  margin: 0;
+  color: var(--paper-muted);
+  font: 400 9px/1.6 var(--mono);
+  letter-spacing: .05em;
+  text-transform: uppercase;
+}
+
+body.mode-touch-compact:not(.has-detonated) .sim-footer__touch,
+body.mode-touch-tablet:not(.has-detonated) .sim-footer__touch,
+body.mode-hybrid:not(.has-detonated) .sim-footer__touch {
+  display: block;
 }
 
 kbd {
@@ -1265,10 +1315,13 @@ kbd {
   transform: translateY(10px);
 }
 
-@media (max-width: 760px) {
-  .floating-action {
-    display: inline-flex;
-  }
+/* The floating launch control belongs to every touch-capable interface mode
+   (phones, touch tablets, hybrids) — the mode classes come from the runtime
+   capability resolver, not from viewport width alone. */
+body.mode-touch-compact .floating-action,
+body.mode-touch-tablet .floating-action,
+body.mode-hybrid .floating-action {
+  display: inline-flex;
 }
 
 body:not(.interface-visible) .floating-action,
@@ -1857,6 +1910,11 @@ body:not(.interface-visible) .icon-button {
 
 @media (max-width: 1080px) {
   .telemetry__item:first-child {
+    display: none;
+  }
+
+  /* Diagnostic FPS yields to essentials on constrained tablet widths. */
+  .telemetry__item:last-child {
     display: none;
   }
 

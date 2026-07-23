@@ -170,10 +170,75 @@ const elements = {
 
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 const compactQuery = window.matchMedia("(max-width: 760px), (pointer: coarse)");
-// Matches the stylesheet breakpoint where the control panel becomes a
-// bottom sheet that covers the viewport — layout-based, not user-agent-based.
-const overlayPanelQuery = window.matchMedia("(max-width: 760px)");
 let compactDevice = compactQuery.matches;
+
+// ---------------------------------------------------------------------------
+// Interface-mode capability system. One central resolver classifies the
+// session from real input capabilities plus layout constraints — never from
+// the user agent string and never from viewport width alone. CSS consumes the
+// result through body classes (mode-*, panel-sheet, keyboard-detected,
+// has-detonated) so breakpoint logic stays in one place.
+//   touch-compact   — phones / narrow touch layouts (bottom-sheet controls)
+//   touch-tablet    — wide touch-only devices such as iPads without pointers
+//   hybrid          — touch plus fine pointer/hover (touch laptops, iPad with
+//                     trackpad); touch-first behavior, keyboard hints only
+//                     after a real key press
+//   desktop-pointer — no touch capability at all
+// ---------------------------------------------------------------------------
+const capabilityQueries = {
+  anyCoarse: window.matchMedia("(any-pointer: coarse)"),
+  anyFine: window.matchMedia("(any-pointer: fine)"),
+  anyHover: window.matchMedia("(any-hover: hover)"),
+  portrait: window.matchMedia("(orientation: portrait)")
+};
+let interfaceMode = "desktop-pointer";
+let keyboardDetected = false;
+
+function resolveInterfaceMode() {
+  const touch = capabilityQueries.anyCoarse.matches || (navigator.maxTouchPoints || 0) > 0;
+  if (!touch) return "desktop-pointer";
+  if (window.innerWidth <= 760) return "touch-compact";
+  return (capabilityQueries.anyFine.matches || capabilityQueries.anyHover.matches)
+    ? "hybrid"
+    : "touch-tablet";
+}
+
+function interfaceModeIsTouch() {
+  return interfaceMode !== "desktop-pointer";
+}
+
+/**
+ * Geometry check for desktop/hybrid layouts: does the open panel actually
+ * obstruct the event? Uses the live panel rectangle and the current event
+ * origin rather than a hardcoded device category.
+ */
+function panelObscuresSimulation() {
+  if (!panelOpen) return false;
+  const rect = elements.controls.getBoundingClientRect();
+  const viewportWidth = Math.max(1, window.innerWidth);
+  const viewportHeight = Math.max(1, window.innerHeight);
+  const coverage = (rect.width * rect.height) / (viewportWidth * viewportHeight);
+  const eventX = state.originX * viewportWidth;
+  const coversEvent = eventX > rect.left - viewportWidth * 0.05
+    && eventX < rect.right + viewportWidth * 0.05;
+  return coverage > 0.4 || coversEvent;
+}
+
+function applyInterfaceMode() {
+  interfaceMode = resolveInterfaceMode();
+  const body = document.body;
+  body.classList.toggle("mode-touch-compact", interfaceMode === "touch-compact");
+  body.classList.toggle("mode-touch-tablet", interfaceMode === "touch-tablet");
+  body.classList.toggle("mode-hybrid", interfaceMode === "hybrid");
+  body.classList.toggle("mode-desktop-pointer", interfaceMode === "desktop-pointer");
+  // Sheet presentation whenever the panel would otherwise dominate the
+  // simulation: all narrow layouts, and portrait touch layouts of any width.
+  body.classList.toggle(
+    "panel-sheet",
+    window.innerWidth <= 760 || (interfaceModeIsTouch() && capabilityQueries.portrait.matches)
+  );
+  updateFloatingAction();
+}
 let qualityWasChosenByUser = Boolean(DIRECT_QUALITY);
 let proceduralCompareCanvas = null;
 if (COMPARE_RENDERERS) {
@@ -370,7 +435,8 @@ function updateFloatingAction() {
   if (!button) return;
   const introVisible = !elements.intro.classList.contains("is-dismissed");
   let mode = "hidden";
-  if (!panelOpen && !introVisible && !detonationPending && !state.exporting && !state.playing) {
+  if (interfaceModeIsTouch()
+    && !panelOpen && !introVisible && !detonationPending && !state.exporting && !state.playing) {
     if (state.time <= 0) mode = "detonate";
     else if (state.time >= currentPreset().duration) mode = "replay";
     else mode = "resume";
@@ -554,6 +620,7 @@ function applyPreset(presetId, { announce = true, track = true } = {}) {
 }
 
 function startDetonationSequence() {
+  document.body.classList.add("has-detonated");
   state.time = 0;
   configureRenderer();
   setPlaying(true);
@@ -607,7 +674,10 @@ function detonate() {
   }
   lastDetonation = now;
   dismissIntro();
-  if (overlayPanelQuery.matches && panelOpen) {
+  // Touch layouts always clear the panel first; pointer layouts clear it only
+  // when the open panel genuinely obstructs the event (live geometry, not a
+  // hardcoded device class).
+  if (panelOpen && (interfaceModeIsTouch() || panelObscuresSimulation())) {
     beginDetonationAfterPanelClears();
   } else {
     startDetonationSequence();
@@ -1205,6 +1275,13 @@ function bindCanvasInteraction() {
 
 function bindKeyboard() {
   document.addEventListener("keydown", (event) => {
+    // A real key press is the only reliable evidence a keyboard exists —
+    // never inferred from device dimensions. Reveals the shortcut legend for
+    // this session (used by hybrid/touch modes that hide it by default).
+    if (!keyboardDetected && event.isTrusted) {
+      keyboardDetected = true;
+      document.body.classList.add("keyboard-detected");
+    }
     const target = event.target;
     const editing = target instanceof HTMLInputElement || target instanceof HTMLSelectElement || target instanceof HTMLTextAreaElement;
     const interactive = target instanceof Element && Boolean(target.closest("button, a, summary, [role='button'], [contenteditable='true']"));
@@ -1275,9 +1352,11 @@ function initialize() {
     ? "Full event (up to 10 seconds)"
     : "Full event (up to 30 seconds)";
 
+  applyInterfaceMode();
   let storedPanel = null;
   try { storedPanel = localStorage.getItem("explosion-lab-panel"); } catch {}
-  setPanel(COMPARE_RENDERERS ? false : (storedPanel ? storedPanel === "open" : !compactDevice), false);
+  const defaultPanelOpen = interfaceMode === "desktop-pointer";
+  setPanel(COMPARE_RENDERERS ? false : (storedPanel ? storedPanel === "open" : defaultPanelOpen), false);
   try {
     if (sessionStorage.getItem("explosion-lab-intro") === "dismissed") dismissIntro();
   } catch {}
@@ -1303,9 +1382,26 @@ function initialize() {
   elements.exportCapability.textContent = `${nativeLabel} Processing stays on this device.`;
 
   window.addEventListener("resize", () => {
+    applyInterfaceMode();
     resizeRenderers();
     renderLive(state.time);
   }, { passive: true });
+  // Recompute the interface mode when input capabilities or orientation
+  // change mid-session (keyboard/trackpad attach, rotation, Split View);
+  // simulation state is never reset by a mode change.
+  [
+    capabilityQueries.anyCoarse,
+    capabilityQueries.anyFine,
+    capabilityQueries.anyHover,
+    capabilityQueries.portrait
+  ].forEach((query) => query.addEventListener?.("change", applyInterfaceMode));
+  // Mobile Safari resizes the visual viewport as browser chrome collapses or
+  // the software keyboard appears; keep the canvas and layout in step.
+  window.visualViewport?.addEventListener("resize", () => {
+    applyInterfaceMode();
+    resizeRenderers();
+    renderLive(state.time);
+  });
   compactQuery.addEventListener?.("change", (event) => {
     compactDevice = event.matches;
     if (!qualityWasChosenByUser) {
@@ -1361,6 +1457,7 @@ function initialize() {
   };
 
   window.__explosionLabTest = Object.freeze({
+    interfaceMode: () => interfaceMode,
     presetIds: EVENT_PRESETS.map(({ id }) => id),
     getState: () => ({ ...state, layers: { ...state.layers }, ...renderer.getStats?.() }),
     selectPreset: (id) => applyPreset(id, { announce: false, track: false }),
