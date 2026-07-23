@@ -88,6 +88,7 @@ const elements = {
   intro: $("#introCard"),
   dismissIntro: $("#dismissIntro"),
   heroDetonate: $("#heroDetonate"),
+  floatingAction: $("#floatingActionButton"),
   controls: $("#controlPanel"),
   panelToggle: $("#panelToggle"),
   panelClose: $("#panelClose"),
@@ -169,6 +170,9 @@ const elements = {
 
 const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
 const compactQuery = window.matchMedia("(max-width: 760px), (pointer: coarse)");
+// Matches the stylesheet breakpoint where the control panel becomes a
+// bottom sheet that covers the viewport — layout-based, not user-agent-based.
+const overlayPanelQuery = window.matchMedia("(max-width: 760px)");
 let compactDevice = compactQuery.matches;
 let qualityWasChosenByUser = Boolean(DIRECT_QUALITY);
 let proceduralCompareCanvas = null;
@@ -237,6 +241,8 @@ let lastMetricUpdate = 0;
 let lastDetonation = -Infinity;
 let toastTimer = 0;
 let panelOpen = !compactDevice;
+let detonationPending = false;
+let floatingActionMode = "hidden";
 let pageWasPlaying = false;
 let exportController = null;
 let recoveryUrl = "";
@@ -323,7 +329,7 @@ function distanceLabel(value) {
   return "Medium";
 }
 
-function setPanel(open, remember = true) {
+function setPanel(open, remember = true, { suppressCloseFocus = false } = {}) {
   const focusWasInside = elements.controls.contains(document.activeElement);
   panelOpen = Boolean(open);
   elements.controls.classList.toggle("is-closed", !panelOpen);
@@ -331,10 +337,11 @@ function setPanel(open, remember = true) {
   elements.controls.inert = !panelOpen;
   elements.panelToggle.setAttribute("aria-expanded", String(panelOpen));
   elements.panelToggle.textContent = panelOpen ? "Hide controls" : "Controls";
-  if (!panelOpen && focusWasInside) elements.panelToggle.focus();
+  if (!panelOpen && focusWasInside && !suppressCloseFocus) elements.panelToggle.focus();
   if (remember) {
     try { localStorage.setItem("explosion-lab-panel", panelOpen ? "open" : "closed"); } catch {}
   }
+  updateFloatingAction();
 }
 
 function setInterfaceVisible(visible) {
@@ -348,6 +355,37 @@ function setInterfaceVisible(visible) {
 function dismissIntro() {
   elements.intro.classList.add("is-dismissed");
   try { sessionStorage.setItem("explosion-lab-intro", "dismissed"); } catch {}
+  updateFloatingAction();
+}
+
+/**
+ * Compact launch control shown only while the Event Controls panel is
+ * closed (and only on the bottom-sheet layout, via the stylesheet's
+ * 760px media query). Label follows simulation state: Detonate before
+ * first launch, hidden during playback, Resume when paused mid-event,
+ * Replay after completion.
+ */
+function updateFloatingAction() {
+  const button = elements.floatingAction;
+  if (!button) return;
+  const introVisible = !elements.intro.classList.contains("is-dismissed");
+  let mode = "hidden";
+  if (!panelOpen && !introVisible && !detonationPending && !state.exporting && !state.playing) {
+    if (state.time <= 0) mode = "detonate";
+    else if (state.time >= currentPreset().duration) mode = "replay";
+    else mode = "resume";
+  }
+  if (mode === floatingActionMode) return;
+  floatingActionMode = mode;
+  const hidden = mode === "hidden";
+  button.classList.toggle("is-hidden", hidden);
+  button.setAttribute("aria-hidden", hidden ? "true" : "false");
+  button.tabIndex = hidden ? -1 : 0;
+  if (!hidden) {
+    button.dataset.action = mode;
+    button.querySelector(".floating-action__label").textContent =
+      mode === "detonate" ? "Detonate" : mode === "replay" ? "Replay" : "Resume";
+  }
 }
 
 function configureRenderer() {
@@ -457,6 +495,7 @@ function updateTimelineUi() {
     segment.classList.toggle("is-past", Boolean(phase && state.time > phase.end));
     segment.classList.toggle("is-current", Boolean(phase && state.time >= phase.start && state.time <= phase.end));
   });
+  updateFloatingAction();
 }
 
 function updateControlOutputs() {
@@ -473,6 +512,7 @@ function setPlaying(playing) {
   state.playing = Boolean(playing) && state.time < currentPreset().duration;
   elements.play.textContent = state.playing ? "Pause" : "Play";
   elements.play.setAttribute("aria-pressed", String(state.playing));
+  updateFloatingAction();
 }
 
 function applyPreset(presetId, { announce = true, track = true } = {}) {
@@ -513,20 +553,65 @@ function applyPreset(presetId, { announce = true, track = true } = {}) {
   if (track) analytics("preset_selected", { preset: preset.id });
 }
 
+function startDetonationSequence() {
+  state.time = 0;
+  configureRenderer();
+  setPlaying(true);
+  updateTimelineUi();
+  analytics("detonation_triggered", { preset: state.presetId, view_mode: state.viewMode });
+  showToast(`${currentPreset().shortName} · sequence started`);
+}
+
+/**
+ * On the bottom-sheet layout the open panel covers the viewport, so the
+ * opening flash would play behind it. Close the panel first, then start
+ * the sequence once the dismissal transition has cleared — never while
+ * the panel still obscures the simulation. All selected settings live in
+ * `state` and are untouched by closing the panel.
+ */
+function beginDetonationAfterPanelClears() {
+  detonationPending = true;
+  const focusWasInside = elements.controls.contains(document.activeElement);
+  setPanel(false, true, { suppressCloseFocus: true });
+  if (focusWasInside) elements.canvas.focus({ preventScroll: true });
+  let fallbackTimer = 0;
+  let settled = false;
+  const begin = () => {
+    if (settled) return;
+    settled = true;
+    elements.controls.removeEventListener("transitionend", onTransitionEnd);
+    window.clearTimeout(fallbackTimer);
+    detonationPending = false;
+    // If the panel was reopened during dismissal, never start behind it.
+    if (panelOpen || !elements.controls.classList.contains("is-closed")) {
+      updateFloatingAction();
+      return;
+    }
+    startDetonationSequence();
+  };
+  const onTransitionEnd = (event) => {
+    if (event.target === elements.controls && event.propertyName === "transform") begin();
+  };
+  elements.controls.addEventListener("transitionend", onTransitionEnd);
+  // Safety fallback in case transitionend never fires; reduced motion
+  // collapses the panel near-instantly, so start on the next frames.
+  fallbackTimer = window.setTimeout(begin, reducedMotion ? 60 : 360);
+}
+
 function detonate() {
+  if (detonationPending) return false;
   const now = performance.now();
   if (now - lastDetonation < 650) {
     showToast("Event reset is cooling down");
     return false;
   }
   lastDetonation = now;
-  state.time = 0;
-  configureRenderer();
-  setPlaying(true);
   dismissIntro();
-  updateTimelineUi();
-  analytics("detonation_triggered", { preset: state.presetId, view_mode: state.viewMode });
-  showToast(`${currentPreset().shortName} · sequence started`);
+  if (overlayPanelQuery.matches && panelOpen) {
+    beginDetonationAfterPanelClears();
+  } else {
+    startDetonationSequence();
+  }
   return true;
 }
 
@@ -969,6 +1054,16 @@ function bindControls() {
   });
   elements.panelToggle.addEventListener("click", () => setPanel(!panelOpen));
   elements.panelClose.addEventListener("click", () => setPanel(false));
+  elements.floatingAction.addEventListener("click", () => {
+    if (floatingActionMode === "replay") {
+      restart(true);
+    } else if (floatingActionMode === "resume") {
+      if (state.time >= currentPreset().duration) state.time = 0;
+      setPlaying(true);
+    } else if (floatingActionMode === "detonate") {
+      detonate();
+    }
+  });
   elements.interfaceButton.addEventListener("click", () => setInterfaceVisible(!document.body.classList.contains("interface-visible")));
   elements.png.addEventListener("click", downloadPng);
   elements.mp4.addEventListener("click", openExportDialog);

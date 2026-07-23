@@ -1225,6 +1225,53 @@ kbd {
   transform: translate(-50%, 0);
 }
 
+.floating-action {
+  position: absolute;
+  z-index: 26;
+  right: 14px;
+  bottom: calc(max(10px, env(safe-area-inset-bottom)) + 58px);
+  display: none;
+  align-items: center;
+  justify-content: center;
+  gap: 9px;
+  min-height: 48px;
+  padding: 0 20px;
+  color: #130b06;
+  background: linear-gradient(135deg, #ffd39a, #ff7b32 54%, #ff542f);
+  border: 0;
+  border-radius: 999px;
+  box-shadow: 0 12px 34px rgba(255, 92, 42, .28), inset 0 1px rgba(255, 255, 255, .5);
+  font: 700 11px/1 var(--mono);
+  letter-spacing: .13em;
+  text-transform: uppercase;
+  transition: opacity 180ms ease, transform 200ms var(--ease);
+}
+
+.floating-action > span:first-child {
+  width: 10px;
+  height: 10px;
+  border: 2px solid currentColor;
+  border-radius: 50%;
+  box-shadow: 0 0 0 4px rgba(25, 12, 6, .14);
+}
+
+.floating-action:active {
+  transform: scale(.97);
+}
+
+.floating-action.is-hidden {
+  opacity: 0;
+  pointer-events: none;
+  transform: translateY(10px);
+}
+
+@media (max-width: 760px) {
+  .floating-action {
+    display: inline-flex;
+  }
+}
+
+body:not(.interface-visible) .floating-action,
 body:not(.interface-visible) .control-panel,
 body:not(.interface-visible) .intro-card,
 body:not(.interface-visible) .sim-footer {
