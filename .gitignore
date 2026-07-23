@@ -36,3 +36,9 @@ recordings/
 
 # Generated social-card working files (the final PNG is intentionally tracked)
 og-render.ppm
+
+# Local research PDFs are third-party copyrighted development references, not
+# runtime assets. RESEARCH-NOTES.md points to each paper's author/publisher
+# copy by URL; the local copies stay out of version control and off the
+# production allowlist.
+research/papers/*.pdf
