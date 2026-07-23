@@ -252,7 +252,7 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       sourcePrimitives: ['radial-impulse', 'ground-sheet', 'multiple-offset-kernels', 'turbulent-source-cluster'],
       source: { centerY: 0.19, radius: 0.048, aspectX: 1.55, aspectY: 0.62, onsetEnd: 0.038, sustainEnd: 0.2, radial: 1.35, vertical: 0.22, turbulence: 1.1, heat: 1.15, smoke: 0.58, incandescent: 1.08, dust: 1.35, clusterSpread: 1.25 },
       physics: { buoyancy: 0.5, densityLoading: 1.22, windCoupling: 0.48, vorticity: 1.28, velocityRetention: 0.974, cooling: 1.65, smokeConversion: 1.18, scalarRetention: 0.992 },
-      volume: { scaleX: 1.12, scaleY: 0.62, depth: 0.72, opacity: 1.08, shadow: 0.86, bloom: 0.72, distortion: 0.72, erosion: 1.3, noiseScale: 1.45, dustVisibility: 1.42, exposure: 0.92, backgroundIllumination: 0.08, emissionCurve: 0.86 },
+      volume: { scaleX: 1.3, scaleY: 0.74, depth: 0.72, opacity: 1.28, shadow: 0.86, bloom: 0.72, distortion: 0.72, erosion: 1.3, noiseScale: 1.45, dustVisibility: 1.42, exposure: 1.02, backgroundIllumination: 0.08, emissionCurve: 0.86 },
       quality: { grid: 0.82, pressure: 0.75, rays: 0.72, tracers: 0.72, detail: 0.75 },
     },
   ),
@@ -277,8 +277,8 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       tracerType: 'ember',
       sourcePrimitives: ['sustained-combustion-region', 'multiple-offset-kernels', 'vertical-jet', 'turbulent-source-cluster'],
       source: { centerY: 0.22, radius: 0.072, aspectX: 1.28, aspectY: 0.92, onsetEnd: 0.09, sustainEnd: 0.68, pulseFrequency: 2.2, radial: 0.48, vertical: 0.9, turbulence: 1.22, heat: 1.12, smoke: 1.42, incandescent: 1.35, dust: 0.38, clusterSpread: 1.48 },
-      physics: { buoyancy: 1.18, densityLoading: 1.12, windCoupling: 0.9, vorticity: 1.42, velocityRetention: 0.991, cooling: 0.66, smokeConversion: 1.38, scalarRetention: 0.999 },
-      volume: { scaleX: 1.05, scaleY: 1.05, depth: 1.12, opacity: 1.3, shadow: 1.35, bloom: 1.22, distortion: 1.18, erosion: 0.82, noiseScale: 1.14, dustVisibility: 0.48, exposure: 1.08, backgroundIllumination: 0.2, emissionCurve: 0.78 },
+      physics: { buoyancy: 0.82, densityLoading: 1.12, windCoupling: 0.9, vorticity: 1.42, velocityRetention: 0.991, cooling: 0.66, smokeConversion: 1.38, scalarRetention: 0.999 },
+      volume: { scaleX: 1.32, scaleY: 0.98, depth: 1.12, opacity: 1.3, shadow: 1.35, bloom: 1.22, distortion: 1.18, erosion: 0.82, noiseScale: 1.14, dustVisibility: 0.48, exposure: 1.08, backgroundIllumination: 0.2, emissionCurve: 0.78 },
       quality: { grid: 0.96, pressure: 0.94, rays: 1, tracers: 1.12, detail: 1 },
     },
   ),
@@ -342,8 +342,8 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       tracerType: 'ash',
       sourcePrimitives: ['pulsed-column', 'vertical-jet', 'turbulent-source-cluster', 'ground-sheet'],
       source: { centerY: 0.2, groundLevel: 0.18, radius: 0.052, aspectX: 0.72, aspectY: 1.58, onsetEnd: 0.14, sustainEnd: 1.25, pulseFrequency: 5.4, radial: 0.18, vertical: 1.42, turbulence: 1.5, heat: 0.48, smoke: 1.72, incandescent: 0.38, dust: 1.65, clusterSpread: 1.15 },
-      physics: { buoyancy: 1.08, densityLoading: 1.25, windCoupling: 1.45, vorticity: 1.55, velocityRetention: 0.994, cooling: 0.82, smokeConversion: 1.12, scalarRetention: 0.9997 },
-      volume: { scaleX: 1, scaleY: 1.62, depth: 1.2, opacity: 1.5, shadow: 1.62, bloom: 0.42, distortion: 0.55, erosion: 0.88, noiseScale: 1.18, dustVisibility: 1.55, exposure: 0.8, toneMap: 0.3, backgroundIllumination: 0.06, emissionCurve: 1.1 },
+      physics: { buoyancy: 0.94, densityLoading: 1.25, windCoupling: 1.45, vorticity: 1.55, velocityRetention: 0.994, cooling: 0.82, smokeConversion: 1.12, scalarRetention: 0.9997 },
+      volume: { scaleX: 1.3, scaleY: 1.34, depth: 1.2, opacity: 1.5, shadow: 1.62, bloom: 0.42, distortion: 0.55, erosion: 0.88, noiseScale: 1.18, dustVisibility: 1.55, exposure: 0.8, toneMap: 0.3, backgroundIllumination: 0.06, emissionCurve: 1.1 },
       quality: { grid: 1.04, pressure: 1.08, rays: 1.12, tracers: 1.38, detail: 1.2 },
     },
   ),
@@ -368,6 +368,12 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       tracerType: 'thermal',
       sourcePrimitives: ['radial-impulse', 'vertical-jet', 'paired-cap-vortices'],
       preserveResearchSource: true,
+      // 2026-07-23 visual pass: widen the rendered volume so the domain's
+      // pixel aspect stops stretching the fireball into an egg and the cap
+      // has lateral room; slow cooling so the hot history persists into the
+      // rising column.
+      physics: { buoyancy: 0.88, cooling: 0.78, scalarRetention: 1 },
+      volume: { scaleX: 1.48, scaleY: 1.04, shadow: 1.18, exposure: 1.06 },
     },
   ),
   'nuclear-ground-burst': defineFluidProfile(
@@ -378,7 +384,7 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       tracerType: 'particulate',
       sourcePrimitives: ['radial-impulse', 'ground-sheet', 'vertical-jet', 'ejecta-curtain', 'multiple-offset-kernels'],
       source: { centerY: 0.18, groundLevel: 0.18, radius: 0.078, aspectX: 1.28, aspectY: 0.82, onsetEnd: 0.065, sustainEnd: 0.62, radial: 1.3, vertical: 1.5, turbulence: 1.3, heat: 1.28, smoke: 1.38, incandescent: 1.18, dust: 2.15, ejecta: 1.2, clusterSpread: 1.35 },
-      physics: { buoyancy: 1.05, densityLoading: 1.48, windCoupling: 1.28, vorticity: 1.45, velocityRetention: 0.991, cooling: 0.96, smokeConversion: 1.25, scalarRetention: 0.999 },
+      physics: { buoyancy: 0.9, densityLoading: 1.48, windCoupling: 1.28, vorticity: 1.45, velocityRetention: 0.991, cooling: 0.96, smokeConversion: 1.25, scalarRetention: 0.999 },
       volume: { scaleX: 1.35, scaleY: 1.42, depth: 1.28, opacity: 1.52, shadow: 1.62, bloom: 1.12, distortion: 1.18, erosion: 1.02, noiseScale: 1.25, dustVisibility: 1.9, exposure: 1.02, toneMap: 0.12, backgroundIllumination: 0.25, emissionCurve: 0.86 },
       quality: { grid: 1.04, pressure: 1.08, rays: 1.1, tracers: 1.32, detail: 1.12 },
     },
@@ -391,7 +397,7 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       tracerType: 'atmospheric',
       sourcePrimitives: ['radial-impulse', 'ring-source', 'vertical-jet', 'multiple-offset-kernels', 'paired-cap-vortices'],
       source: { centerY: 0.37, radius: 0.092, aspectX: 1.15, aspectY: 0.92, onsetEnd: 0.055, sustainEnd: 0.78, pulseFrequency: 1.4, radial: 1.22, vertical: 1.38, turbulence: 1.48, heat: 1.42, smoke: 1.45, incandescent: 1.3, dust: 0.75, ringRadius: 1.75, clusterSpread: 1.62, capScale: 1.32 },
-      physics: { buoyancy: 1.22, densityLoading: 1.12, windCoupling: 1.42, vorticity: 1.5, velocityRetention: 0.996, cooling: 0.68, smokeConversion: 1.08, scalarRetention: 0.9997 },
+      physics: { buoyancy: 0.98, densityLoading: 1.12, windCoupling: 1.42, vorticity: 1.5, velocityRetention: 0.996, cooling: 0.68, smokeConversion: 1.08, scalarRetention: 0.9997 },
       volume: { scaleX: 1.5, scaleY: 1.66, depth: 1.42, opacity: 1.34, shadow: 1.5, bloom: 1.52, distortion: 1.28, erosion: 0.88, noiseScale: 0.92, dustVisibility: 1, exposure: 1.18, toneMap: 0.08, backgroundIllumination: 0.44, emissionCurve: 0.78 },
       quality: { grid: 1.12, pressure: 1.16, rays: 1.18, tracers: 1.42, detail: 1.25 },
     },
@@ -974,7 +980,7 @@ void main() {
     / max(length(leftDelta), 0.004);
   vec2 rightTangent = vec2(rightDelta.y, -rightDelta.x)
     / max(length(rightDelta), 0.004);
-  float circulation = (0.052 + 0.026 * uEnergy) * capEnvelope * motionScale
+  float circulation = (0.078 + 0.032 * uEnergy) * capEnvelope * motionScale
     * capEnabled * uProfileAux.x;
   velocity += (leftTangent * leftWeight + rightTangent * rightWeight)
     * circulation * uDt;
@@ -987,6 +993,23 @@ void main() {
   float entrainment = exp(-sideDistance * sideDistance / max(0.002, capHalfWidth * capHalfWidth * 2.8));
   velocity.x += (capCenter.x - vUv.x) * columnBand * entrainment
     * capEnvelope * capEnabled * 0.19 * motionScale * uDt;
+
+  // Stable-stratification ceiling: buoyant rise weakens with altitude and the
+  // surviving upflow turns outward, so cap and umbrella structures develop
+  // inside the simulated volume instead of piling flat against its upper
+  // boundary. Normalized visual behavior only — not an atmospheric model.
+  float ceilingJitter = turbulence.z * 0.07;
+  float ceiling = smoothstep(0.58 + ceilingJitter, 0.88 + ceilingJitter, vUv.y);
+  float upflow = max(velocity.y, 0.0);
+  float ceilingRelax = min(1.0, 2.8 * uDt);
+  velocity.y -= upflow * ceiling * ceilingRelax;
+  velocity.x += sign(vUv.x - uSourceCenter.x + uSeedOffsetsA.y * 0.03)
+    * upflow * ceiling * 0.5 * ceilingRelax;
+  // Outer umbrella roll: spread material at the stable ceiling curls gently
+  // downward away from the stem, rounding the crown into cap vortices.
+  float rimDistance = abs(vUv.x - uSourceCenter.x);
+  velocity.y -= ceiling * smoothstep(0.09, 0.26, rimDistance)
+    * (smoke + dust * 0.6) * 0.55 * uDt;
 
   velocity *= pow(clamp(uProfileDecay.x, 0.9, 1.0), uDt * 60.0);
   velocity *= boundaryMask(vUv);
@@ -1059,9 +1082,14 @@ void main() {
   if (uProfileKind == 9) {
     // Preserve the established Research Model scalar injection as the named
     // regression branch; other event families use the primitive composition.
-    temperature += source * core * (flashEnvelope * 2.1 + fireEnvelope * 0.28) * uDt * 8.0;
-    incandescent += source * core * (flashEnvelope * 1.55 + fireEnvelope * 0.52) * uDt * 5.0;
-    smoke += source * core * smokeEnvelope * uDt * 0.62;
+    // 2026-07-23 visual pass: the early fireball is emission-dominated — smoke
+    // arrives after the incandescent phase instead of graying it out, and the
+    // hot channels run longer so the white-to-orange-to-smoke history reads.
+    float lateSmoke = smoothstep(0.05, 0.13, uNormalizedTime)
+      * (1.0 - smoothstep(0.42, 0.82, uNormalizedTime));
+    temperature += source * core * (flashEnvelope * 2.2 + fireEnvelope * 0.42) * uDt * 8.0;
+    incandescent += source * core * (flashEnvelope * 1.5 + fireEnvelope * 0.7) * uDt * 3.4;
+    smoke += source * core * lateSmoke * uDt * 0.62;
 
     // The dust shell is a generic visual interaction cue. Airburst altitude keeps
     // it deliberately subordinate to the rising thermal/smoke volume.
@@ -1599,8 +1627,15 @@ void main() {
     densityDetail /= max(detailNormalization, 0.0001);
     vec2 layerUv = distortedUv;
     layerUv.x += depth * (0.025 + centerCurl * 0.012);
-    layerUv += curlOffset * 0.012 * radialWeight;
+    layerUv.y += depth * depth * 0.011 * uVolumeProfile1.y;
+    layerUv += curlOffset * 0.019 * radialWeight;
 
+    // Fade density toward the simulation-domain edges so clamped samples never
+    // duplicate into visible bands or a hard box around the volume.
+    float layerFade = smoothstep(0.0, 0.05, layerUv.x)
+      * smoothstep(0.0, 0.05, 1.0 - layerUv.x)
+      * smoothstep(0.0, 0.03, layerUv.y)
+      * smoothstep(0.0, 0.09, 1.0 - layerUv.y);
     vec4 scalar = sampleField(uScalar, layerUv);
     float smokeDensity = max(0.0, scalar.g * 0.9 * uLayerVisibility.y);
     float dustDensity = max(0.0,
@@ -1616,7 +1651,7 @@ void main() {
       0.62,
       1.38
     );
-    float density = (smoke + incandescent * 0.22) * radialWeight * detailModulation;
+    float density = (smoke + incandescent * 0.22) * radialWeight * detailModulation * layerFade;
     float erosion = smoothstep(-0.62 / max(0.4, uVolumeProfile1.y), 0.38, densityDetail);
     density = max(0.0,
       density - (1.0 - erosion) * radialWeight * 0.026 * uVolumeProfile1.y
@@ -1632,7 +1667,13 @@ void main() {
     float lightDensity = lightProbe.g * 0.9 * uLayerVisibility.y
       + lightProbe.a * 0.72 * uLayerVisibility.z * uVolumeProfile1.w;
     float lightTransmittance = exp(-lightDensity * 0.92 * uVolumeProfile0.z);
-    float selfShadow = exp(-shadowColumn * 1.6 * uVolumeProfile0.z) * lightTransmittance;
+    float selfShadow = exp(-shadowColumn * 2.3 * uVolumeProfile0.z) * lightTransmittance;
+    // Directional sky light from upper-left with a short occlusion probe:
+    // sunlit crowns stay bright while dense interiors fall into shadow.
+    vec4 skyProbe = sampleField(uScalar, layerUv + vec2(-0.024, 0.05));
+    float skyOcclusion = exp(
+      -(skyProbe.g * 0.9 + skyProbe.a * 0.62) * 1.5 * uVolumeProfile0.z
+    );
     vec3 toLightVector = vec3(uSourceCenter - layerUv, -depth * 0.34);
     float toLightLength = length(toLightVector);
     vec3 toLight = toLightLength > 0.00001
@@ -1642,13 +1683,25 @@ void main() {
     float dustMix = clamp(dustDensity / max(0.0001, smoke), 0.0, 1.0);
     vec3 darkParticulate = mix(uPaletteSmoke, uPaletteDust, dustMix);
     vec3 litParticulate = mix(uPaletteSmokeLight, uPaletteCloud, clamp(shadowColumn, 0.0, 1.0));
-    vec3 smokeColor = mix(darkParticulate, litParticulate,
-      clamp(temperature * 0.14 + selfShadow * 0.16, 0.0, 1.0));
+    float litWeight = clamp(
+      temperature * 0.18 + selfShadow * 0.3 + skyOcclusion * 0.42,
+      0.0,
+      1.0
+    );
+    vec3 smokeColor = mix(darkParticulate, litParticulate, litWeight)
+      * (0.4 + 0.42 * skyOcclusion + 0.24 * selfShadow);
     vec3 emission = heatRamp(temperature + incandescent * 0.75)
-      * incandescent * (0.72 + selfShadow * 0.34);
+      * (1.0 - exp(-incandescent * 1.1)) * (0.62 + selfShadow * 0.3)
+      * (0.72 + 0.28 * detailModulation);
+    // Overexposed white-hot core where normalized temperature runs highest —
+    // the early fireball keeps a saturated center inside a structured
+    // orange-to-ember gradient instead of flattening into one white disk.
+    emission += uPaletteCore
+      * pow(clamp((temperature - 1.5) * 0.85, 0.0, 1.0), 2.0)
+      * (0.4 + incandescent * 0.45);
     float edgeScatter = pow(max(0.0, 1.0 - radialWeight), 1.7) * smoke * 0.12;
     vec3 fireScatter = sourceRadiance * smoke * lightTransmittance
-      * (0.065 + forwardLobe * 0.12);
+      * (0.085 + forwardLobe * 0.15);
     vec3 layerColor = smokeColor * smoke + emission + fireScatter
       + mix(uPaletteSmokeLight, uPaletteCore, 0.18) * edgeScatter;
     accumulated += transmittance * alpha * layerColor;
@@ -1682,7 +1735,13 @@ void main() {
     1.08
   );
   float atmosphericFade = 1.0 - clamp(uPhase.z * 0.46, 0.0, 0.58);
-  float alpha = clamp((1.0 - transmittance) * atmosphericFade, 0.0, 0.98);
+  // Soften the outer volume boundary so the simulation rectangle itself can
+  // never appear as a hard box against the analytical environment behind it.
+  float domainFade = smoothstep(0.0, 0.035, localUv.x)
+    * smoothstep(0.0, 0.035, 1.0 - localUv.x)
+    * smoothstep(0.0, 0.025, localUv.y)
+    * smoothstep(0.0, 0.07, 1.0 - localUv.y);
+  float alpha = clamp((1.0 - transmittance) * atmosphericFade * domainFade, 0.0, 0.98);
   vec3 mapped = toneMap(accumulated * illuminationEnvelope);
   outputColor = vec4(mapped * alpha, alpha);
 }`;
