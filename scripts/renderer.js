@@ -633,8 +633,12 @@ export class ExplosionRenderer {
     next.altitude = clamp(next.altitude, -0.25, 100);
     next.windDirection = ((next.windDirection % 360) + 360) % 360;
     next.windStrength = clamp(next.windStrength, 0, 100);
-    next.cameraDistance = clamp(next.cameraDistance, 35, 180);
-    next.cameraAngle = clamp(next.cameraAngle, -45, 45);
+    // Outer safety clamp — the authoritative bound regardless of what the app
+    // layer sends. Widened alongside app.js's CAMERA_ANGLE_RANGE/family zoom
+    // bounds (camera-sensitivity pass) with headroom on the angle side so the
+    // app's own clamp is always reached first.
+    next.cameraDistance = clamp(next.cameraDistance, 35, 220);
+    next.cameraAngle = clamp(next.cameraAngle, -58, 58);
     next.density = clamp(next.density, 10, 160);
     next.quality = QUALITY_ALIASES[next.quality] || 'balanced';
     next.diagnostic = DIAGNOSTIC_MODES.has(next.diagnostic) ? next.diagnostic : 'beauty';
@@ -1428,7 +1432,12 @@ export class ExplosionRenderer {
     const energyScale = typeof LabData.cubeRootScale === 'function'
       ? LabData.cubeRootScale(this.settings.energy, 1)
       : Math.cbrt(Math.max(0.05, this.settings.energy));
-    const cameraScale = clamp(1.55 - this.settings.cameraDistance / 180, 0.55, 1.35);
+    // Divisor and the 180 reference point are unchanged from the original
+    // formula, so every distance <=180 (the old hard ceiling) renders
+    // identically to before. Only the floor is lowered, giving the
+    // previously-unreachable 180-220 headroom (camera-sensitivity pass, wider
+    // per-family pullback) real visual effect instead of clamping to a no-op.
+    const cameraScale = clamp(1.55 - this.settings.cameraDistance / 180, 0.40, 1.35);
     // Automatic pullback on narrow (portrait) viewports: large events keep
     // their full silhouette inside the padded render domain instead of
     // walling against its sides. Landscape and desktop framing (aspect >= 1)
@@ -1436,9 +1445,13 @@ export class ExplosionRenderer {
     const aspectPullback = clamp(0.62 + 0.38 * (width / Math.max(1, height)), 0.75, 1);
     const tunedPullback = clamp(finite(this.settings.tuning?.cameraPullback, 1), 0.6, 1.4);
     const scale = energyScale * this._behavior.scale * cameraScale * aspectPullback / tunedPullback;
-    const angleOffset = (this.settings.cameraAngle / 45) * width * 0.035;
+    // Coefficients strengthened ~1.6x (camera-sensitivity pass) so a given
+    // drag produces noticeably more visible parallax; at cameraAngle === 0
+    // (the default/reset state) both terms are still exactly zero, so idle
+    // and freshly-reset framing is bit-for-bit unchanged.
+    const angleOffset = (this.settings.cameraAngle / 45) * width * 0.056;
     const originX = this._origin.x * width + angleOffset;
-    const surfaceY = clamp(this._origin.y * height + (this.settings.cameraAngle / 45) * height * 0.025, height * 0.58, height * 0.88);
+    const surfaceY = clamp(this._origin.y * height + (this.settings.cameraAngle / 45) * height * 0.04, height * 0.58, height * 0.88);
     const burst = String(this.settings.burst).toLowerCase();
     const normalizedAltitude = Math.abs(this.settings.altitude) <= 1
       ? this.settings.altitude

@@ -69,15 +69,38 @@ const DEBUG_FIELDS = new Set([
 // mouse.
 // ---------------------------------------------------------------------------
 const CAMERA_DEFAULT = Object.freeze({ distance: 100, angle: 0, originX: 0.5, originY: 0.66 });
-const CAMERA_DISTANCE_RANGE = [50, 150];
-const CAMERA_ANGLE_RANGE = [-35, 35];
+const CAMERA_ANGLE_RANGE = [-50, 50];
 const CAMERA_DRAG_THRESHOLD_FINE = 6;
 const CAMERA_DRAG_THRESHOLD_COARSE = 10;
+// Viewport-normalized orbit sensitivity: degrees of camera-angle change for a
+// drag spanning the FULL canvas width, so a given gesture feels the same on a
+// phone and a desktop monitor rather than depending on raw pixel counts.
+// Coarse (touch) pointers get a stronger response — touch drags tend to be
+// shorter and users expect more travel per gesture.
+const CAMERA_ORBIT_DEGREES_PER_WIDTH_FINE = 110;
+const CAMERA_ORBIT_DEGREES_PER_WIDTH_COARSE = 130;
+const CAMERA_PINCH_DISTANCE_SENSITIVITY = 0.3; // was 0.15 — 2x pinch response
+const CAMERA_WHEEL_DISTANCE_STEP = 8; // was 4 — 2x per-tick zoom response
 const CAMERA_EASE_RATE = 10; // 1/s — used for reset/slider/zoom easing
 const CAMERA_ANGLE_INERTIA_DECAY = 2.6; // 1/s — release-coast deceleration
 const CAMERA_ANGLE_MAX_RELEASE_VELOCITY = 220; // deg/s, clamp on flick release
 const CAMERA_SNAP_EPSILON = 0.02;
 const CAMERA_VELOCITY_EPSILON = 0.05;
+// Zoom (camera distance) bounds by event family — monumental-scale events get
+// far more pullback room; compact events are capped so they can't be zoomed
+// out into insignificance; ground-coupled events keep a slightly closer
+// minimum so the camera can't end up below/through the terrain. Families not
+// listed use CAMERA_DISTANCE_RANGE_DEFAULT. CAMERA_DEFAULT.distance (100)
+// fits inside every range below, so Reset Camera never needs family-specific
+// clamping.
+const CAMERA_DISTANCE_RANGE_DEFAULT = [45, 150];
+const CAMERA_DISTANCE_RANGE_BY_FAMILY = Object.freeze({
+  "nuclear-scale": [45, 220],
+  volcanic: [55, 190],
+  meteor: [50, 190],
+  "conventional-compact": [45, 120],
+  "ground-coupled": [55, 150]
+});
 
 const elements = {
   canvas: $("#simCanvas"),
@@ -495,6 +518,10 @@ function currentPreset() {
   return PRESET_BY_ID[state.presetId] || PRESET_BY_ID[DEFAULT_PRESET_ID];
 }
 
+function cameraDistanceRangeForPreset(preset = currentPreset()) {
+  return CAMERA_DISTANCE_RANGE_BY_FAMILY[preset.eventFamilyId] || CAMERA_DISTANCE_RANGE_DEFAULT;
+}
+
 function normalizeBurstType(type) {
   if (["subsurface"].includes(type)) return "underground";
   if (["high-air", "low-air", "airburst", "hovering-fictional"].includes(type)) return "air";
@@ -530,9 +557,12 @@ function strengthLabel(value) {
   return "Strong";
 }
 
-function distanceLabel(value) {
-  if (value < 76) return "Near";
-  if (value > 124) return "Far";
+function distanceLabel(value, range = cameraDistanceRangeForPreset()) {
+  const [min, max] = range;
+  const span = max - min;
+  const fraction = span > 0 ? (value - min) / span : 0.5;
+  if (fraction < 0.35) return "Near";
+  if (fraction > 0.65) return "Far";
   return "Medium";
 }
 
@@ -724,7 +754,10 @@ function updateControlOutputs() {
  * instantly. Never touches simulation time, playback, or preset state.
  */
 function resetCamera() {
-  state.cameraDistanceTarget = CAMERA_DEFAULT.distance;
+  // CAMERA_DEFAULT.distance already fits inside every family range, so this
+  // clamp is defensive rather than load-bearing today.
+  const distanceRange = cameraDistanceRangeForPreset();
+  state.cameraDistanceTarget = clamp(CAMERA_DEFAULT.distance, distanceRange[0], distanceRange[1]);
   state.cameraAngleTarget = CAMERA_DEFAULT.angle;
   state.cameraAngleVelocity = 0;
   state.originX = CAMERA_DEFAULT.originX;
@@ -836,6 +869,16 @@ function applyPreset(presetId, { announce = true, track = true } = {}) {
   elements.energy.max = String(preset.energyRange[1]);
   elements.energy.value = String(state.energy);
   elements.altitude.value = String(altitudeToControl(state.altitude));
+  // Zoom bounds are family-specific (monumental events allow far more
+  // pullback; compact events are capped). Camera itself still persists
+  // across preset switches — this only re-clamps an out-of-range value into
+  // the new preset's usable bounds, it never resets to a default.
+  const distanceRange = cameraDistanceRangeForPreset(preset);
+  elements.cameraDistance.min = String(distanceRange[0]);
+  elements.cameraDistance.max = String(distanceRange[1]);
+  state.cameraDistance = clamp(state.cameraDistance, distanceRange[0], distanceRange[1]);
+  state.cameraDistanceTarget = clamp(state.cameraDistanceTarget, distanceRange[0], distanceRange[1]);
+  elements.cameraDistance.value = String(Math.round(state.cameraDistance));
   const isResearchModel = Boolean(preset.researchModel);
   elements.researchDiagnostics.hidden = !DEBUG_FLUID || !isResearchModel || state.viewMode !== "cinematic";
   if (!isResearchModel) state.diagnostic = "beauty";
@@ -1443,6 +1486,7 @@ function bindCanvasInteraction() {
         pointerType: event.pointerType,
         startX: event.clientX,
         startY: event.clientY,
+        canvasWidth: elements.canvas.getBoundingClientRect().width || 1,
         startAngle: state.cameraAngle,
         startDistance: state.cameraDistance,
         sampleTime: now,
@@ -1477,10 +1521,11 @@ function bindCanvasInteraction() {
       const points = [...activePointers.values()];
       const distance = Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
       if (pointerGesture.pinchStart) {
+        const distanceRange = cameraDistanceRangeForPreset();
         state.cameraDistanceTarget = clamp(
-          pointerGesture.startDistance - (distance - pointerGesture.pinchStart) * 0.15,
-          CAMERA_DISTANCE_RANGE[0],
-          CAMERA_DISTANCE_RANGE[1]
+          pointerGesture.startDistance - (distance - pointerGesture.pinchStart) * CAMERA_PINCH_DISTANCE_SENSITIVITY,
+          distanceRange[0],
+          distanceRange[1]
         );
         pointerGesture.moved = true;
         scheduleRendererFrame();
@@ -1490,12 +1535,19 @@ function bindCanvasInteraction() {
     }
     const deltaX = event.clientX - pointerGesture.startX;
     const deltaY = event.clientY - pointerGesture.startY;
-    const threshold = pointerGesture.pointerType === "touch" || pointerGesture.pointerType === "pen"
-      ? CAMERA_DRAG_THRESHOLD_COARSE
-      : CAMERA_DRAG_THRESHOLD_FINE;
+    const isCoarsePointer = pointerGesture.pointerType === "touch" || pointerGesture.pointerType === "pen";
+    const threshold = isCoarsePointer ? CAMERA_DRAG_THRESHOLD_COARSE : CAMERA_DRAG_THRESHOLD_FINE;
     if (Math.hypot(deltaX, deltaY) > threshold) pointerGesture.moved = true;
     if (pointerGesture.moved) {
-      const nextAngle = clamp(pointerGesture.startAngle + deltaX * 0.12, CAMERA_ANGLE_RANGE[0], CAMERA_ANGLE_RANGE[1]);
+      // Viewport-normalized: degrees are a fraction of canvas width, not raw
+      // pixels, so a given drag gesture feels consistent across phone,
+      // tablet, and desktop instead of being much weaker on small screens.
+      const degreesPerWidth = isCoarsePointer ? CAMERA_ORBIT_DEGREES_PER_WIDTH_COARSE : CAMERA_ORBIT_DEGREES_PER_WIDTH_FINE;
+      const nextAngle = clamp(
+        pointerGesture.startAngle + (deltaX / pointerGesture.canvasWidth) * degreesPerWidth,
+        CAMERA_ANGLE_RANGE[0],
+        CAMERA_ANGLE_RANGE[1]
+      );
       state.cameraAngle = nextAngle;
       state.cameraAngleTarget = nextAngle;
       elements.cameraAngle.value = String(Math.round(nextAngle));
@@ -1555,6 +1607,7 @@ function bindCanvasInteraction() {
         pointerType: gesture?.pointerType,
         startX: point.x,
         startY: point.y,
+        canvasWidth: elements.canvas.getBoundingClientRect().width || 1,
         startAngle: state.cameraAngle,
         startDistance: state.cameraDistance,
         sampleTime: performance.now(),
@@ -1576,10 +1629,11 @@ function bindCanvasInteraction() {
     // (reported with ctrl/meta) and Shift+wheel control the simulation camera.
     if (!(event.ctrlKey || event.metaKey || event.shiftKey)) return;
     event.preventDefault();
+    const distanceRange = cameraDistanceRangeForPreset();
     state.cameraDistanceTarget = clamp(
-      state.cameraDistanceTarget + Math.sign(event.deltaY) * 4,
-      CAMERA_DISTANCE_RANGE[0],
-      CAMERA_DISTANCE_RANGE[1]
+      state.cameraDistanceTarget + Math.sign(event.deltaY) * CAMERA_WHEEL_DISTANCE_STEP,
+      distanceRange[0],
+      distanceRange[1]
     );
     scheduleRendererFrame();
   }, { passive: false });
@@ -1797,7 +1851,8 @@ function initialize() {
       return placeEventMode;
     },
     setCamera: (distance, angle) => {
-      state.cameraDistance = clamp(Number(distance), CAMERA_DISTANCE_RANGE[0], CAMERA_DISTANCE_RANGE[1]);
+      const distanceRange = cameraDistanceRangeForPreset();
+      state.cameraDistance = clamp(Number(distance), distanceRange[0], distanceRange[1]);
       state.cameraDistanceTarget = state.cameraDistance;
       state.cameraAngle = clamp(Number(angle), CAMERA_ANGLE_RANGE[0], CAMERA_ANGLE_RANGE[1]);
       state.cameraAngleTarget = state.cameraAngle;
