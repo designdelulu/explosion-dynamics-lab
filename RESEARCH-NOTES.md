@@ -117,6 +117,140 @@ Environment (shared, but scoped by mode string in `scripts/renderer.js`, not by 
 
 Not generalized to the other eleven presets in this pass, by request; see the release report for the generalization recommendation.
 
+## Tsar-scale smoke-material proof of concept (2026-07)
+
+A second single-preset vertical slice, scoped only to the smoke **material**
+(opacity, transfer function, medium-scale turbulence, and lighting contrast)
+of the same Tsar broad-plume body established above. The plume's large-scale
+structure, boundary behavior, and camera framing from the prior pass are
+unchanged; this pass only changes how density becomes color and alpha inside
+the already-approved silhouette.
+
+### Read-only audit of the active path
+
+Traced `VOLUME_FRAGMENT` (`scripts/fluid-engine.js`) end to end before
+changing anything:
+
+- Density-to-opacity is already Beer–Lambert exponential
+  (`alpha = 1 - exp(-opticalDepth)`), not linear or thresholded — no change
+  needed there.
+- Soot (`scalar.g`) and dust (`scalar.a`) were summed into one `smoke` value
+  *before* the optical-depth multiply, so both shared exactly one
+  density-to-alpha coefficient (`uVolumeProfile0.y`, i.e. `volume.opacity`).
+  This is the root cause of the "one universal material" look: dust and soot
+  can already differ in *weight* (`volume.dustVisibility`) and *color*
+  (`dustMix` blends `uPaletteSmoke`/`uPaletteDust`), but never in how strongly
+  a unit of their density attenuates light.
+- Depth decorrelation already exists: each ray-marched layer samples a 3D
+  curl-detail texture at a *depth-varying* z-coordinate and offsets its own
+  sample UV (`layerUv.x += depth * (...)`, `layerUv.y += depth*depth * (...)`,
+  plus a curl-driven offset) — layers are not simple repeated 2D slices. The
+  detail loop runs exactly 2 octaves at a flat `k^(-5/6)` amplitude with no
+  dependence on local flow energy.
+- Self-shadowing is already tied to accumulated optical depth
+  (`shadowColumn` grows through the front-to-back loop; `selfShadow =
+  exp(-shadowColumn * ...)`), and front/rear layers already receive
+  independent lighting through that same accumulation plus a sky-occlusion
+  probe. The dynamic range between shadowed and lit smoke was narrow (small
+  mix weights), which reads as flatter than the mechanism actually supports.
+- Bloom is already gated to genuine incandescent emission only (neighbor
+  sampling multiplies by `neighbor.b`), not a generic brightness bleed — no
+  change needed there.
+- Tone mapping already mixes ACES and Reinhard curves
+  (`uVolumeProfile2.y`), so the previously-noted "t7 bright/flat" look is a
+  balance issue in the existing profile values, not a missing tone-mapping
+  system.
+
+Conclusion: the rendering *mechanisms* the task asks for (exponential
+transmittance, front/back self-shadow, depth decorrelation, gated bloom,
+tone-mapped composite) were already present and reasonably sophisticated.
+The gap was narrower than the task brief implied — mainly one shared
+material coefficient, an energy-flat (rather than energy-weighted) detail
+octave, and under-differentiated lighting contrast weights. The three
+techniques below are targeted at exactly those three gaps rather than
+replacing working machinery.
+
+### Techniques selected (Tsar-gated via a new `material` profile block)
+
+Mirrors the existing `plume.mode` pattern exactly: `BASE_PROFILE.material =
+{ mode: 0, sootAbsorption: 1, dustAbsorption: 1, detailBoost: 0,
+warmCoolContrast: 0 }` for every preset; only Tsar sets `mode: 1` with tuned
+values. A single `uMaterialMode` uniform (0 for every other preset) gates all
+three shader changes; when it is 0, every new term reduces algebraically to
+the prior expression, so non-Tsar rendering is byte-identical.
+
+1. **Material-separated transfer function.** Staubli/Sigg/Peikert/Gubler/Gross,
+   *Volume Rendering of Smoke Propagation CFD Data* (2007), §3: the optical
+   model gives each material its own optical-density coefficient
+   (`D = (Km/3) * ys * c_p`) rather than one shared density→opacity curve.
+   Browser adaptation: soot density and dust density each get an independent
+   multiplier (`uMaterialParams.x/.y`, Tsar: soot 1.2, dust 0.5) *before* the
+   exponential optical-depth term, while the unweighted sum is kept for the
+   existing color-mixing code path. Rejected alternative: a full 2D/3D
+   pre-integrated lookup table (the paper's own approach for a *linear*
+   transfer function) — unnecessary complexity for two materials with a
+   single scalar coefficient each, and this repo's transfer function is
+   already exponential, not linear, so the paper's specific pre-integration
+   trick doesn't directly transfer. Expected cost: two extra multiplies per
+   ray step, no new texture samples.
+
+2. **Energy-weighted third detail octave.** Kim/Thürey/James/Gross-style
+   wavelet turbulence (paper 08) and Bridson/Hourihan/Nordenstam, *Curl-Noise
+   for Procedural Fluid Flow* (2007, paper 09), §2.2's octave superposition
+   with a Kolmogorov-inspired falloff (already used for the existing 2
+   octaves). Browser adaptation: a third, finer curl-detail octave whose
+   amplitude is scaled by local flow energy (`abs(centerCurl)`) instead of
+   the flat `k^(-5/6)` term the first two octaves use — detail concentrates
+   where the flow is actually turbulent (medium-scale billows, cauliflower
+   lobes) instead of coating the whole plume in uniform noise. Rejected
+   alternative: a true offline wavelet decomposition (paper 08's core
+   method) — requires a multi-resolution simulation grid this engine doesn't
+   have; the existing curl-noise-octave infrastructure already approximates
+   the same visual goal (energy-aware band-limited detail) far more cheaply.
+   Expected cost: one additional 3D texture sample per ray step, Tsar only.
+
+3. **Widened lit/shadowed contrast.** Fedkiw/Stam/Jensen, *Visual Simulation
+   of Smoke* (2001) §5.1 (Beer–Lambert self-shadowing, already in place) and
+   Pegoraro/Parker, *Physically-Based Realistic Fire Rendering* (2006) §3.2's
+   radiative-transfer view that absorption dominates a low-albedo medium —
+   the existing mechanism was correct but under-weighted. Browser
+   adaptation: a single `warmCoolContrast` scalar (Tsar: 0.55) widens the
+   existing `litWeight`/`smokeColor` mix coefficients (more temperature and
+   self-shadow influence, a darker unlit base) rather than introducing a new
+   lighting model. Rejected alternative: Pegoraro/Parker's full spectral
+   absorption/emission/blackbody path-tracer — far too expensive for
+   real-time raymarching and requires per-wavelength data this engine
+   doesn't track; the existing `heatRamp` already approximates blackbody
+   color, so only the contrast *weighting* needed adjustment, not a new
+   radiative model. The "t7 bright/flat" complaint from the prior POC's
+   known-issues list is addressed by this same contrast widening rather than
+   a separate tone-mapping change, since tone mapping was already adequate
+   (see audit above).
+
+### Not selected this pass
+
+- A full pre-integrated 2D/3D transfer-function lookup table (paper 16's
+  core technique) — the two-coefficient approach above gets the same
+  material-separation benefit at a fraction of the complexity for an
+  exponential (not linear) transfer function.
+- True wavelet turbulence (paper 08's offline multi-resolution decomposition)
+  — the existing curl-detail octave system is the pragmatic real-time
+  substitute already used by this engine; a genuine wavelet solve would
+  require a second simulation grid.
+- Tracer occlusion changes. Audited (`TRACER_VERTEX`/`TRACER_FRAGMENT`,
+  `scripts/fluid-engine.js`): tracer alpha is currently proxied by the local
+  scalar density *at the tracer's own position* (`plume * 0.34`), so a tracer
+  embedded in dense smoke gets brighter, not hidden by smoke between it and
+  the camera — there is no true occlusion by intervening density. A correct
+  fix would sample the volume pass's already-composited destination alpha
+  (same framebuffer, drawn immediately before the tracer pass) as an
+  occlusion factor. Left unimplemented this pass: `_renderTracerPoints` and
+  both tracer shaders are shared, unguarded code used by every preset, so
+  this would need its own profile-gated flag and shader branch, pushing past
+  the three-technique budget for a single pass; flagged here as a
+  well-scoped, low-risk follow-up rather than folded in as a fourth
+  technique.
+
 ## Browser numerical design
 
 The shared event-family simulation uses deterministic fixed steps and a WebGL2 field pipeline. Source injection is selected from bounded normalized primitives—radial and directional impulses, rings, ground sheets, vertical jets, offset kernels, pulsed columns, ejecta curtains, trails, sustained visual-combustion regions, and turbulent clusters—without introducing materials or engineering inputs:
