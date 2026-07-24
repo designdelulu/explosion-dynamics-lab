@@ -143,6 +143,47 @@ for (const uniform of ["uPlumeMode", "uPlumeParams"]) {
   );
 }
 
+// --- Tsar-scale smoke-material research proof of concept (2026-07) -----------
+// Same opt-in contract as the plume controls above: every profile except the
+// Tsar historical reference keeps material.mode 0, so its rendering is
+// byte-identical to before this pass.
+for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
+  assert.ok(profile.material && typeof profile.material === "object", `${presetId}: material config missing`);
+  for (const key of ["mode", "sootAbsorption", "dustAbsorption", "detailBoost", "warmCoolContrast"]) {
+    assert.ok(Number.isFinite(profile.material[key]), `${presetId}: material.${key} must be finite`);
+  }
+  if (presetId === "tsar-bomba-scale-reference") {
+    assert.equal(profile.material.mode, 1, "Tsar must enable the smoke-material mode");
+    assert.ok(profile.material.sootAbsorption > profile.material.dustAbsorption, "Tsar soot must absorb more strongly than lofted dust");
+    assert.ok(profile.material.detailBoost > 0, "Tsar energy-weighted detail octave must be active");
+    assert.ok(profile.material.warmCoolContrast > 0, "Tsar lit/shadowed contrast widening must be active");
+  } else {
+    assert.equal(profile.material.mode, 0, `${presetId}: smoke-material mode must remain off for non-Tsar presets`);
+    assert.equal(profile.material.sootAbsorption, 1, `${presetId}: default soot absorption must stay neutral`);
+    assert.equal(profile.material.dustAbsorption, 1, `${presetId}: default dust absorption must stay neutral`);
+  }
+}
+// The volume shader and engine bindings must carry the material uniforms.
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /uniform\s+float\s+uMaterialMode\b/,
+  "uMaterialMode: material uniform missing from the volume shader",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /uniform\s+vec4\s+uMaterialParams\b/,
+  "uMaterialParams: material uniform missing from the volume shader",
+);
+// Every new material term must be reachable only through the uMaterialMode
+// gate, and must algebraically collapse to the prior expression when it is 0.
+for (const gatedTerm of [
+  /uMaterialMode > 0\.5\s*\?\s*smokeDensity \* uMaterialParams\.x \+ dustDensity \* uMaterialParams\.y\s*:\s*smoke/,
+  /int detailOctaves = uMaterialMode > 0\.5 \? 3 : 2;/,
+  /float contrastBoost = uMaterialMode > 0\.5 \? uMaterialParams\.w : 0\.0;/,
+]) {
+  assert.match(RESEARCH_FLUID_SHADER_SOURCES.volumeFragment, gatedTerm, `Material technique not properly gated behind uMaterialMode: ${gatedTerm}`);
+}
+
 const shaders = RESEARCH_FLUID_SHADER_SOURCES;
 const engineSource = readFileSync(new URL("../scripts/fluid-engine.js", import.meta.url), "utf8");
 for (const uniform of [

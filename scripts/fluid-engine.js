@@ -223,6 +223,13 @@ const BASE_PROFILE = Object.freeze({
   // Broad-plume research controls. mode 0 keeps every shipped preset on its
   // exact current behavior; only the Tsar historical reference opts in.
   plume: Object.freeze({ mode: 0, expansion: 0, vortex: 0, persistence: 0, widen: 0 }),
+  // Smoke-material research controls (2026-07 Tsar smoke-material pass). mode 0
+  // keeps every shipped preset byte-identical to before this pass; only the
+  // Tsar historical reference opts in. sootAbsorption/dustAbsorption give soot
+  // and lofted dust independent optical-depth coefficients instead of one
+  // shared density-to-alpha curve; detailBoost adds an energy-weighted third
+  // curl-detail octave; warmCoolContrast widens the lit/shadowed dynamic range.
+  material: Object.freeze({ mode: 0, sootAbsorption: 1, dustAbsorption: 1, detailBoost: 0, warmCoolContrast: 0 }),
 });
 
 function defineFluidProfile(presetId, profileId, overrides = {}) {
@@ -238,6 +245,7 @@ function defineFluidProfile(presetId, profileId, overrides = {}) {
     volume: { ...BASE_PROFILE.volume, ...(overrides.volume || {}) },
     quality: { ...BASE_PROFILE.quality, ...(overrides.quality || {}) },
     plume: { ...BASE_PROFILE.plume, ...(overrides.plume || {}) },
+    material: { ...BASE_PROFILE.material, ...(overrides.material || {}) },
   });
 }
 
@@ -469,6 +477,12 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       volume: { scaleX: 1.4, scaleY: 1.42, depth: 1.48, opacity: 1.48, shadow: 1.5, bloom: 1.15, distortion: 1.32, erosion: 0.82, noiseScale: 0.86, dustVisibility: 0.58, exposure: 1.0, toneMap: 0.24, backgroundIllumination: 0.46, emissionCurve: 0.88 },
       quality: { grid: 1.14, pressure: 1.18, rays: 1.2, tracers: 1.44, detail: 1.28 },
       plume: { mode: 1, expansion: 0.65, vortex: 1.0, persistence: 0.78, widen: 0.6 },
+      // 2026-07 smoke-material pass: soot absorbs more strongly than lofted
+      // dust (independent optical-depth coefficients instead of one shared
+      // curve), an energy-weighted third detail octave adds medium-scale
+      // billowing, and warmCoolContrast widens the lit/shadowed range for
+      // readable internal depth.
+      material: { mode: 1, sootAbsorption: 1.6, dustAbsorption: 0.35, detailBoost: 1.4, warmCoolContrast: 0.85 },
     },
   ),
 });
@@ -1629,6 +1643,12 @@ uniform vec4 uLayerVisibility;
 uniform vec4 uVolumeProfile0;
 uniform vec4 uVolumeProfile1;
 uniform vec4 uVolumeProfile2;
+// Smoke-material research controls (2026-07). uMaterialMode is 0 for every
+// shipped preset (byte-identical rendering) and 1 only for the Tsar
+// historical reference. uMaterialParams packs (sootAbsorption,
+// dustAbsorption, detailBoost, warmCoolContrast).
+uniform float uMaterialMode;
+uniform vec4 uMaterialParams;
 uniform vec3 uPaletteBackground;
 uniform vec3 uPaletteEmber;
 uniform vec3 uPaletteFlame;
@@ -1825,9 +1845,20 @@ void main() {
     // Two trilinear texture samples replace dozens of per-layer integer hashes.
     // Velocity amplitudes use k^(-5/6), the square-root analogue of a k^(-5/3)
     // energy spectrum. This is a bounded visual perturbation, not calibrated flow.
-    for (int octave = 0; octave < 2; octave += 1) {
+    // Tsar-only (uMaterialMode): a third, finer octave is added whose
+    // amplitude follows local flow energy (|centerCurl|) rather than the flat
+    // falloff above — wavelet-turbulence-style energy weighting that
+    // concentrates fine billowing where the flow is actually turbulent instead
+    // of coating the whole plume in uniform noise. detailOctaves stays 2 for
+    // every other preset, so their loop is byte-identical to before this pass.
+    int detailOctaves = uMaterialMode > 0.5 ? 3 : 2;
+    for (int octave = 0; octave < 3; octave += 1) {
+      if (octave >= detailOctaves) break;
       float k = exp2(float(octave));
       float amplitude = pow(k, -0.8333333333);
+      if (octave == 2) {
+        amplitude *= uMaterialParams.z * clamp(abs(centerCurl) * 6.0, 0.0, 1.6);
+      }
       vec3 detailCoordinate = vec3(
         distortedUv * vec2(4.7, 5.9) * k * uVolumeProfile1.z
           + vec2(depth * 0.37, -depth * 0.23) * k
@@ -1865,7 +1896,17 @@ void main() {
       0.62,
       1.38
     );
-    float density = (smoke + incandescent * 0.22) * radialWeight * detailModulation * layerFade;
+    // Tsar-only (uMaterialMode): soot and lofted dust get independent
+    // optical-depth coefficients instead of sharing one density-to-alpha
+    // curve — dense soot absorbs more per unit density, lofted dust less, so
+    // medium density reads as layered translucency rather than one uniform
+    // material. The unweighted smoke value is left untouched below for color
+    // mixing (dustMix, etc). When uMaterialMode is 0 both coefficients are
+    // 1.0 and opticalWeightedSmoke equals smoke exactly.
+    float opticalWeightedSmoke = uMaterialMode > 0.5
+      ? smokeDensity * uMaterialParams.x + dustDensity * uMaterialParams.y
+      : smoke;
+    float density = (opticalWeightedSmoke + incandescent * 0.22) * radialWeight * detailModulation * layerFade;
     float erosion = smoothstep(-0.62 / max(0.4, uVolumeProfile1.y), 0.38, densityDetail);
     density = max(0.0,
       density - (1.0 - erosion) * radialWeight * 0.026 * uVolumeProfile1.y
@@ -1897,13 +1938,22 @@ void main() {
     float dustMix = clamp(dustDensity / max(0.0001, smoke), 0.0, 1.0);
     vec3 darkParticulate = mix(uPaletteSmoke, uPaletteDust, dustMix);
     vec3 litParticulate = mix(uPaletteSmokeLight, uPaletteCloud, clamp(shadowColumn, 0.0, 1.0));
+    // Tsar-only (uMaterialMode): widen the lit/shadowed dynamic range so
+    // internal shadows read as genuinely dark and sky/fire-lit crowns read as
+    // genuinely bright, instead of one flat mid-tone. contrastBoost is 0 for
+    // every other preset, reducing every term below to its original value.
+    float contrastBoost = uMaterialMode > 0.5 ? uMaterialParams.w : 0.0;
     float litWeight = clamp(
-      temperature * 0.18 + selfShadow * 0.3 + skyOcclusion * 0.42,
+      temperature * (0.18 + contrastBoost * 0.35)
+        + selfShadow * (0.3 + contrastBoost * 0.2)
+        + skyOcclusion * 0.42,
       0.0,
       1.0
     );
     vec3 smokeColor = mix(darkParticulate, litParticulate, litWeight)
-      * (0.4 + 0.42 * skyOcclusion + 0.24 * selfShadow);
+      * (0.4 - contrastBoost * 0.12
+        + (0.42 + contrastBoost * 0.1) * skyOcclusion
+        + (0.24 + contrastBoost * 0.1) * selfShadow);
     vec3 emission = heatRamp(temperature + incandescent * 0.75)
       * (1.0 - exp(-incandescent * 1.1)) * (0.62 + selfShadow * 0.3)
       * (0.72 + 0.28 * detailModulation);
@@ -3083,6 +3133,16 @@ export class ResearchFluidEngine {
       volume.toneMap,
       volume.backgroundIllumination,
       volume.emissionCurve,
+    );
+    const material = this.profile.material || { mode: 0, sootAbsorption: 1, dustAbsorption: 1, detailBoost: 0, warmCoolContrast: 0 };
+    this._uniform1f(program, 'uMaterialMode', material.mode > 0 ? 1 : 0);
+    this._uniform4f(
+      program,
+      'uMaterialParams',
+      finite(material.sootAbsorption, 1),
+      finite(material.dustAbsorption, 1),
+      finite(material.detailBoost, 0),
+      finite(material.warmCoolContrast, 0),
     );
   }
 
