@@ -144,8 +144,17 @@ a {
 #simCanvas {
   z-index: 0;
   touch-action: pan-y;
+  cursor: grab;
   background:
     radial-gradient(circle at 45% 46%, #191b25 0, #0c0e14 48%, #07080b 100%);
+}
+
+#simCanvas.camera-dragging {
+  cursor: grabbing;
+}
+
+#simCanvas.place-event-mode {
+  cursor: crosshair;
 }
 
 #researchCanvas {
@@ -261,6 +270,20 @@ body.compare-renderers #researchCanvas {
 
 .fluid-debug-overlay[hidden] {
   display: none;
+}
+
+/* Camera diagnostics reuse the fluid overlay's layout but sit at the
+   opposite corner (ember accent) so both can be open at once via
+   ?debugFluid=1&debugCamera=1 without overlapping. */
+.camera-debug-overlay {
+  left: auto;
+  right: 18px;
+  border-color: rgba(255, 140, 66, .4);
+  box-shadow: 0 18px 48px rgba(0, 0, 0, .42), inset 0 0 42px rgba(255, 140, 66, .035);
+}
+
+.camera-debug-overlay .fluid-debug-overlay__head {
+  color: var(--ember-hot);
 }
 
 .fluid-debug-overlay__head,
@@ -852,14 +875,21 @@ body.panel-sheet .control-panel.is-closed {
   outline-offset: 2px;
 }
 
-.transport {
+.transport,
+.camera-actions {
   display: grid;
   grid-template-columns: repeat(3, 1fr);
   gap: 7px;
   margin: 9px 0 14px;
 }
 
+.camera-actions {
+  grid-template-columns: repeat(2, 1fr);
+  margin: 4px 0 8px;
+}
+
 .transport button,
+.camera-actions button,
 .seed-row button,
 .export-buttons button,
 #exportRetryButton {
@@ -874,6 +904,7 @@ body.panel-sheet .control-panel.is-closed {
 }
 
 .transport button:hover,
+.camera-actions button:hover,
 .seed-row button:hover,
 .export-buttons button:hover,
 #exportRetryButton:hover {
@@ -882,7 +913,8 @@ body.panel-sheet .control-panel.is-closed {
   background: rgba(255, 255, 255, .08);
 }
 
-.transport button[aria-pressed="true"] {
+.transport button[aria-pressed="true"],
+.camera-actions button[aria-pressed="true"] {
   color: #141009;
   background: var(--ember-hot);
   border-color: var(--ember-hot);
@@ -2144,6 +2176,7 @@ body:not(.interface-visible) .icon-button {
   .panel-toggle,
   .panel-close,
   .transport button,
+  .camera-actions button,
   .seed-row button,
   .export-buttons button,
   .field select,

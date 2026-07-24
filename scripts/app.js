@@ -26,6 +26,7 @@ const $ = (selector, root = document) => root.querySelector(selector);
 const $$ = (selector, root = document) => Array.from(root.querySelectorAll(selector));
 const query = new URLSearchParams(window.location.search);
 const DEBUG_FLUID = query.get("debugFluid") === "1";
+const DEBUG_CAMERA = query.get("debugCamera") === "1";
 const COMPARE_RENDERERS = query.get("compareRenderers") === "1";
 const DEVELOPER_RENDER_MODE = DEBUG_FLUID || COMPARE_RENDERERS;
 const RESEARCH_PRESET_ID = "low-yield-nuclear-airburst";
@@ -57,6 +58,26 @@ const DEBUG_FIELDS = new Set([
   "vorticity",
   "tracers"
 ]);
+
+// ---------------------------------------------------------------------------
+// Camera interaction tuning. The renderer exposes a distance (zoom) scalar and
+// a single orbit-style angle around the event origin — there is no separate
+// pitch axis, so "orbit" here means horizontal rotation only. All values are
+// frame-rate-independent (exponential damping keyed off real elapsed time),
+// so behavior matches across displays and load. Drag threshold is wider for
+// coarse (touch/pen) pointers, which register more incidental jitter than a
+// mouse.
+// ---------------------------------------------------------------------------
+const CAMERA_DEFAULT = Object.freeze({ distance: 100, angle: 0, originX: 0.5, originY: 0.66 });
+const CAMERA_DISTANCE_RANGE = [50, 150];
+const CAMERA_ANGLE_RANGE = [-35, 35];
+const CAMERA_DRAG_THRESHOLD_FINE = 6;
+const CAMERA_DRAG_THRESHOLD_COARSE = 10;
+const CAMERA_EASE_RATE = 10; // 1/s — used for reset/slider/zoom easing
+const CAMERA_ANGLE_INERTIA_DECAY = 2.6; // 1/s — release-coast deceleration
+const CAMERA_ANGLE_MAX_RELEASE_VELOCITY = 220; // deg/s, clamp on flick release
+const CAMERA_SNAP_EPSILON = 0.02;
+const CAMERA_VELOCITY_EPSILON = 0.05;
 
 const elements = {
   canvas: $("#simCanvas"),
@@ -122,6 +143,22 @@ const elements = {
   cameraDistanceOutput: $("#cameraDistanceOutput"),
   cameraAngle: $("#cameraAngleRange"),
   cameraAngleOutput: $("#cameraAngleOutput"),
+  resetCamera: $("#resetCameraButton"),
+  placeEvent: $("#placeEventButton"),
+  cameraDebugOverlay: $("#cameraDebugOverlay"),
+  debugCameraInterfaceMode: $("#debugCameraInterfaceMode"),
+  debugCameraPointerType: $("#debugCameraPointerType"),
+  debugCameraPointerCount: $("#debugCameraPointerCount"),
+  debugCameraGesture: $("#debugCameraGesture"),
+  debugCameraThreshold: $("#debugCameraThreshold"),
+  debugCameraAngle: $("#debugCameraAngle"),
+  debugCameraAngleTarget: $("#debugCameraAngleTarget"),
+  debugCameraDistance: $("#debugCameraDistance"),
+  debugCameraDistanceTarget: $("#debugCameraDistanceTarget"),
+  debugCameraVelocity: $("#debugCameraVelocity"),
+  debugCameraTarget: $("#debugCameraTarget"),
+  debugCameraPlaceMode: $("#debugCameraPlaceMode"),
+  debugCameraResetCount: $("#debugCameraResetCount"),
   density: $("#densityRange"),
   densityOutput: $("#densityOutput"),
   flowMode: $("#flowModeSelect"),
@@ -258,6 +295,9 @@ if (DEBUG_FLUID) {
   document.body.classList.add("debug-fluid");
   elements.fluidDebugOverlay.hidden = false;
 }
+if (DEBUG_CAMERA && elements.cameraDebugOverlay) {
+  elements.cameraDebugOverlay.hidden = false;
+}
 if (DEVELOPER_RENDER_MODE) {
   window.__EXPLOSION_DYNAMICS_LAB_BUILD__ = BUILD_INFO;
   console.info("Explosion Dynamics Lab build identity", BUILD_INFO);
@@ -282,8 +322,11 @@ const state = {
   altitude: 0.02,
   windDirection: 90,
   windStrength: 24,
-  cameraDistance: 100,
-  cameraAngle: 0,
+  cameraDistance: CAMERA_DEFAULT.distance,
+  cameraDistanceTarget: CAMERA_DEFAULT.distance,
+  cameraAngle: CAMERA_DEFAULT.angle,
+  cameraAngleTarget: CAMERA_DEFAULT.angle,
+  cameraAngleVelocity: 0,
   density: compactDevice ? 75 : 100,
   quality: DIRECT_QUALITY || (compactDevice ? "mobile" : "balanced"),
   diagnostic: DEBUG_FLUID && DEBUG_FIELDS.has(query.get("field")) ? query.get("field") : "beauty",
@@ -412,6 +455,8 @@ let pointerGesture = null;
 let animationRequest = 0;
 let rendererFramePending = false;
 let rendererConfigurePending = false;
+let placeEventMode = false;
+let cameraResetCount = 0;
 const activePointers = new Map();
 
 function analytics(eventName, parameters = {}) {
@@ -673,6 +718,93 @@ function updateControlOutputs() {
   elements.densityOutput.textContent = `${Math.round(state.density)}%`;
 }
 
+/**
+ * Restores the camera (distance, angle, origin/target) to its shared default.
+ * Eases back over a few frames via updateCameraAnimation rather than jumping
+ * instantly. Never touches simulation time, playback, or preset state.
+ */
+function resetCamera() {
+  state.cameraDistanceTarget = CAMERA_DEFAULT.distance;
+  state.cameraAngleTarget = CAMERA_DEFAULT.angle;
+  state.cameraAngleVelocity = 0;
+  state.originX = CAMERA_DEFAULT.originX;
+  state.originY = CAMERA_DEFAULT.originY;
+  setRendererOrigin(state.originX, state.originY);
+  cameraResetCount += 1;
+  showToast("Camera reset");
+}
+
+/**
+ * "Place event" is an explicit, user-armed mode for repositioning the
+ * abstract event origin. It replaces the old implicit behavior where any
+ * plain tap on the canvas silently recentered the scene — that made normal
+ * camera taps feel unstable. Placement is single-shot: it disarms itself
+ * after one placement so accidental future taps can't move the event again.
+ */
+function setPlaceEventMode(active) {
+  placeEventMode = Boolean(active);
+  elements.placeEvent.setAttribute("aria-pressed", String(placeEventMode));
+  elements.canvas.classList.toggle("place-event-mode", placeEventMode);
+  if (placeEventMode) showToast("Tap the canvas once to place the event");
+}
+
+function updateCameraAnimation(delta) {
+  if (state.exporting) return false;
+  let changed = false;
+
+  if (Math.abs(state.cameraAngleVelocity) > CAMERA_VELOCITY_EPSILON) {
+    let next = state.cameraAngle + state.cameraAngleVelocity * delta;
+    if (next <= CAMERA_ANGLE_RANGE[0] || next >= CAMERA_ANGLE_RANGE[1]) {
+      next = clamp(next, CAMERA_ANGLE_RANGE[0], CAMERA_ANGLE_RANGE[1]);
+      state.cameraAngleVelocity = 0; // bounded — stop dead at the limit, no bounce
+    } else {
+      state.cameraAngleVelocity *= Math.exp(-CAMERA_ANGLE_INERTIA_DECAY * delta);
+    }
+    state.cameraAngle = next;
+    state.cameraAngleTarget = next;
+    changed = true;
+  } else if (Math.abs(state.cameraAngleTarget - state.cameraAngle) > CAMERA_SNAP_EPSILON) {
+    state.cameraAngle += (state.cameraAngleTarget - state.cameraAngle) * (1 - Math.exp(-CAMERA_EASE_RATE * delta));
+    changed = true;
+  } else if (state.cameraAngle !== state.cameraAngleTarget) {
+    state.cameraAngle = state.cameraAngleTarget;
+    changed = true;
+  }
+
+  if (Math.abs(state.cameraDistanceTarget - state.cameraDistance) > CAMERA_SNAP_EPSILON) {
+    state.cameraDistance += (state.cameraDistanceTarget - state.cameraDistance) * (1 - Math.exp(-CAMERA_EASE_RATE * delta));
+    changed = true;
+  } else if (state.cameraDistance !== state.cameraDistanceTarget) {
+    state.cameraDistance = state.cameraDistanceTarget;
+    changed = true;
+  }
+
+  if (changed) {
+    elements.cameraAngle.value = String(Math.round(state.cameraAngle));
+    elements.cameraDistance.value = String(Math.round(state.cameraDistance));
+    updateControlOutputs();
+    configureRenderer();
+  }
+  return changed;
+}
+
+function updateCameraDebugOverlay(gestureLabel) {
+  if (!DEBUG_CAMERA || !elements.cameraDebugOverlay) return;
+  elements.debugCameraInterfaceMode.textContent = interfaceMode;
+  elements.debugCameraPointerType.textContent = pointerGesture?.pointerType || "none";
+  elements.debugCameraPointerCount.textContent = String(activePointers.size);
+  elements.debugCameraGesture.textContent = gestureLabel || (pointerGesture?.moved ? "drag" : pointerGesture ? "pending" : "idle");
+  elements.debugCameraThreshold.textContent = pointerGesture?.moved ? "crossed" : "not crossed";
+  elements.debugCameraAngle.textContent = `${state.cameraAngle.toFixed(2)}°`;
+  elements.debugCameraAngleTarget.textContent = `${state.cameraAngleTarget.toFixed(2)}°`;
+  elements.debugCameraDistance.textContent = state.cameraDistance.toFixed(2);
+  elements.debugCameraDistanceTarget.textContent = state.cameraDistanceTarget.toFixed(2);
+  elements.debugCameraVelocity.textContent = `${state.cameraAngleVelocity.toFixed(2)}°/s`;
+  elements.debugCameraTarget.textContent = `${state.originX.toFixed(3)}, ${state.originY.toFixed(3)}`;
+  elements.debugCameraPlaceMode.textContent = placeEventMode ? "armed" : "off";
+  elements.debugCameraResetCount.textContent = String(cameraResetCount);
+}
+
 function setPlaying(playing) {
   state.playing = Boolean(playing) && state.time < currentPreset().duration;
   elements.play.textContent = state.playing ? "Pause" : "Play";
@@ -803,8 +935,14 @@ function updateSettingsFromControls() {
   state.windStrength = Number(elements.windStrength.value);
   state.environment = elements.environment.value;
   state.timeOfDay = elements.timeOfDay.value;
+  // Slider input is direct/immediate (matches keyboard-arrow accessibility
+  // expectations); setting target === current avoids updateCameraAnimation
+  // fighting the new value on the next frame.
   state.cameraDistance = Number(elements.cameraDistance.value);
+  state.cameraDistanceTarget = state.cameraDistance;
   state.cameraAngle = Number(elements.cameraAngle.value);
+  state.cameraAngleTarget = state.cameraAngle;
+  state.cameraAngleVelocity = 0;
   state.density = Number(elements.density.value);
   state.quality = elements.quality.value;
   if (elements.flowMode) {
@@ -906,6 +1044,9 @@ function animationFrame(now) {
   if (scheduledWork.configure) configureRenderer();
   const delta = clamp((now - lastFrame) / 1000, 0, 0.08);
   lastFrame = now;
+  // Camera easing/inertia runs every frame, independent of playback state, so
+  // orbit coast and Reset Camera animate smoothly even while paused.
+  const cameraAnimating = updateCameraAnimation(delta);
   if (state.playing && !state.exporting) {
     state.time += delta * state.speed;
     if (state.time >= currentPreset().duration) {
@@ -914,9 +1055,10 @@ function animationFrame(now) {
     }
     renderLive(state.time);
     updateTimelineUi();
-  } else if (scheduledWork.render && !state.exporting) {
+  } else if ((scheduledWork.render || cameraAnimating) && !state.exporting) {
     renderLive(state.time);
   }
+  updateCameraDebugOverlay();
   if (now - lastMetricUpdate > 500) {
     const stats = renderer.getStats?.({ includeFieldMetrics: DEBUG_FLUID }) || {};
     elements.fpsMetric.textContent = Number.isFinite(stats.fps) ? String(Math.round(stats.fps)) : "—";
@@ -1165,6 +1307,8 @@ function bindControls() {
   });
   elements.restart.addEventListener("click", () => restart(false));
   elements.replay.addEventListener("click", () => restart(true));
+  elements.resetCamera?.addEventListener("click", resetCamera);
+  elements.placeEvent?.addEventListener("click", () => setPlaceEventMode(!placeEventMode));
   elements.preset.addEventListener("change", () => {
     applyPreset(elements.preset.value);
     replaceUrlParameter("preset", state.presetId);
@@ -1277,23 +1421,42 @@ function bindControls() {
 }
 
 function bindCanvasInteraction() {
+  // Camera gesture model: a plain tap/click never moves anything by default —
+  // only an explicit "Place event" arm (setPlaceEventMode) lets a tap
+  // reposition the origin, once. Ordinary drag orbits (horizontal delta ->
+  // cameraAngle), two-finger pinch and ctrl/meta/shift+wheel zoom (distance).
+  // A drag only begins once movement crosses a pointer-type-aware threshold,
+  // so a tap can never be misread as a large camera change. Release velocity
+  // feeds updateCameraAnimation() for a short inertial coast; pointercancel
+  // never coasts, it just stops.
   elements.canvas.addEventListener("pointerdown", (event) => {
-    elements.canvas.setPointerCapture?.(event.pointerId);
+    // Capture failure (seen on some Safari/touch edge cases when a pointer
+    // isn't recognized as active yet) must never abort gesture tracking —
+    // fall through to plain event listening instead.
+    try { elements.canvas.setPointerCapture?.(event.pointerId); } catch {}
     activePointers.set(event.pointerId, { x: event.clientX, y: event.clientY });
     if (activePointers.size === 1) {
+      state.cameraAngleVelocity = 0;
+      const now = performance.now();
       pointerGesture = {
         pointerId: event.pointerId,
+        pointerType: event.pointerType,
         startX: event.clientX,
         startY: event.clientY,
         startAngle: state.cameraAngle,
         startDistance: state.cameraDistance,
+        sampleTime: now,
+        sampleAngle: state.cameraAngle,
+        velocitySample: 0,
         moved: false,
         multi: false
       };
+      elements.canvas.classList.add("camera-dragging");
     } else if (activePointers.size === 2) {
       const points = [...activePointers.values()];
       pointerGesture = {
         pointerId: null,
+        pointerType: event.pointerType,
         startX: 0,
         startY: 0,
         startAngle: state.cameraAngle,
@@ -1303,6 +1466,7 @@ function bindCanvasInteraction() {
         multi: true
       };
     }
+    updateCameraDebugOverlay("pointerdown");
   });
 
   elements.canvas.addEventListener("pointermove", (event) => {
@@ -1313,23 +1477,42 @@ function bindCanvasInteraction() {
       const points = [...activePointers.values()];
       const distance = Math.hypot(points[0].x - points[1].x, points[0].y - points[1].y);
       if (pointerGesture.pinchStart) {
-        state.cameraDistance = clamp(pointerGesture.startDistance - (distance - pointerGesture.pinchStart) * 0.15, 50, 150);
-        elements.cameraDistance.value = String(state.cameraDistance);
+        state.cameraDistanceTarget = clamp(
+          pointerGesture.startDistance - (distance - pointerGesture.pinchStart) * 0.15,
+          CAMERA_DISTANCE_RANGE[0],
+          CAMERA_DISTANCE_RANGE[1]
+        );
         pointerGesture.moved = true;
-        updateControlOutputs();
-        scheduleRendererFrame({ configure: true });
+        scheduleRendererFrame();
       }
+      updateCameraDebugOverlay("pinch");
       return;
     }
     const deltaX = event.clientX - pointerGesture.startX;
     const deltaY = event.clientY - pointerGesture.startY;
-    if (Math.hypot(deltaX, deltaY) > 6) pointerGesture.moved = true;
+    const threshold = pointerGesture.pointerType === "touch" || pointerGesture.pointerType === "pen"
+      ? CAMERA_DRAG_THRESHOLD_COARSE
+      : CAMERA_DRAG_THRESHOLD_FINE;
+    if (Math.hypot(deltaX, deltaY) > threshold) pointerGesture.moved = true;
     if (pointerGesture.moved) {
-      state.cameraAngle = clamp(pointerGesture.startAngle + deltaX * 0.12, -35, 35);
-      elements.cameraAngle.value = String(state.cameraAngle);
+      const nextAngle = clamp(pointerGesture.startAngle + deltaX * 0.12, CAMERA_ANGLE_RANGE[0], CAMERA_ANGLE_RANGE[1]);
+      state.cameraAngle = nextAngle;
+      state.cameraAngleTarget = nextAngle;
+      elements.cameraAngle.value = String(Math.round(nextAngle));
       updateControlOutputs();
       scheduleRendererFrame({ configure: true });
+      // Rolling velocity sample (short window) so a released flick can coast
+      // instead of stopping dead — but only after enough time has passed to
+      // avoid a divide-by-near-zero on very close pointermove events.
+      const now = performance.now();
+      const elapsedMs = now - pointerGesture.sampleTime;
+      if (elapsedMs > 8) {
+        pointerGesture.velocitySample = (nextAngle - pointerGesture.sampleAngle) / (elapsedMs / 1000);
+        pointerGesture.sampleTime = now;
+        pointerGesture.sampleAngle = nextAngle;
+      }
     }
+    updateCameraDebugOverlay("drag");
   });
 
   const finishPointer = (event) => {
@@ -1341,29 +1524,50 @@ function bindCanvasInteraction() {
       && !wasMultiPointer
       && gesture?.pointerId === event.pointerId
       && !gesture.moved;
+    const isDragRelease = event.type === "pointerup"
+      && !wasMultiPointer
+      && gesture?.pointerId === event.pointerId
+      && gesture.moved;
     activePointers.delete(event.pointerId);
-    if (isTap) {
+    if (isTap && placeEventMode) {
       const rect = elements.canvas.getBoundingClientRect();
       state.originX = clamp((event.clientX - rect.left) / rect.width, 0.12, 0.88);
       state.originY = clamp((event.clientY - rect.top) / rect.height, 0.4, 0.82);
       setRendererOrigin(state.originX, state.originY);
       renderLive(state.time);
-      showToast("Event origin repositioned");
+      setPlaceEventMode(false);
+      showToast("Event placed");
+    } else if (isDragRelease) {
+      state.cameraAngleVelocity = clamp(
+        gesture.velocitySample || 0,
+        -CAMERA_ANGLE_MAX_RELEASE_VELOCITY,
+        CAMERA_ANGLE_MAX_RELEASE_VELOCITY
+      );
+    } else if (event.type === "pointercancel") {
+      // Clean up without imparting motion — a cancelled gesture should never
+      // cause the camera to keep moving on its own.
+      state.cameraAngleVelocity = 0;
     }
     if (activePointers.size === 1) {
       const [remainingId, point] = activePointers.entries().next().value;
       pointerGesture = {
         pointerId: remainingId,
+        pointerType: gesture?.pointerType,
         startX: point.x,
         startY: point.y,
         startAngle: state.cameraAngle,
         startDistance: state.cameraDistance,
+        sampleTime: performance.now(),
+        sampleAngle: state.cameraAngle,
+        velocitySample: 0,
         moved: true,
         multi: wasMultiPointer
       };
     } else if (!activePointers.size) {
       pointerGesture = null;
+      elements.canvas.classList.remove("camera-dragging");
     }
+    updateCameraDebugOverlay(event.type);
   };
   elements.canvas.addEventListener("pointerup", finishPointer);
   elements.canvas.addEventListener("pointercancel", finishPointer);
@@ -1372,10 +1576,12 @@ function bindCanvasInteraction() {
     // (reported with ctrl/meta) and Shift+wheel control the simulation camera.
     if (!(event.ctrlKey || event.metaKey || event.shiftKey)) return;
     event.preventDefault();
-    state.cameraDistance = clamp(state.cameraDistance + Math.sign(event.deltaY) * 4, 50, 150);
-    elements.cameraDistance.value = String(state.cameraDistance);
-    updateControlOutputs();
-    scheduleRendererFrame({ configure: true });
+    state.cameraDistanceTarget = clamp(
+      state.cameraDistanceTarget + Math.sign(event.deltaY) * 4,
+      CAMERA_DISTANCE_RANGE[0],
+      CAMERA_DISTANCE_RANGE[1]
+    );
+    scheduleRendererFrame();
   }, { passive: false });
 }
 
@@ -1415,6 +1621,10 @@ function bindKeyboard() {
       downloadPng();
     } else if (event.key.toLowerCase() === "e") {
       openExportDialog();
+    } else if (event.key.toLowerCase() === "c") {
+      resetCamera();
+    } else if (event.key === "Escape" && placeEventMode) {
+      setPlaceEventMode(false);
     } else if (event.key === "ArrowLeft" || event.key === "ArrowRight") {
       event.preventDefault();
       const direction = event.key === "ArrowRight" ? 1 : -1;
@@ -1567,11 +1777,38 @@ function initialize() {
   window.__explosionLabTest = Object.freeze({
     interfaceMode: () => interfaceMode,
     presetIds: EVENT_PRESETS.map(({ id }) => id),
-    getState: () => ({ ...state, layers: { ...state.layers }, ...renderer.getStats?.() }),
+    getState: () => ({
+      ...state,
+      layers: { ...state.layers },
+      placeEventMode,
+      cameraResetCount,
+      ...renderer.getStats?.()
+    }),
     selectPreset: (id) => applyPreset(id, { announce: false, track: false }),
     detonate,
     pause: () => setPlaying(false),
     play: () => setPlaying(true),
+    resetCamera: () => {
+      resetCamera();
+      return { distance: state.cameraDistanceTarget, angle: state.cameraAngleTarget };
+    },
+    setPlaceEventMode: (active) => {
+      setPlaceEventMode(Boolean(active));
+      return placeEventMode;
+    },
+    setCamera: (distance, angle) => {
+      state.cameraDistance = clamp(Number(distance), CAMERA_DISTANCE_RANGE[0], CAMERA_DISTANCE_RANGE[1]);
+      state.cameraDistanceTarget = state.cameraDistance;
+      state.cameraAngle = clamp(Number(angle), CAMERA_ANGLE_RANGE[0], CAMERA_ANGLE_RANGE[1]);
+      state.cameraAngleTarget = state.cameraAngle;
+      state.cameraAngleVelocity = 0;
+      elements.cameraDistance.value = String(state.cameraDistance);
+      elements.cameraAngle.value = String(state.cameraAngle);
+      updateControlOutputs();
+      configureRenderer();
+      renderLive(state.time);
+      return { distance: state.cameraDistance, angle: state.cameraAngle };
+    },
     setTime: (time) => {
       state.time = clamp(Number(time), 0, currentPreset().duration);
       setPlaying(false);

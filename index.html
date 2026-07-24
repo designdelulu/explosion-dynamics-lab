@@ -114,7 +114,7 @@
   </noscript>
 
   <section class="sim-shell" id="laboratory" aria-labelledby="labTitle">
-    <p class="sr-only" id="canvasInstructions">An abstract educational visualization. Click or tap to reposition the event. Drag horizontally to change the camera angle, use Shift plus the mouse wheel or a pinch gesture to change camera distance, and use the labeled controls for keyboard access.</p>
+    <p class="sr-only" id="canvasInstructions">An abstract educational visualization. Drag horizontally to orbit the camera, use Shift plus the mouse wheel, trackpad pinch, or a two-finger touch pinch to zoom, and use the labeled controls for keyboard access. A plain click or tap does nothing by itself; use the Reset camera and Place event controls in Event Controls to reset the view or explicitly reposition the event.</p>
     <canvas id="simCanvas" tabindex="0" role="img" aria-label="Interactive abstract explosion dynamics visualization" aria-describedby="canvasInstructions">
       Your browser does not support Canvas. Read the educational guide below for a text explanation of the visualization.
     </canvas>
@@ -168,6 +168,27 @@
         <div><dt>Renderer version</dt><dd id="debugRendererVersion">gpu-fluid-families-r3</dd></div>
         <div><dt>Asset version</dt><dd id="debugAssetVersion">development</dd></div>
         <div class="fluid-debug-overlay__wide"><dt>Manifest</dt><dd id="debugManifestHash">development</dd></div>
+      </dl>
+    </aside>
+    <aside class="fluid-debug-overlay camera-debug-overlay" id="cameraDebugOverlay" aria-label="Camera developer diagnostics" hidden>
+      <div class="fluid-debug-overlay__head">
+        <strong>Camera diagnostics</strong>
+        <span>developer mode</span>
+      </div>
+      <dl class="fluid-debug-overlay__metrics">
+        <div><dt>Interface mode</dt><dd id="debugCameraInterfaceMode">—</dd></div>
+        <div><dt>Pointer type</dt><dd id="debugCameraPointerType">none</dd></div>
+        <div><dt>Pointer count</dt><dd id="debugCameraPointerCount">0</dd></div>
+        <div><dt>Gesture</dt><dd id="debugCameraGesture">idle</dd></div>
+        <div><dt>Threshold</dt><dd id="debugCameraThreshold">not crossed</dd></div>
+        <div><dt>Angle</dt><dd id="debugCameraAngle">0.00°</dd></div>
+        <div><dt>Angle target</dt><dd id="debugCameraAngleTarget">0.00°</dd></div>
+        <div><dt>Distance</dt><dd id="debugCameraDistance">100.00</dd></div>
+        <div><dt>Distance target</dt><dd id="debugCameraDistanceTarget">100.00</dd></div>
+        <div><dt>Angular velocity</dt><dd id="debugCameraVelocity">0.00°/s</dd></div>
+        <div class="fluid-debug-overlay__wide"><dt>Camera target (origin)</dt><dd id="debugCameraTarget">0.500, 0.660</dd></div>
+        <div><dt>Place-event mode</dt><dd id="debugCameraPlaceMode">off</dd></div>
+        <div><dt>Reset count</dt><dd id="debugCameraResetCount">0</dd></div>
       </dl>
     </aside>
     <div class="grain" aria-hidden="true"></div>
@@ -303,6 +324,11 @@
             <span><span>Camera angle</span><output id="cameraAngleOutput">0°</output></span>
             <input id="cameraAngleRange" type="range" min="-35" max="35" step="1" value="0">
           </label>
+          <div class="camera-actions" role="group" aria-label="Camera actions">
+            <button id="resetCameraButton" type="button" title="Restore the default camera view (keyboard: C)">Reset camera</button>
+            <button id="placeEventButton" type="button" aria-pressed="false" title="Arm one tap on the canvas to move the event">Place event…</button>
+          </div>
+          <p class="microcopy">Drag the canvas to orbit; scroll/pinch to zoom. A plain tap does nothing unless Place event is armed.</p>
           <label class="range-field" for="densityRange">
             <span><span>Detail density</span><output id="densityOutput">100%</output></span>
             <input id="densityRange" type="range" min="35" max="140" step="5" value="100">
