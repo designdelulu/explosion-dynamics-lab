@@ -263,6 +263,14 @@ const BASE_PROFILE = Object.freeze({
   // flat plateau; bloomGateScale suppresses bloom specifically in low-gradient
   // (flat) regions of the temperature field.
   core: Object.freeze({ mode: 0, highlightThreshold: 1.5, highlightSharpness: 2.0, structureBlend: 0, bloomGateScale: 0 }),
+  // Tracer-material research controls (2026-07 Tsar core/tracer polish). mode
+  // 0 keeps every shipped preset byte-identical to before this pass; only the
+  // Tsar historical reference opts in. occlusionStrength adds a Beer-Lambert
+  // falloff on top of the existing density-weighted tracer visibility so
+  // dense smoke buries tracers instead of merely dimming them a little;
+  // sizeVariance/brightnessVariance give each tracer a stable per-particle
+  // random offset instead of one uniform size and brightness.
+  tracerMaterial: Object.freeze({ mode: 0, occlusionStrength: 0, sizeVariance: 0, brightnessVariance: 0 }),
 });
 
 function defineFluidProfile(presetId, profileId, overrides = {}) {
@@ -281,6 +289,7 @@ function defineFluidProfile(presetId, profileId, overrides = {}) {
     material: { ...BASE_PROFILE.material, ...(overrides.material || {}) },
     dissipation: { ...BASE_PROFILE.dissipation, ...(overrides.dissipation || {}) },
     core: { ...BASE_PROFILE.core, ...(overrides.core || {}) },
+    tracerMaterial: { ...BASE_PROFILE.tracerMaterial, ...(overrides.tracerMaterial || {}) },
   });
 }
 
@@ -565,6 +574,17 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
         buoyancyFalloff: 0.5,
         motionDamp: 0.85,
       },
+      // 2026-07 core/tracer polish: tracers rendered above smoke regardless
+      // of how buried they were and shared one fixed size/brightness, which
+      // read as a layer of repetitive dots sitting on top of the volume
+      // instead of embedded within it. occlusionStrength adds a
+      // Beer-Lambert-style falloff (exp(-localDensity * occlusionStrength))
+      // on top of the existing density-weighted visibility so dense smoke
+      // suppresses tracers, thin smoke lets them through, and medium density
+      // partially attenuates. sizeVariance/brightnessVariance give each
+      // tracer a stable per-particle random offset instead of one uniform
+      // size and brightness.
+      tracerMaterial: { mode: 1, occlusionStrength: 2.6, sizeVariance: 0.5, brightnessVariance: 0.45 },
     },
   ),
 });
@@ -1714,6 +1734,21 @@ uniform vec4 uLayerVisibility;
 uniform vec3 uTracerColorA;
 uniform vec3 uTracerColorB;
 uniform vec3 uTracerColorC;
+uniform uint uSeed;
+// Tracer-material research controls (2026-07 Tsar core/tracer polish).
+// uTracerMaterialMode is 0 for every shipped preset (byte-identical
+// rendering) and 1 only for the Tsar historical reference. uTracerMaterialParams
+// packs (occlusionStrength, sizeVariance, brightnessVariance, spare).
+uniform float uTracerMaterialMode;
+uniform vec4 uTracerMaterialParams;
+${SEEDED_HASH}
+
+float tracerDisplayRandom(uint index, uint generation, uint salt) {
+  uint value = index * 0x9e3779b9u;
+  value ^= generation * 0x85ebca6bu;
+  value ^= uSeed + salt * 0xc2b2ae35u;
+  return float(mixBits(value)) / 4294967295.0;
+}
 
 void main() {
   vec4 state = texelFetch(uTracers, ivec2(gl_VertexID, 0), 0);
@@ -1744,7 +1779,29 @@ void main() {
   // view only — diagnostics keep full visibility for verification).
   float edgeFade = smoothstep(0.0, 0.12, state.x) * smoothstep(0.0, 0.12, 1.0 - state.x)
     * smoothstep(0.0, 0.16, 1.0 - state.y) * smoothstep(0.0, 0.03, state.y);
-  float alpha = mix(plume * 0.34, 0.88, diagnostic) * ageFade * mix(edgeFade, 1.0, diagnostic);
+  // Tsar-only (uTracerMaterialMode): dense smoke should bury a tracer, not
+  // just dim it a little — occlusion adds a Beer-Lambert-style falloff on
+  // top of the existing density-weighted visibility above (exp(-density *
+  // occlusionStrength)), so thin smoke still reveals tracers, medium density
+  // partially attenuates them, and dense smoke suppresses them almost
+  // entirely, reusing the same local density sample the volume renderer
+  // already computes rather than a second expensive pass. Left at 1.0 (and
+  // skipped in diagnostic view, matching edgeFade above) for every other
+  // preset.
+  uint tracerIndex = uint(gl_VertexID);
+  uint tracerGeneration = uint(max(0.0, floor(state.w + 0.5)));
+  float occlusion = uTracerMaterialMode > 0.5
+    ? mix(exp(-plume * uTracerMaterialParams.x), 1.0, diagnostic)
+    : 1.0;
+  // Tsar-only: a stable per-particle brightness offset (hashed from the
+  // tracer's index/generation, so it stays consistent frame to frame instead
+  // of flickering) breaks up the repetitive-dot look.
+  float brightnessJitter = uTracerMaterialMode > 0.5
+    ? mix(1.0 - uTracerMaterialParams.z, 1.0 + uTracerMaterialParams.z,
+        tracerDisplayRandom(tracerIndex, tracerGeneration, 53u))
+    : 1.0;
+  float alpha = mix(plume * 0.34, 0.88, diagnostic) * ageFade
+    * mix(edgeFade, 1.0, diagnostic) * occlusion * brightnessJitter;
   vec3 warm = mix(uTracerColorA, uTracerColorB,
     clamp(scalar.r + scalar.b, 0.0, 1.0));
   float particulate = clamp(scalar.a * 0.75 + scalar.g * 0.22, 0.0, 1.0);
@@ -1756,7 +1813,13 @@ void main() {
   gl_Position = vec4(screenUv * 2.0 - 1.0, 0.0, 1.0);
   float baseSize = clamp(min(uResolution.x, uResolution.y) * 0.003, 1.0, 3.2);
   float typeSize = uTracerType == 4 || uTracerType == 5 ? 0.82 : (uTracerType == 6 ? 0.68 : 1.0);
-  gl_PointSize = baseSize * typeSize * mix(0.72, 1.18, diagnostic) * mix(1.0, 0.86, uReducedMotion);
+  // Tsar-only: a stable per-particle size offset, same hash family as the
+  // brightness jitter above but a different salt so the two vary independently.
+  float sizeJitter = uTracerMaterialMode > 0.5
+    ? mix(1.0 - uTracerMaterialParams.y, 1.0 + uTracerMaterialParams.y,
+        tracerDisplayRandom(tracerIndex, tracerGeneration, 41u))
+    : 1.0;
+  gl_PointSize = baseSize * typeSize * sizeJitter * mix(0.72, 1.18, diagnostic) * mix(1.0, 0.86, uReducedMotion);
 }`;
 
 const TRACER_FRAGMENT = `#version 300 es
@@ -3561,6 +3624,18 @@ export class ResearchFluidEngine {
       ...(tracerType === TRACER_TYPE_IDS['plasma-filament']
         ? this.settings.palette.plasma
         : this.settings.palette.dust),
+    );
+    this._uniform1ui(program, 'uSeed', this.settings.seed);
+    const tracerMaterial = this.profile.tracerMaterial
+      || { mode: 0, occlusionStrength: 0, sizeVariance: 0, brightnessVariance: 0 };
+    this._uniform1f(program, 'uTracerMaterialMode', tracerMaterial.mode > 0 ? 1 : 0);
+    this._uniform4f(
+      program,
+      'uTracerMaterialParams',
+      finite(tracerMaterial.occlusionStrength, 0),
+      finite(tracerMaterial.sizeVariance, 0),
+      finite(tracerMaterial.brightnessVariance, 0),
+      0,
     );
     gl.enable(gl.BLEND);
     gl.blendEquation(gl.FUNC_ADD);
