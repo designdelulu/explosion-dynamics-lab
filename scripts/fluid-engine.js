@@ -510,25 +510,37 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       material: { mode: 1, sootAbsorption: 1.6, dustAbsorption: 0.35, detailBoost: 1.4, warmCoolContrast: 0.85 },
       // 2026-07 late-dissipation pass: the approved broad plume/persistence
       // fix kept the cloud fully intact through mature cap formation (correct)
-      // but never relaxed afterward, so the field never lost mass. Beginning
-      // at normalized time 0.74 (~40s) the ramp eases source injection and
-      // plume-shaping motion toward zero and lets scalar retention ease down
-      // from its near-unity mature value toward real per-step decay, reaching
-      // its strongest effect by 0.99 (~53.5s) — smooth and continuous, no
-      // hard cutoff, and inert for the entire mature phase before lateStart.
+      // but never relaxed afterward, so the field never lost mass. The mature
+      // cap is fully formed by ~30s (verified against the approved evidence),
+      // so beginning at normalized time 0.6 (~32s) the ramp eases source
+      // injection and plume-shaping motion toward zero and lets scalar
+      // retention ease down from its near-unity mature value toward real
+      // per-step decay, reaching its strongest effect by 0.94 (~51s) with a
+      // few remaining seconds to finish clearing before the timeline ends —
+      // smooth and continuous, no hard cutoff, and inert for the entire
+      // mature phase before lateStart.
       dissipation: {
         mode: 1,
-        lateStart: 0.74,
-        finalStart: 0.99,
-        sourceTaperEnd: 0.88,
+        lateStart: 0.6,
+        finalStart: 0.94,
+        sourceTaperEnd: 0.72,
         // NOTE: this is a per-(dt*60) retention, i.e. effectively
         // retentionFloor^60 per real second — small departures from 1.0
-        // compound enormously. 0.997/0.993 give roughly an 84%/66%
-        // per-second retention at full ramp strength (~16%/34% loss per
-        // second), a gradual multi-second clearing, not a hard cutoff.
-        retentionFloorSmoke: 0.997,
-        retentionFloorDust: 0.993,
-        outwardBoost: 0.6,
+        // compound enormously (0.999 -> ~94%/sec retention; 0.997 ->
+        // ~86%/sec; 0.99 -> ~55%/sec). The mature-phase value (persistence
+        // mix at target 1.0) already computes to ~93%/sec (~6.6% loss/sec);
+        // it was invisible before only because continuous source injection
+        // outpaced it. Tapering the source is what actually exposes real
+        // dissipation; retentionFloorSmoke only needs a small nudge below
+        // that mature value, not a large new decay rate on top of it.
+        retentionFloorSmoke: 0.9993,
+        retentionFloorDust: 0.998,
+        // Kept small: a strong outward push was driving mass into the
+        // existing side/top boundary guard band, which absorbs far more
+        // aggressively than the scalar retention floor — that combination
+        // was the real cause of the field vanishing almost instantly
+        // instead of thinning gradually in place.
+        outwardBoost: 0.1,
         buoyancyFalloff: 0.5,
         motionDamp: 0.85,
       },
