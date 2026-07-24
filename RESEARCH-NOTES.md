@@ -4,14 +4,15 @@
 
 These notes cover only post-detonation atmospheric visualization: shock optics, hot-gas motion, smoke, dust, turbulence, participating-media rendering, and real-time numerical methods. They do **not** adapt or expose explosive materials, construction, charge geometry, triggering, weapon design, object destruction, targeting, casualty modeling, real-world damage calculations, or optimization. All application controls remain normalized visual controls.
 
-The requested local `research/` directory was not present in the workspace or supplied attachments on 2026-07-22. To avoid blocking the implementation, the exact papers were read from author/publisher copies:
+The exact papers were read from author/publisher copies. Local reference copies now live under `research/papers/` (git-ignored, third-party copyrighted, excluded from the production allowlist — the URLs below are the durable pointer):
 
 - Gary D. Yngve, James F. O'Brien, and Jessica K. Hodgins, *Animating Explosions* (SIGGRAPH 2000 author preprint): <https://arxiv.org/pdf/2303.10541>
 - Ronald Fedkiw, Jos Stam, and Henrik Wann Jensen, *Visual Simulation of Smoke* (SIGGRAPH 2001): <https://graphics.stanford.edu/papers/smoke/smoke.pdf>
 - Duc Quang Nguyen, Ronald Fedkiw, and Henrik Wann Jensen, *Physically Based Modeling and Animation of Fire* (SIGGRAPH 2002): <https://graphics.stanford.edu/papers/fire-sg02/fire_final.pdf>
 - Nick Rasmussen, Duc Quang Nguyen, Willi Geiger, and Ronald Fedkiw, *Smoke Simulation for Large Scale Phenomena* (SIGGRAPH 2003): <https://graphics.stanford.edu/papers/smoke-sig03/smoke.pdf>
+- Andrew Selle, Nick Rasmussen, and Ronald Fedkiw, *A Vortex Particle Method for Smoke, Water and Explosions* (SIGGRAPH 2005): <https://physbam.stanford.edu/~fedkiw/papers/stanford2005-01.pdf>
 
-All 29 pages were text-extracted and rendered for visual inspection. The implementation is an educational visual model, not an engineering or predictive blast model.
+The papers were text-extracted and rendered for visual inspection. The implementation is an educational visual model, not an engineering or predictive blast model.
 
 ## Paper-to-browser mapping
 
@@ -84,6 +85,37 @@ Relevant concepts:
 - Section 4.2 calls for direct illumination, incandescence, self-shadowing, and diffuse scattering in a participating medium. The shader approximates these with light-direction density probes, internal emission, and a low-cost scattering term.
 - Section 4.3 maps density to opacity with `a = 1 - exp(-tau D(x) dz)` and composites front-to-back with equation (3), `A_(n+1) = A_n + a(1-A_n)`. The browser ray marcher implements this exponential opacity and early termination.
 - Figures 1 and 4 are the closest visual references for the flagship: a broad but irregular rolling cap, dense outer gray smoke, incandescent interior, a connected rising column, and multiple spatial scales without an obvious particle sphere.
+
+### 5. *A Vortex Particle Method for Smoke, Water and Explosions*
+
+Relevant concepts:
+
+- Section 3 augments an underlying incompressible grid solve with a set of Lagrangian *vortex particles*, each carrying a vorticity vector, and reconstructs their induced velocity. The application does not run a full vortex-particle solver; instead the Tsar reference profile evaluates a small, fixed set of analytic Gaussian vortices as a normalized force cue so the grid's existing vorticity confinement has coherent large-scale structure to sustain rather than nothing to amplify.
+- Section 4 (vorticity forcing) motivates adding rotational structure the grid alone loses to numerical dissipation. The browser adaptation adds this only as a bounded velocity contribution, then clamps total speed, so it remains a stable visual cue and not an energy source.
+- Figure 2's explosion recipe seeds vortices tangent to an upward-expanding cylinder during the expansion phase, which produces the rolling, turbulent, asymmetric cauliflower body rather than a smooth rising tube. The Tsar profile mirrors this qualitatively: a short-lived, rising, four-vortex population with unequal strengths and seed-jittered radii/heights, so the silhouette rolls asymmetrically and never shows two mirrored curls.
+- Figure 5's stability observation — too strong a confinement/vortex weight (ε≈2) can prevent the plume from rising at all, while a moderate weight preserves rolling — sets the design ceiling. The Tsar `plume.vortex` strength is kept in the moderate range and gated behind an explicit profile flag.
+
+Explicit exclusions:
+
+- The paper's water, free-surface, and rigid-coupling applications are out of scope.
+- No detonation energetics, yield, pressure, or damage quantities are taken from the explosion examples; only the qualitative "vortices tangent to a rising cylinder" motion cue is adapted.
+
+## Tsar-scale broad-plume proof of concept (2026-07)
+
+A single-preset vertical slice targeted only the **Tsar Bomba-Scale Historical Reference** profile (`tsar-bomba-scale-reference`), which previously collapsed into a thin rising line late in its long timeline. Root cause, traced through the live path: vertical-dominant source injection plus inward entrainment, with grid vorticity confinement having no large-scale rotational structure to sustain, and long-timeline scalar dissipation thinning the visible body — so the tracer detail layer, not a broad field, dominated the late silhouette.
+
+The fix is fully opt-in and gated on a new `plume.mode` profile flag (`uPlumeMode` in the force and scalar shaders). Every other profile keeps `mode 0`, so its simulated behavior is byte-identical to before this pass — verified by `tools/fluid-contract-test.mjs`. Tsar-specific changes:
+
+1. **Source rebalance** (`RESEARCH_FLUID_PROFILES`): radial injection raised to meet vertical (`radial 1.42` vs `vertical 1.12`), source lowered (`centerY 0.32`) and widened so the column is a body, not a pencil jet.
+2. **Gas-expansion outward turning** and altitude-dependent **column widening** in `FORCE_FRAGMENT`, weighted by local plume presence (Nguyen/Fedkiw/Jensen 2002, Fig 6–7).
+3. **Rising asymmetric analytic vortex ring** in `FORCE_FRAGMENT` (Selle/Rasmussen/Fedkiw 2005, Fig 2), with a total-speed clamp for stability (Fig 5).
+4. **Late-density persistence** in `SCALAR_FRAGMENT`: smoke dissipation nudged toward unity for the Tsar reference only, so the monumental cloud retains mass across its timeline (low-dissipation CG smoke, Fedkiw/Stam/Jensen 2001).
+5. **Softened boundary guard** for the Tsar profile so the broad umbrella's outer edges finish rolling instead of being absorbed at the domain margins.
+6. **Highlight roll-off** in the volume profile (higher `toneMap`, lower `exposure`/`bloom`) so the hot phase reads as a structured fireball, not a flat white disc.
+
+Environment (shared, but scoped by mode string in `scripts/renderer.js`, not by preset): the prototype triangle mountains and the always-on perspective grid were replaced on natural-terrain environments with continuous multi-octave noise ridges and atmospheric perspective. The analytical reference grid is retained for the scientific dark-grid stage and overview mode (`naturalGround = !environment.includes('grid')`).
+
+Not generalized to the other eleven presets in this pass, by request; see the release report for the generalization recommendation.
 
 ## Browser numerical design
 

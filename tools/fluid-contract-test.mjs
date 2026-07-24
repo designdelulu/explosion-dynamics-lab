@@ -113,6 +113,36 @@ assert.equal(RESEARCH_FLUID_DIAGNOSTICS.tracers, 8);
 assert.equal(RESEARCH_FLUID_DEFAULTS.presetId, "low-yield-nuclear-airburst");
 assert.equal(RESEARCH_FLUID_DEFAULTS.tier, "balanced");
 
+// --- Tsar-scale broad-plume research proof of concept (2026-07) ---------------
+// The plume research controls must remain opt-in: every profile except the
+// Tsar historical reference keeps mode 0 so its simulated behavior is
+// byte-identical to before this pass.
+for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
+  assert.ok(profile.plume && typeof profile.plume === "object", `${presetId}: plume config missing`);
+  for (const key of ["mode", "expansion", "vortex", "persistence", "widen"]) {
+    assert.ok(Number.isFinite(profile.plume[key]), `${presetId}: plume.${key} must be finite`);
+  }
+  if (presetId === "tsar-bomba-scale-reference") {
+    assert.equal(profile.plume.mode, 1, "Tsar must enable the broad-plume mode");
+    assert.ok(profile.plume.expansion > 0, "Tsar expansion must be active");
+    assert.ok(profile.plume.vortex > 0, "Tsar vortex population must be active");
+    assert.ok(profile.plume.persistence > 0, "Tsar persistence must be active");
+    // Source must broaden the plume: radial injection at least matches vertical
+    // so the column is no longer a pencil jet.
+    assert.ok(profile.source.radial >= profile.source.vertical, "Tsar radial injection must not be dominated by vertical");
+  } else {
+    assert.equal(profile.plume.mode, 0, `${presetId}: broad-plume mode must remain off for non-Tsar presets`);
+  }
+}
+// The shaders and engine bindings must carry the plume uniforms.
+for (const uniform of ["uPlumeMode", "uPlumeParams"]) {
+  assert.match(
+    `${RESEARCH_FLUID_SHADER_SOURCES.forceFragment}\n${RESEARCH_FLUID_SHADER_SOURCES.scalarFragment}`,
+    new RegExp(`uniform[^;]*\\b${uniform}\\b`),
+    `${uniform}: plume uniform missing from shaders`,
+  );
+}
+
 const shaders = RESEARCH_FLUID_SHADER_SOURCES;
 const engineSource = readFileSync(new URL("../scripts/fluid-engine.js", import.meta.url), "utf8");
 for (const uniform of [
