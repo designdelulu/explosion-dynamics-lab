@@ -462,13 +462,13 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       // the column is no longer a pencil jet, lower the source so the cap has
       // vertical room, convert incandescence to smoke sooner (smoke body, not a
       // persistent white fireball), and feed more smoke overall.
-      source: { centerY: 0.32, radius: 0.112, aspectX: 1.2, aspectY: 0.92, onsetEnd: 0.06, sustainEnd: 0.88, pulseFrequency: 1.2, radial: 1.42, vertical: 1.12, turbulence: 1.45, heat: 1.4, smoke: 1.72, incandescent: 1.12, dust: 0.42, ringRadius: 1.85, clusterSpread: 1.7, capScale: 1.62, capRoll: 1.46 },
+      source: { centerY: 0.32, radius: 0.112, aspectX: 1.2, aspectY: 0.92, onsetEnd: 0.06, sustainEnd: 0.97, pulseFrequency: 1.2, radial: 1.42, vertical: 1.12, turbulence: 1.45, heat: 1.4, smoke: 1.72, incandescent: 1.12, dust: 0.42, ringRadius: 1.85, clusterSpread: 1.7, capScale: 1.62, capRoll: 1.46 },
       physics: { buoyancy: 1.0, densityLoading: 1.02, windCoupling: 1.3, vorticity: 1.5, velocityRetention: 0.997, cooling: 0.66, smokeConversion: 1.32, scalarRetention: 0.9998 },
       // Roll off the highlights (higher toneMap, lower exposure/bloom) so the
       // hot phase reads as a structured fireball instead of a flat white disc.
-      volume: { scaleX: 1.4, scaleY: 1.42, depth: 1.48, opacity: 1.34, shadow: 1.5, bloom: 1.12, distortion: 1.32, erosion: 0.82, noiseScale: 0.86, dustVisibility: 0.52, exposure: 1.0, toneMap: 0.24, backgroundIllumination: 0.46, emissionCurve: 0.88 },
+      volume: { scaleX: 1.4, scaleY: 1.42, depth: 1.48, opacity: 1.48, shadow: 1.5, bloom: 1.15, distortion: 1.32, erosion: 0.82, noiseScale: 0.86, dustVisibility: 0.58, exposure: 1.0, toneMap: 0.24, backgroundIllumination: 0.46, emissionCurve: 0.88 },
       quality: { grid: 1.14, pressure: 1.18, rays: 1.2, tracers: 1.44, detail: 1.28 },
-      plume: { mode: 1, expansion: 0.9, vortex: 1.0, persistence: 0.55, widen: 0.6 },
+      plume: { mode: 1, expansion: 0.65, vortex: 1.0, persistence: 0.78, widen: 0.6 },
     },
   ),
 });
@@ -1114,17 +1114,27 @@ void main() {
 
     // 1 + 3 · Expansion / column widening: outward push that grows with
     // altitude, weighted by local plume presence, so a cauliflower body and a
-    // thick stem develop instead of a pencil column.
+    // thick stem develop instead of a pencil column. This must fade out once
+    // the cap has formed — an unbounded per-step outward force integrated
+    // over a long timeline keeps diluting the same mass across an
+    // ever-larger area, thinning the cloud toward invisibility instead of
+    // leaving a broad, persistent silhouette. developPhase confines the
+    // active widening to cap formation; feedPhase keeps the stem fed a
+    // little longer before also relaxing.
+    float developPhase = smoothstep(0.02, 0.14, uNormalizedTime)
+      * (1.0 - smoothstep(0.55, 0.9, uNormalizedTime));
+    float feedPhase = smoothstep(0.02, 0.1, uNormalizedTime)
+      * (1.0 - smoothstep(0.85, 1.05, uNormalizedTime));
     float widenBand = smoothstep(0.015, 0.12, heightAbove)
       * (1.0 - smoothstep(0.85, 1.15, heightAbove));
     float expansion = plumeActivity * widenBand
-      * (0.35 + heightAbove * 0.85);
+      * (0.35 + heightAbove * 0.85) * developPhase;
     velocity.x += lateralSign * expansion * uPlumeParams.x * motionScale * uDt * 60.0;
     // A gentle upward feed inside the widened core keeps the stem continuous
     // with the cap rather than pinching off.
     float coreBand = exp(-lateral * lateral / max(0.004, uSourceShape.x * uSourceShape.x * 9.0));
     velocity.y += coreBand * plumeActivity * uPlumeParams.w
-      * (0.4 + 0.6 * (1.0 - heightAbove)) * motionScale * uDt * 30.0;
+      * (0.4 + 0.6 * (1.0 - heightAbove)) * feedPhase * motionScale * uDt * 30.0;
 
     // 2 · Rising asymmetric vortex-particle ring. A small set of analytic
     // Gaussian vortices climbs with the plume; seeded offsets make radii,
