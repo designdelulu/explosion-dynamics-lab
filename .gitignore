@@ -20,6 +20,9 @@ AUDIT-REPORT.md
 LOCAL-COPY-RECONCILIATION.json
 deployment-manifest.json
 
+# Local scratch/review workspace (screenshots, comparison pages, etc.)
+scratch/
+
 # Browser recordings and temporary exports
 exports/
 recordings/
