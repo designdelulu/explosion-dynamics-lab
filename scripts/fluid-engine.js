@@ -482,7 +482,7 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       // curve), an energy-weighted third detail octave adds medium-scale
       // billowing, and warmCoolContrast widens the lit/shadowed range for
       // readable internal depth.
-      material: { mode: 1, sootAbsorption: 1.2, dustAbsorption: 0.5, detailBoost: 0.85, warmCoolContrast: 0.55 },
+      material: { mode: 1, sootAbsorption: 1.6, dustAbsorption: 0.35, detailBoost: 1.4, warmCoolContrast: 0.85 },
     },
   ),
 });

@@ -184,7 +184,7 @@ the prior expression, so non-Tsar rendering is byte-identical.
    model gives each material its own optical-density coefficient
    (`D = (Km/3) * ys * c_p`) rather than one shared density→opacity curve.
    Browser adaptation: soot density and dust density each get an independent
-   multiplier (`uMaterialParams.x/.y`, Tsar: soot 1.2, dust 0.5) *before* the
+   multiplier (`uMaterialParams.x/.y`, Tsar: soot 1.6, dust 0.35) *before* the
    exponential optical-depth term, while the unweighted sum is kept for the
    existing color-mixing code path. Rejected alternative: a full 2D/3D
    pre-integrated lookup table (the paper's own approach for a *linear*
@@ -214,7 +214,7 @@ the prior expression, so non-Tsar rendering is byte-identical.
    Pegoraro/Parker, *Physically-Based Realistic Fire Rendering* (2006) §3.2's
    radiative-transfer view that absorption dominates a low-albedo medium —
    the existing mechanism was correct but under-weighted. Browser
-   adaptation: a single `warmCoolContrast` scalar (Tsar: 0.55) widens the
+   adaptation: a single `warmCoolContrast` scalar (Tsar: 0.85) widens the
    existing `litWeight`/`smokeColor` mix coefficients (more temperature and
    self-shadow influence, a darker unlit base) rather than introducing a new
    lighting model. Rejected alternative: Pegoraro/Parker's full spectral
