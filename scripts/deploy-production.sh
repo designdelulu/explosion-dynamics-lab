@@ -53,6 +53,7 @@ run_tests() {
   node tools/fluid-contract-test.mjs
   node tools/exporter-smoke-test.mjs
   node tools/developer-mode-contract-test.mjs
+  node tools/camera-interaction-test.mjs
   node tools/static-audit.mjs
   node tools/release-contract-test.mjs
 }
