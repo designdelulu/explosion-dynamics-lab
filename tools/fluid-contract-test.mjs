@@ -259,6 +259,107 @@ assert.equal(
   "Scalar shader must taper exactly one sustain envelope",
 );
 
+// --- Tsar-scale core/tracer polish (2026-07) ---------------------------------
+// Same opt-in contract as the plume/material/dissipation controls above:
+// every profile except the Tsar historical reference keeps core.mode 0 (the
+// default threshold/sharpness/structureBlend/bloomGateScale of 1.5, 2.0, 0, 0
+// reduce every gated formula below to its pre-pass expression) and
+// tracerMaterial.mode 0 (occlusion/size/brightness variance all neutral).
+for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
+  assert.ok(profile.core && typeof profile.core === "object", `${presetId}: core config missing`);
+  for (const key of ["mode", "highlightThreshold", "highlightSharpness", "structureBlend", "bloomGateScale"]) {
+    assert.ok(Number.isFinite(profile.core[key]), `${presetId}: core.${key} must be finite`);
+  }
+  if (presetId === "tsar-bomba-scale-reference") {
+    const c = profile.core;
+    assert.equal(c.mode, 1, "Tsar must enable core-polish mode");
+    assert.ok(c.highlightThreshold > 1.5, "Tsar highlight threshold must be raised above the default plateau point");
+    assert.ok(c.highlightSharpness > 2.0, "Tsar highlight roll-off must be steeper than the default");
+    assert.ok(c.structureBlend > 0 && c.structureBlend <= 1, "Tsar structure blend must be active and bounded");
+    assert.ok(c.bloomGateScale > 0, "Tsar bloom gradient gate must be active");
+  } else {
+    const c = profile.core;
+    assert.equal(c.mode, 0, `${presetId}: core-polish mode must remain off for non-Tsar presets`);
+    assert.equal(c.highlightThreshold, 1.5, `${presetId}: core.highlightThreshold must stay neutral (1.5)`);
+    assert.equal(c.highlightSharpness, 2.0, `${presetId}: core.highlightSharpness must stay neutral (2.0)`);
+    assert.equal(c.structureBlend, 0, `${presetId}: core.structureBlend must stay neutral (0)`);
+    assert.equal(c.bloomGateScale, 0, `${presetId}: core.bloomGateScale must stay neutral (0)`);
+  }
+
+  assert.ok(profile.tracerMaterial && typeof profile.tracerMaterial === "object", `${presetId}: tracerMaterial config missing`);
+  for (const key of ["mode", "occlusionStrength", "sizeVariance", "brightnessVariance"]) {
+    assert.ok(Number.isFinite(profile.tracerMaterial[key]), `${presetId}: tracerMaterial.${key} must be finite`);
+  }
+  if (presetId === "tsar-bomba-scale-reference") {
+    const t = profile.tracerMaterial;
+    assert.equal(t.mode, 1, "Tsar must enable tracer-occlusion mode");
+    assert.ok(t.occlusionStrength > 0, "Tsar tracer occlusion must be active");
+    assert.ok(t.sizeVariance > 0 && t.sizeVariance < 1, "Tsar tracer size variance must be active and bounded (< 1 keeps size positive)");
+    assert.ok(t.brightnessVariance > 0 && t.brightnessVariance < 1, "Tsar tracer brightness variance must be active and bounded (< 1 keeps brightness positive)");
+  } else {
+    const t = profile.tracerMaterial;
+    assert.equal(t.mode, 0, `${presetId}: tracer-occlusion mode must remain off for non-Tsar presets`);
+    assert.equal(t.occlusionStrength, 0, `${presetId}: tracerMaterial.occlusionStrength must stay neutral (0)`);
+    assert.equal(t.sizeVariance, 0, `${presetId}: tracerMaterial.sizeVariance must stay neutral (0)`);
+    assert.equal(t.brightnessVariance, 0, `${presetId}: tracerMaterial.brightnessVariance must stay neutral (0)`);
+  }
+}
+// The volume shader must carry the core uniforms; the tracer display vertex
+// shader must carry the tracer-material uniforms.
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /uniform\s+float\s+uCoreMode\b/,
+  "uCoreMode: core uniform missing from the volume shader",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /uniform\s+vec4\s+uCoreParams\b/,
+  "uCoreParams: core uniform missing from the volume shader",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.tracerVertex,
+  /uniform\s+float\s+uTracerMaterialMode\b/,
+  "uTracerMaterialMode: tracer-material uniform missing from the tracer display shader",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.tracerVertex,
+  /uniform\s+vec4\s+uTracerMaterialParams\b/,
+  "uTracerMaterialParams: tracer-material uniform missing from the tracer display shader",
+);
+// Every new core/tracer term must be reachable only through its mode gate,
+// and must algebraically collapse to the prior expression when the mode is 0.
+for (const gatedTerm of [
+  /float coreThreshold = uCoreMode > 0\.5 \? uCoreParams\.x : 1\.5;/,
+  /float coreSharpness = uCoreMode > 0\.5 \? uCoreParams\.y : 2\.0;/,
+  /float bloomGate = uCoreMode > 0\.5 \? clamp\(sqrt\(bloomVariance\) \* uCoreParams\.w, 0\.0, 1\.0\) : 1\.0;/,
+]) {
+  assert.match(RESEARCH_FLUID_SHADER_SOURCES.volumeFragment, gatedTerm, `Core technique not properly gated behind uCoreMode: ${gatedTerm}`);
+}
+for (const gatedTerm of [
+  /float occlusion = uTracerMaterialMode > 0\.5\s*\n\s*\? mix\(exp\(-plume \* uTracerMaterialParams\.x\), 1\.0, diagnostic\)\s*\n\s*: 1\.0;/,
+  /float brightnessJitter = uTracerMaterialMode > 0\.5/,
+  /float sizeJitter = uTracerMaterialMode > 0\.5/,
+]) {
+  assert.match(RESEARCH_FLUID_SHADER_SOURCES.tracerVertex, gatedTerm, `Tracer-material technique not properly gated behind uTracerMaterialMode: ${gatedTerm}`);
+}
+// Shader branches must collapse to no-ops when disabled: the emission bonus,
+// bloom gate, tracer occlusion, and tracer size/brightness jitter must all
+// read exactly 1.0 (or the documented neutral constant) for every non-Tsar
+// preset's mode value of 0, per the JS-side binding defaults below.
+{
+  const engineSourceForGating = readFileSync(new URL("../scripts/fluid-engine.js", import.meta.url), "utf8");
+  assert.match(
+    engineSourceForGating,
+    /const core = this\.profile\.core\s*\n\s*\|\|\s*\{ mode: 0, highlightThreshold: 1\.5, highlightSharpness: 2\.0, structureBlend: 0, bloomGateScale: 0 \};/,
+    "Default core fallback (used when a profile omits core:) must match the neutral values asserted above",
+  );
+  assert.match(
+    engineSourceForGating,
+    /const tracerMaterial = this\.profile\.tracerMaterial\s*\n\s*\|\|\s*\{ mode: 0, occlusionStrength: 0, sizeVariance: 0, brightnessVariance: 0 \};/,
+    "Default tracerMaterial fallback (used when a profile omits tracerMaterial:) must match the neutral values asserted above",
+  );
+}
+
 const shaders = RESEARCH_FLUID_SHADER_SOURCES;
 const engineSource = readFileSync(new URL("../scripts/fluid-engine.js", import.meta.url), "utf8");
 for (const uniform of [
