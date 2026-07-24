@@ -230,6 +230,30 @@ const BASE_PROFILE = Object.freeze({
   // shared density-to-alpha curve; detailBoost adds an energy-weighted third
   // curl-detail octave; warmCoolContrast widens the lit/shadowed dynamic range.
   material: Object.freeze({ mode: 0, sootAbsorption: 1, dustAbsorption: 1, detailBoost: 0, warmCoolContrast: 0 }),
+  // Late-stage dissipation research controls (2026-07 Tsar dissipation pass).
+  // mode 0 keeps every shipped preset byte-identical to before this pass; only
+  // the Tsar historical reference opts in. lateStart/finalStart are fractions
+  // of normalized simulation time marking when a gradual, continuous
+  // dissipation ramp begins and reaches its strongest effect (never a hard
+  // cutoff). sourceTaperEnd tapers new source injection to zero ahead of
+  // finalStart, so the field only depletes rather than being topped up.
+  // retentionFloorSmoke/retentionFloorDust are the per-step scalar retention
+  // targets the ramp eases toward (soot persists longer than lofted dust).
+  // outwardBoost adds late lateral dispersion; buoyancyFalloff reduces late
+  // lift so the cloud drifts and settles instead of continuing to rise;
+  // motionDamp relaxes the residual plume-shaping forces (widening/feed/ring
+  // vortices) so the silhouette actually settles before it thins.
+  dissipation: Object.freeze({
+    mode: 0,
+    lateStart: 1,
+    finalStart: 1,
+    sourceTaperEnd: 1,
+    retentionFloorSmoke: 1,
+    retentionFloorDust: 1,
+    outwardBoost: 0,
+    buoyancyFalloff: 0,
+    motionDamp: 0,
+  }),
 });
 
 function defineFluidProfile(presetId, profileId, overrides = {}) {
@@ -246,6 +270,7 @@ function defineFluidProfile(presetId, profileId, overrides = {}) {
     quality: { ...BASE_PROFILE.quality, ...(overrides.quality || {}) },
     plume: { ...BASE_PROFILE.plume, ...(overrides.plume || {}) },
     material: { ...BASE_PROFILE.material, ...(overrides.material || {}) },
+    dissipation: { ...BASE_PROFILE.dissipation, ...(overrides.dissipation || {}) },
   });
 }
 
@@ -483,6 +508,30 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       // billowing, and warmCoolContrast widens the lit/shadowed range for
       // readable internal depth.
       material: { mode: 1, sootAbsorption: 1.6, dustAbsorption: 0.35, detailBoost: 1.4, warmCoolContrast: 0.85 },
+      // 2026-07 late-dissipation pass: the approved broad plume/persistence
+      // fix kept the cloud fully intact through mature cap formation (correct)
+      // but never relaxed afterward, so the field never lost mass. Beginning
+      // at normalized time 0.74 (~40s) the ramp eases source injection and
+      // plume-shaping motion toward zero and lets scalar retention ease down
+      // from its near-unity mature value toward real per-step decay, reaching
+      // its strongest effect by 0.99 (~53.5s) — smooth and continuous, no
+      // hard cutoff, and inert for the entire mature phase before lateStart.
+      dissipation: {
+        mode: 1,
+        lateStart: 0.74,
+        finalStart: 0.99,
+        sourceTaperEnd: 0.88,
+        // NOTE: this is a per-(dt*60) retention, i.e. effectively
+        // retentionFloor^60 per real second — small departures from 1.0
+        // compound enormously. 0.997/0.993 give roughly an 84%/66%
+        // per-second retention at full ramp strength (~16%/34% loss per
+        // second), a gradual multi-second clearing, not a hard cutoff.
+        retentionFloorSmoke: 0.997,
+        retentionFloorDust: 0.993,
+        outwardBoost: 0.6,
+        buoyancyFalloff: 0.5,
+        motionDamp: 0.85,
+      },
     },
   ),
 });
@@ -737,6 +786,15 @@ uniform vec4 uProfileAux;
 // (expansion, vortexStrength, persistence, columnWiden).
 uniform float uPlumeMode;
 uniform vec4 uPlumeParams;
+// Tsar-scale late-dissipation research controls. uDissipationMode is 0 for
+// every shipped preset except the Tsar historical reference, so this block is
+// inert (byte-identical behavior) for all other events. uDissipationParams
+// packs (lateStart, finalStart, retentionFloorSmoke, retentionFloorDust);
+// uDissipationParams2 packs (sourceTaperEnd, outwardBoost, buoyancyFalloff,
+// motionDamp) — all in normalized-time / unitless-blend terms.
+uniform float uDissipationMode;
+uniform vec4 uDissipationParams;
+uniform vec4 uDissipationParams2;
 `;
 
 const SOURCE_PROFILE_FUNCTIONS = `
@@ -860,6 +918,29 @@ float profileStageEnvelope() {
   return smoothstep(uSourceTiming.w, uSourceTiming.w + 0.028, uNormalizedTime);
 }
 
+// 0 through the entire mature phase, easing smoothly to 1 between lateStart
+// and finalStart; inert (always 0) unless uDissipationMode is set.
+float dissipationProgress() {
+  if (uDissipationMode < 0.5) return 0.0;
+  return smoothstep(uDissipationParams.x, uDissipationParams.y, uNormalizedTime);
+}
+
+// 1 through the mature phase, easing to 0 by sourceTaperEnd so new source
+// injection stops ahead of the final near-clearing state instead of
+// continuing to top up the field while it is trying to dissipate.
+float dissipationSourceTaper() {
+  if (uDissipationMode < 0.5) return 1.0;
+  return 1.0 - smoothstep(uDissipationParams.x, uDissipationParams2.x, uNormalizedTime);
+}
+
+// 1 through the mature phase, easing down to (1 - motionDamp) so residual
+// plume-shaping motion (widening / feed / ring vortices) settles before the
+// silhouette thins, instead of still actively churning at the final frame.
+float dissipationMotionDamp() {
+  if (uDissipationMode < 0.5) return 1.0;
+  return mix(1.0, 1.0 - clamp(uDissipationParams2.w, 0.0, 0.98), dissipationProgress());
+}
+
 float profileCombinedKernelWithoutTrail(vec2 uv) {
   float result = profileBaseKernel(uv) * (sourceEnabled(SOURCE_RADIAL) ? 1.0 : 0.0);
   result = max(result, profileRingKernel(uv) * (sourceEnabled(SOURCE_RING) ? 1.0 : 0.0));
@@ -947,9 +1028,16 @@ void main() {
   float smoke = scalar.g;
   float incandescent = scalar.b;
   float dust = scalar.a;
-  float lift = temperature * uBuoyancy * uProfilePhysics.x + incandescent * 0.14
-    - smoke * uDensityLoading * uProfilePhysics.y
-    - dust * uDensityLoading * uProfilePhysics.y * 1.7;
+  // Late-dissipation buoyancy falloff (inert unless uDissipationMode is set):
+  // only the buoyant lift terms relax, not the density-loading sink, so the
+  // cloud stops climbing and settles into drift instead of sinking unnaturally.
+  float buoyancyFalloff = uDissipationMode > 0.5
+    ? mix(1.0, 1.0 - clamp(uDissipationParams2.z, 0.0, 0.95), dissipationProgress())
+    : 1.0;
+  float buoyantLift = (temperature * uBuoyancy * uProfilePhysics.x + incandescent * 0.14) * buoyancyFalloff;
+  float densitySink = smoke * uDensityLoading * uProfilePhysics.y
+    + dust * uDensityLoading * uProfilePhysics.y * 1.7;
+  float lift = buoyantLift - densitySink;
   velocity.y += lift * uDt;
   velocity += uWind * uDt * uProfilePhysics.z * (0.18 + smoke * 0.08);
 
@@ -994,7 +1082,7 @@ void main() {
     vec2 primitiveRadial = primitiveDelta / max(length(primitiveDelta), 0.006);
     vec2 direction = safeDirection(uSourceVector.xy);
     float onset = profileOnsetEnvelope();
-    float sustain = profileSustainEnvelope();
+    float sustain = profileSustainEnvelope() * dissipationSourceTaper();
     float pulse = (sourceEnabled(SOURCE_PULSED) || uProfileKind == 8)
       ? profilePulseEnvelope() : 1.0;
     float stage = profileStageEnvelope();
@@ -1125,6 +1213,10 @@ void main() {
     float heightAbove = clamp((vUv.y - uSourceCenter.y) / 0.52, 0.0, 1.2);
     float lateral = vUv.x - uSourceCenter.x;
     float lateralSign = sign(lateral + uSeedOffsetsA.x * 0.015 + 0.0001);
+    // Late-dissipation motion damp: relaxes residual widening/feed/ring
+    // vortex forces toward rest so the silhouette settles before it thins.
+    // Always 1.0 unless uDissipationMode is set.
+    float motionDamp = dissipationMotionDamp();
 
     // 1 + 3 · Expansion / column widening: outward push that grows with
     // altitude, weighted by local plume presence, so a cauliflower body and a
@@ -1143,12 +1235,12 @@ void main() {
       * (1.0 - smoothstep(0.85, 1.15, heightAbove));
     float expansion = plumeActivity * widenBand
       * (0.35 + heightAbove * 0.85) * developPhase;
-    velocity.x += lateralSign * expansion * uPlumeParams.x * motionScale * uDt * 60.0;
+    velocity.x += lateralSign * expansion * uPlumeParams.x * motionScale * uDt * 60.0 * motionDamp;
     // A gentle upward feed inside the widened core keeps the stem continuous
     // with the cap rather than pinching off.
     float coreBand = exp(-lateral * lateral / max(0.004, uSourceShape.x * uSourceShape.x * 9.0));
     velocity.y += coreBand * plumeActivity * uPlumeParams.w
-      * (0.4 + 0.6 * (1.0 - heightAbove)) * feedPhase * motionScale * uDt * 30.0;
+      * (0.4 + 0.6 * (1.0 - heightAbove)) * feedPhase * motionScale * uDt * 30.0 * motionDamp;
 
     // 2 · Rising asymmetric vortex-particle ring. A small set of analytic
     // Gaussian vortices climbs with the plume; seeded offsets make radii,
@@ -1157,7 +1249,7 @@ void main() {
     float ringRise = mix(0.08, 0.46, smoothstep(0.02, 0.5, uNormalizedTime));
     float ringLife = smoothstep(0.015, 0.08, uNormalizedTime)
       * (1.0 - smoothstep(0.72, 1.15, uNormalizedTime));
-    float ringStrength = uPlumeParams.y * ringLife * motionScale;
+    float ringStrength = uPlumeParams.y * ringLife * motionScale * motionDamp;
     if (ringStrength > 0.0001) {
       // Four vortices: two forming the primary cap torus (unequal), two
       // smaller secondary rolls higher up. Offsets come from the existing
@@ -1180,6 +1272,19 @@ void main() {
     }
     float speedCap = length(velocity);
     if (speedCap > 1.55) velocity *= 1.55 / speedCap;
+  }
+
+  // Late-dissipation outward dispersion (inert unless uDissipationMode is
+  // set): a gentle radial push that grows only during the dissipation ramp,
+  // helping the cloud fragment and spread into thin wisps instead of holding
+  // together as a single coherent mass while it loses density.
+  if (uDissipationMode > 0.5) {
+    float outwardProgress = dissipationProgress();
+    if (outwardProgress > 0.0005) {
+      vec2 fromCenter = vUv - uSourceCenter;
+      vec2 outwardDir = fromCenter / max(length(fromCenter), 0.02);
+      velocity += outwardDir * uDissipationParams2.y * outwardProgress * motionScale * uDt * 0.6;
+    }
   }
 
   velocity *= pow(clamp(uProfileDecay.x, 0.9, 1.0), uDt * 60.0);
@@ -1228,14 +1333,28 @@ void main() {
     temperature * exp(-uCooling * uProfileDecay.y * uDt * (0.42 + smoke * 0.08)) - radiativeLoss
   );
   // Tsar-scale persistence (uPlumeParams.z): the monumental cloud must retain
-  // visible mass across its long timeline, so smoke dissipation is nudged
+  // visible mass across its mature phase, so smoke dissipation is nudged
   // toward unity for the Tsar reference only (inert elsewhere). Deferred
   // dissipation is a documented CG smoke technique (Fedkiw/Stam/Jensen 2001:
-  // low numerical dissipation keeps large plumes alive).
+  // low numerical dissipation keeps large plumes alive). The persistence
+  // TARGET itself eases from 1.0 down to a real per-step floor once the
+  // late-dissipation ramp begins (uDissipationParams.z), so the mature phase
+  // is byte-identical to before this pass and only the tail actually decays.
+  float dissipationT = dissipationProgress();
   float smokeRetention = uDissipation * uProfileDecay.w;
-  if (uPlumeMode > 0.5) smokeRetention = mix(smokeRetention, 1.0, clamp(uPlumeParams.z, 0.0, 0.9));
+  if (uPlumeMode > 0.5) {
+    float persistenceTarget = uDissipationMode > 0.5
+      ? mix(1.0, uDissipationParams.z, dissipationT)
+      : 1.0;
+    smokeRetention = mix(smokeRetention, persistenceTarget, clamp(uPlumeParams.z, 0.0, 0.9));
+  }
   smoke *= pow(clamp(smokeRetention, 0.9, 1.0), uDt * 60.0);
-  dust *= pow(clamp(uDissipation * uProfileDecay.w - 0.0015, 0.88, 1.0), uDt * 60.0);
+  // Lofted dust gets its own late-dissipation floor (uDissipationParams.w),
+  // tuned lower than smoke's so dust clears/settles first — the two fields no
+  // longer share one decay curve.
+  float dustRetention = uDissipation * uProfileDecay.w - 0.0015;
+  if (uDissipationMode > 0.5) dustRetention = mix(dustRetention, uDissipationParams.w, dissipationT);
+  dust *= pow(clamp(dustRetention, 0.8, 1.0), uDt * 60.0);
   incandescent *= exp(-uCooling * uProfileDecay.y * uDt * 1.65);
 
   // Open-boundary guard band: material entering the outer side/top margins is
@@ -1298,7 +1417,7 @@ void main() {
     dust += source * shell * lowerRegion * smokeEnvelope * uDt * 0.12;
   } else {
     float onset = profileOnsetEnvelope();
-    float sustain = profileSustainEnvelope();
+    float sustain = profileSustainEnvelope() * dissipationSourceTaper();
     float stage = profileStageEnvelope();
     float pulse = (sourceEnabled(SOURCE_PULSED) || uProfileKind == 8)
       ? profilePulseEnvelope() : 1.0;
@@ -1463,7 +1582,11 @@ void main() {
   vec4 state = texelFetch(uTracers, ivec2(int(index), 0), 0);
   uint generation = uint(max(0.0, floor(state.w + 0.5)));
   float lifetimeScale = uTracerType == 4 || uTracerType == 5 ? 1.5 : (uTracerType == 6 ? 0.62 : 1.0);
-  float lifetime = mix(1.7, 4.8, tracerRandom(index, generation, 7u)) * lifetimeScale;
+  // Late-dissipation tracer taper (inert unless uDissipationMode is set):
+  // shortens tracer lifetime as the volume clears so particles age out and
+  // no longer dominate the frame once the smoke itself has thinned.
+  float tracerDissipation = uDissipationMode > 0.5 ? mix(1.0, 0.35, dissipationProgress()) : 1.0;
+  float lifetime = mix(1.7, 4.8, tracerRandom(index, generation, 7u)) * lifetimeScale * tracerDissipation;
   bool invalid = state.w < 0.5
     || state.z + uDt >= lifetime
     || any(lessThan(state.xy, vec2(0.012)))
@@ -3105,6 +3228,27 @@ export class ResearchFluidEngine {
       finite(plume.vortex, 0),
       finite(plume.persistence, 0),
       finite(plume.widen, 0),
+    );
+    const dissipation = this.profile.dissipation || {
+      mode: 0, lateStart: 1, finalStart: 1, sourceTaperEnd: 1,
+      retentionFloorSmoke: 1, retentionFloorDust: 1, outwardBoost: 0, buoyancyFalloff: 0, motionDamp: 0,
+    };
+    this._uniform1f(program, 'uDissipationMode', dissipation.mode > 0 ? 1 : 0);
+    this._uniform4f(
+      program,
+      'uDissipationParams',
+      finite(dissipation.lateStart, 1),
+      finite(dissipation.finalStart, 1),
+      finite(dissipation.retentionFloorSmoke, 1),
+      finite(dissipation.retentionFloorDust, 1),
+    );
+    this._uniform4f(
+      program,
+      'uDissipationParams2',
+      finite(dissipation.sourceTaperEnd, 1),
+      finite(dissipation.outwardBoost, 0),
+      finite(dissipation.buoyancyFalloff, 0),
+      finite(dissipation.motionDamp, 0),
     );
   }
 
