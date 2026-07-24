@@ -184,6 +184,81 @@ for (const gatedTerm of [
   assert.match(RESEARCH_FLUID_SHADER_SOURCES.volumeFragment, gatedTerm, `Material technique not properly gated behind uMaterialMode: ${gatedTerm}`);
 }
 
+// --- Tsar-scale late-dissipation research proof of concept (2026-07) --------
+// Same opt-in contract as the plume/material controls above: every profile
+// except the Tsar historical reference keeps dissipation.mode 0 (a fully
+// neutral envelope — lateStart/finalStart/sourceTaperEnd at 1, retention
+// floors at 1, no outward boost/buoyancy falloff/motion damp), so its
+// simulation is byte-identical to before this pass.
+for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
+  assert.ok(profile.dissipation && typeof profile.dissipation === "object", `${presetId}: dissipation config missing`);
+  for (const key of [
+    "mode", "lateStart", "finalStart", "sourceTaperEnd",
+    "retentionFloorSmoke", "retentionFloorDust", "outwardBoost", "buoyancyFalloff", "motionDamp",
+  ]) {
+    assert.ok(Number.isFinite(profile.dissipation[key]), `${presetId}: dissipation.${key} must be finite`);
+  }
+  if (presetId === "tsar-bomba-scale-reference") {
+    const d = profile.dissipation;
+    assert.equal(d.mode, 1, "Tsar must enable the late-dissipation mode");
+    assert.ok(d.lateStart > 0 && d.lateStart < 1, "Tsar lateStart must fall strictly within the mature phase");
+    assert.ok(d.finalStart > d.lateStart && d.finalStart <= 1, "Tsar finalStart must follow lateStart and not exceed the timeline");
+    assert.ok(d.sourceTaperEnd > d.lateStart, "Tsar source taper must begin no earlier than the dissipation ramp");
+    assert.ok(d.retentionFloorSmoke < 1 && d.retentionFloorSmoke > 0, "Tsar smoke retention floor must be a real decay target");
+    assert.ok(d.retentionFloorDust < d.retentionFloorSmoke, "Tsar dust must clear faster than smoke (independent decay)");
+    assert.ok(d.outwardBoost > 0, "Tsar late outward dispersion must be active");
+    assert.ok(d.buoyancyFalloff > 0, "Tsar late buoyancy falloff must be active");
+    assert.ok(d.motionDamp > 0, "Tsar residual motion damp must be active");
+  } else {
+    const d = profile.dissipation;
+    assert.equal(d.mode, 0, `${presetId}: late-dissipation mode must remain off for non-Tsar presets`);
+    assert.equal(d.lateStart, 1, `${presetId}: dissipation.lateStart must stay neutral (1)`);
+    assert.equal(d.finalStart, 1, `${presetId}: dissipation.finalStart must stay neutral (1)`);
+    assert.equal(d.retentionFloorSmoke, 1, `${presetId}: dissipation.retentionFloorSmoke must stay neutral (1)`);
+    assert.equal(d.retentionFloorDust, 1, `${presetId}: dissipation.retentionFloorDust must stay neutral (1)`);
+    assert.equal(d.outwardBoost, 0, `${presetId}: dissipation.outwardBoost must stay neutral (0)`);
+    assert.equal(d.buoyancyFalloff, 0, `${presetId}: dissipation.buoyancyFalloff must stay neutral (0)`);
+    assert.equal(d.motionDamp, 0, `${presetId}: dissipation.motionDamp must stay neutral (0)`);
+  }
+}
+// The velocity/scalar/tracer shaders must all carry the dissipation uniforms
+// (declared once in the shared SOURCE_PROFILE_UNIFORMS block).
+for (const uniform of ["uDissipationMode", "uDissipationParams", "uDissipationParams2"]) {
+  assert.match(
+    `${RESEARCH_FLUID_SHADER_SOURCES.forceFragment}\n${RESEARCH_FLUID_SHADER_SOURCES.scalarFragment}\n${RESEARCH_FLUID_SHADER_SOURCES.tracerAdvectFragment}`,
+    new RegExp(`uniform[^;]*\\b${uniform}\\b`),
+    `${uniform}: dissipation uniform missing from shaders`,
+  );
+}
+// Every new dissipation term must be reachable only through the
+// uDissipationMode gate, and must algebraically collapse to the prior
+// expression when it is 0 (dissipationProgress()/dissipationSourceTaper()/
+// dissipationMotionDamp() all return their inert value unless the mode is set).
+for (const gatedTerm of [
+  /if \(uDissipationMode < 0\.5\) return 0\.0;/,
+  /if \(uDissipationMode < 0\.5\) return 1\.0;/,
+  /float sustain = profileSustainEnvelope\(\) \* dissipationSourceTaper\(\);/,
+  /float buoyancyFalloff = uDissipationMode > 0\.5/,
+  /if \(uDissipationMode > 0\.5\) \{\s*\n\s*float outwardProgress = dissipationProgress\(\);/,
+  /float tracerDissipation = uDissipationMode > 0\.5 \? mix\(1\.0, 0\.35, dissipationProgress\(\)\) : 1\.0;/,
+]) {
+  assert.match(
+    `${RESEARCH_FLUID_SHADER_SOURCES.forceFragment}\n${RESEARCH_FLUID_SHADER_SOURCES.scalarFragment}\n${RESEARCH_FLUID_SHADER_SOURCES.tracerAdvectFragment}`,
+    gatedTerm,
+    `Dissipation technique not properly gated behind uDissipationMode: ${gatedTerm}`,
+  );
+}
+assert.equal(
+  (RESEARCH_FLUID_SHADER_SOURCES.forceFragment.match(/float sustain = profileSustainEnvelope\(\) \* dissipationSourceTaper\(\);/g) || []).length,
+  1,
+  "Velocity shader must taper exactly one sustain envelope",
+);
+assert.equal(
+  (RESEARCH_FLUID_SHADER_SOURCES.scalarFragment.match(/float sustain = profileSustainEnvelope\(\) \* dissipationSourceTaper\(\);/g) || []).length,
+  1,
+  "Scalar shader must taper exactly one sustain envelope",
+);
+
 const shaders = RESEARCH_FLUID_SHADER_SOURCES;
 const engineSource = readFileSync(new URL("../scripts/fluid-engine.js", import.meta.url), "utf8");
 for (const uniform of [
