@@ -580,8 +580,8 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
         ringC: { radiusOffset: 0.22, widthScale: 0.75, strength: 0.34, phaseOffset: 0.05 },
         ringD: { radiusOffset: -0.55, widthScale: 1.9, strength: 0.24, phaseOffset: 0.03 },
         irregularity: 0.05,
-        fadeStart: 0.42,
-        fadeSpan: 0.36,
+        fadeStart: 0.44,
+        fadeSpan: 0.14,
       },
       // 2026-07 smoke-material pass: soot absorbs more strongly than lofted
       // dust (independent optical-depth coefficients instead of one shared

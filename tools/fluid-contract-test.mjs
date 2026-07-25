@@ -556,7 +556,148 @@ for (const [index, preset] of EVENT_PRESETS.entries()) {
 }
 assert.ok(effectivePerformanceFingerprints.size >= 8, "Per-profile performance settings are not materially adaptive");
 
+// --- Tsar-scale shockwave shell-layering + stem taper/breakup (2026-07) -----
+// Same opt-in contract as the plume/material/dissipation/core controls above:
+// every profile except the Tsar historical reference keeps
+// shockwave.mode 0 (all three secondary bands neutral: zero strength, unit
+// width) and plume.feedTaperStart/feedTaperEnd/lateralJitter/turbulenceBlend
+// at their neutral defaults (0.85, 1.05, 0, 0 — the exact pre-pass hardcoded
+// coreBand taper window), so simulation is byte-identical to before this pass.
+for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
+  assert.ok(profile.shockwave && typeof profile.shockwave === "object", `${presetId}: shockwave config missing`);
+  for (const ringKey of ["ringB", "ringC", "ringD"]) {
+    const ring = profile.shockwave[ringKey];
+    assert.ok(ring && typeof ring === "object", `${presetId}: shockwave.${ringKey} config missing`);
+    for (const key of ["radiusOffset", "widthScale", "strength", "phaseOffset"]) {
+      assert.ok(Number.isFinite(ring[key]), `${presetId}: shockwave.${ringKey}.${key} must be finite`);
+    }
+  }
+  for (const key of ["mode", "irregularity", "fadeStart", "fadeSpan"]) {
+    assert.ok(Number.isFinite(profile.shockwave[key]), `${presetId}: shockwave.${key} must be finite`);
+  }
+  for (const key of ["feedTaperStart", "feedTaperEnd", "lateralJitter", "turbulenceBlend"]) {
+    assert.ok(Number.isFinite(profile.plume[key]), `${presetId}: plume.${key} must be finite`);
+  }
+  if (presetId === "tsar-bomba-scale-reference") {
+    const s = profile.shockwave;
+    assert.equal(s.mode, 1, "Tsar must enable the shockwave shell-layering mode");
+    for (const ringKey of ["ringB", "ringC", "ringD"]) {
+      assert.ok(s[ringKey].strength > 0, `Tsar shockwave.${ringKey}.strength must be active`);
+      assert.ok(s[ringKey].widthScale > 0, `Tsar shockwave.${ringKey}.widthScale must be positive`);
+    }
+    // Radii must be distinct (nested, not stacked on the primary ring) and
+    // widths/strengths must not all match (avoid uniform-looking rings).
+    const radii = ["ringB", "ringC", "ringD"].map((key) => s[key].radiusOffset);
+    assert.equal(new Set(radii).size, 3, "Tsar shockwave band radius offsets must be distinct");
+    const widths = ["ringB", "ringC", "ringD"].map((key) => s[key].widthScale);
+    assert.equal(new Set(widths).size, 3, "Tsar shockwave band widths must be distinct (avoid equal-width rings)");
+    const strengths = ["ringB", "ringC", "ringD"].map((key) => s[key].strength);
+    assert.equal(new Set(strengths).size, 3, "Tsar shockwave band strengths must be distinct (avoid identical alpha)");
+    assert.ok(s.fadeStart > 0 && s.fadeStart < 1, "Tsar shockwave fadeStart must fall within the timeline");
+    assert.ok(s.fadeSpan > 0, "Tsar shockwave fadeSpan must be a real softening window, not an abrupt cutoff");
+    assert.ok(
+      s.fadeStart + s.fadeSpan < profile.dissipation.lateStart,
+      "Tsar shockwave bands must fully soften out before the late-dissipation ramp begins",
+    );
+
+    const p = profile.plume;
+    assert.ok(p.feedTaperStart > 0 && p.feedTaperStart < 1, "Tsar feedTaperStart must fall within the timeline");
+    assert.ok(p.feedTaperEnd > p.feedTaperStart, "Tsar feedTaperEnd must follow feedTaperStart");
+    assert.ok(p.feedTaperStart < 0.85, "Tsar coreBand must taper earlier than the old end-of-timeline default (0.85)");
+    assert.ok(p.lateralJitter > 0, "Tsar stem lateral decorrelation must be active");
+    assert.ok(p.turbulenceBlend > 0, "Tsar stem turbulence blend must be active");
+  } else {
+    const s = profile.shockwave;
+    assert.equal(s.mode, 0, `${presetId}: shockwave mode must remain off for non-Tsar presets`);
+    for (const ringKey of ["ringB", "ringC", "ringD"]) {
+      assert.equal(s[ringKey].strength, 0, `${presetId}: shockwave.${ringKey}.strength must stay neutral (0)`);
+      assert.equal(s[ringKey].widthScale, 1, `${presetId}: shockwave.${ringKey}.widthScale must stay neutral (1)`);
+      assert.equal(s[ringKey].radiusOffset, 0, `${presetId}: shockwave.${ringKey}.radiusOffset must stay neutral (0)`);
+    }
+    const p = profile.plume;
+    assert.equal(p.feedTaperStart, 0.85, `${presetId}: plume.feedTaperStart must stay at the pre-pass default (0.85)`);
+    assert.equal(p.feedTaperEnd, 1.05, `${presetId}: plume.feedTaperEnd must stay at the pre-pass default (1.05)`);
+    assert.equal(p.lateralJitter, 0, `${presetId}: plume.lateralJitter must stay neutral (0)`);
+    assert.equal(p.turbulenceBlend, 0, `${presetId}: plume.turbulenceBlend must stay neutral (0)`);
+  }
+}
+// The scalar/velocity shaders must carry the new uniforms (declared once in
+// the shared SOURCE_PROFILE_UNIFORMS block).
+for (const uniform of ["uShockwaveMode", "uShockwaveRingB", "uShockwaveRingC", "uShockwaveRingD", "uShockwaveAux", "uPlumeStemParams"]) {
+  assert.match(
+    `${RESEARCH_FLUID_SHADER_SOURCES.forceFragment}\n${RESEARCH_FLUID_SHADER_SOURCES.scalarFragment}`,
+    new RegExp(`uniform[^;]*\\b${uniform}\\b`),
+    `${uniform}: uniform missing from shaders`,
+  );
+}
+// The three secondary bands must be reachable only through uShockwaveMode,
+// and must collapse to zero (not affecting the pre-existing single-ring
+// behavior) when it is 0.
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.scalarFragment,
+  /if \(uShockwaveMode < 0\.5\) return 0\.0;/,
+  "Shockwave layers not properly gated behind uShockwaveMode",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.scalarFragment,
+  /float ring = profileRingKernel\(vUv\) \+ profileShockwaveLayers\(vUv\);/,
+  "Shockwave layers must be summed into the same ring term feeding thermalKernel",
+);
+// The force shader's velocity-shaping ring term must remain the single
+// primary ring only — the new bands are density-only shell structure and
+// must not become new pressure/velocity sources.
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.forceFragment,
+  /float ringKernel = profileRingKernel\(vUv\);/,
+  "Force shader must keep using only the primary ring for velocity shaping",
+);
+// profileShockwaveLayers() is defined in the shared SOURCE_PROFILE_FUNCTIONS
+// block (so it necessarily appears, unused, in forceFragment's source text
+// too) but must never be invoked there to compute a velocity term.
+assert.doesNotMatch(
+  RESEARCH_FLUID_SHADER_SOURCES.forceFragment,
+  /=\s*profileShockwaveLayers\(|\+\s*profileShockwaveLayers\(/,
+  "Shockwave shell bands must stay density-only and not feed the velocity/force pass",
+);
+
+// --- Dense-phase raymarch performance optimization (2026-07) ----------------
+// Skipping the lighting/shading math for near-empty raymarch layers must
+// stay a bounded, unconditional (not Tsar-gated — output-equivalent for
+// every preset) optimization: the alpha threshold gate must wrap only the
+// shading math, while transmittance/shadowColumn keep updating from
+// density/alpha every step regardless, so loop iteration count and
+// early-exit timing are unaffected — verified structurally since this
+// session has no browser profiler to measure the real FPS effect.
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /if \(alpha > 0\.0006\) \{/,
+  "Dense-phase shading skip must be present and bounded by a small alpha threshold",
+);
+{
+  const volume = RESEARCH_FLUID_SHADER_SOURCES.volumeFragment;
+  const skipStart = volume.indexOf("if (alpha > 0.0006) {");
+  const loopEnd = volume.indexOf("if (transmittance < 0.012) break;");
+  assert.ok(skipStart > 0 && loopEnd > skipStart, "Shading skip must precede the per-step early-exit check");
+  const between = volume.slice(skipStart, loopEnd);
+  assert.match(
+    between,
+    /transmittance \*= 1\.0 - alpha;/,
+    "transmittance must still update unconditionally after the shading-skip block, every step",
+  );
+  assert.match(
+    between,
+    /shadowColumn \+= density \* inverseSteps;/,
+    "shadowColumn must still update unconditionally after the shading-skip block, every step",
+  );
+  // Both unconditional updates must sit after the shading block closes, not
+  // inside it, so they run regardless of whether shading was skipped.
+  const closeBrace = between.lastIndexOf("}\n    transmittance *= 1.0 - alpha;");
+  assert.ok(closeBrace >= 0, "transmittance update must sit immediately after the shading-skip block closes");
+}
+
 console.log("Explosion Dynamics Lab fluid contract test: PASS");
 console.log(`  ${tiers.length} bounded tiers × ${EVENT_PRESETS.length} preset profiles across seven event families`);
 console.log("  primitive diversity, profile budgets, palette-driven volume uniforms, fluid evolution, and GPU tracers verified");
 console.log("  non-WebGL runtime fails closed to the existing Canvas renderer");
+console.log("  Tsar shockwave shell-layering and stem taper/breakup gating verified Tsar-only");
+console.log("  dense-phase raymarch shading-skip bounded and structurally deterministic across every preset");
