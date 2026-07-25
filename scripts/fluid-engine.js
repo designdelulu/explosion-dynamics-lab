@@ -222,7 +222,15 @@ const BASE_PROFILE = Object.freeze({
   quality: Object.freeze({ grid: 1, pressure: 1, rays: 1, tracers: 1, detail: 1 }),
   // Broad-plume research controls. mode 0 keeps every shipped preset on its
   // exact current behavior; only the Tsar historical reference opts in.
-  plume: Object.freeze({ mode: 0, expansion: 0, vortex: 0, persistence: 0, widen: 0 }),
+  // feedTaperStart/feedTaperEnd/lateralJitter/turbulenceBlend are the central
+  // -stem taper/breakup controls (2026-07 shockwave/stem/performance pass);
+  // feedTaperStart/End default to the original hardcoded coreBand taper
+  // window (0.85-1.05) so any future preset that enables plume mode without
+  // overriding them keeps the prior behavior exactly.
+  plume: Object.freeze({
+    mode: 0, expansion: 0, vortex: 0, persistence: 0, widen: 0,
+    feedTaperStart: 0.85, feedTaperEnd: 1.05, lateralJitter: 0, turbulenceBlend: 0,
+  }),
   // Shockwave shell-layering research controls (2026-07 Tsar shockwave/stem/
   // performance pass). mode 0 keeps every shipped preset byte-identical to
   // before this pass — only the Tsar historical reference opts in. ringB/C/D
@@ -543,7 +551,19 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       // hot phase reads as a structured fireball instead of a flat white disc.
       volume: { scaleX: 1.4, scaleY: 1.42, depth: 1.48, opacity: 1.48, shadow: 1.5, bloom: 1.15, distortion: 1.32, erosion: 0.82, noiseScale: 0.86, dustVisibility: 0.58, exposure: 1.0, toneMap: 0.24, backgroundIllumination: 0.46, emissionCurve: 0.88 },
       quality: { grid: 1.14, pressure: 1.18, rays: 1.2, tracers: 1.44, detail: 1.28 },
-      plume: { mode: 1, expansion: 0.65, vortex: 1.0, persistence: 0.78, widen: 0.6 },
+      // feedTaperStart/End (2026-07 shockwave/stem/performance pass): the
+      // audited hard vertical seam came from coreBand staying fed almost to
+      // the end of the timeline (old 0.85-1.05 taper, ~t46-54) while the
+      // mature cap is fully formed by ~30s (0.6) — moving the taper to
+      // 0.32-0.62 (~t17-33) lets the column break up right after cap
+      // formation instead of holding one straight painted line through the
+      // whole dense mid-timeline. lateralJitter/turbulenceBlend drive the
+      // stemBreakup decorrelation (off-center drift + medium-scale
+      // turbulence folded into the corridor) over that same window.
+      plume: {
+        mode: 1, expansion: 0.65, vortex: 1.0, persistence: 0.78, widen: 0.6,
+        feedTaperStart: 0.32, feedTaperEnd: 0.62, lateralJitter: 0.35, turbulenceBlend: 0.16,
+      },
       // 2026-07 shockwave shell-layering pass: the audited defect was that
       // profileRingKernel contributed exactly one fixed-radius band at flat
       // 0.5 weight, so t10-t20 read as an outer sphere plus at most two faint
@@ -881,6 +901,11 @@ uniform vec4 uProfileAux;
 // (expansion, vortexStrength, persistence, columnWiden).
 uniform float uPlumeMode;
 uniform vec4 uPlumeParams;
+// Tsar-scale central-stem taper/breakup research controls, inert under the
+// same uPlumeMode gate as uPlumeParams above. Packs (feedTaperStart,
+// feedTaperEnd, lateralJitter, turbulenceBlend) — see the coreBand/
+// stemBreakup usage in FORCE_FRAGMENT for what each term does.
+uniform vec4 uPlumeStemParams;
 // Tsar-scale late-dissipation research controls. uDissipationMode is 0 for
 // every shipped preset except the Tsar historical reference, so this block is
 // inert (byte-identical behavior) for all other events. uDissipationParams
@@ -1379,18 +1404,51 @@ void main() {
     // little longer before also relaxing.
     float developPhase = smoothstep(0.02, 0.14, uNormalizedTime)
       * (1.0 - smoothstep(0.55, 0.9, uNormalizedTime));
+    // Stem taper/breakup (uPlumeStemParams: feedTaperStart, feedTaperEnd,
+    // lateralJitter, turbulenceBlend). The audited seam came from coreBand
+    // staying centered at lateral=0 and fully fed almost to the end of the
+    // timeline (old hardcoded 0.85-1.05 taper) — a single deterministic
+    // narrow band reads as a straight structural line rather than organic
+    // turbulence, especially since this is a 2D density field (no depth
+    // slices to decorrelate it across). feedTaperStart/End move that taper
+    // to right after cap formation instead. stemBreakup ramps up in the runup
+    // to the taper and stays engaged through it: it offsets the corridor off
+    // dead-center using the same curl-detail turbulence sample already
+    // computed above (free — no extra texture read), widens the band while
+    // its own feedPhase strength is easing down, and blends a portion of
+    // that turbulence directly into the corridor's velocity so the feed
+    // hands off to organic motion instead of just switching off.
+    float feedTaperStart = uPlumeStemParams.x;
+    float feedTaperEnd = uPlumeStemParams.y;
     float feedPhase = smoothstep(0.02, 0.1, uNormalizedTime)
-      * (1.0 - smoothstep(0.85, 1.05, uNormalizedTime));
+      * (1.0 - smoothstep(feedTaperStart, feedTaperEnd, uNormalizedTime));
+    float stemBreakup = smoothstep(feedTaperStart * 0.45, feedTaperStart, uNormalizedTime);
     float widenBand = smoothstep(0.015, 0.12, heightAbove)
       * (1.0 - smoothstep(0.85, 1.15, heightAbove));
     float expansion = plumeActivity * widenBand
       * (0.35 + heightAbove * 0.85) * developPhase;
     velocity.x += lateralSign * expansion * uPlumeParams.x * motionScale * uDt * 60.0 * motionDamp;
     // A gentle upward feed inside the widened core keeps the stem continuous
-    // with the cap rather than pinching off.
-    float coreBand = exp(-lateral * lateral / max(0.004, uSourceShape.x * uSourceShape.x * 9.0));
+    // with the cap rather than pinching off early. lateralOffset decorrelates
+    // the corridor away from a perfectly fixed x=0 line as breakup ramps up;
+    // widthGrow relaxes the band from a narrow column into a broader, softer
+    // one over the same window instead of holding one fixed width until it
+    // simply cuts off.
+    float lateralOffset = turbulence.z * uPlumeStemParams.z * stemBreakup;
+    float coreLateral = lateral - lateralOffset;
+    float widthGrow = mix(1.0, 2.4, stemBreakup);
+    float coreBand = exp(
+      -coreLateral * coreLateral
+      / max(0.004, uSourceShape.x * uSourceShape.x * 9.0 * widthGrow * widthGrow)
+    );
     velocity.y += coreBand * plumeActivity * uPlumeParams.w
       * (0.4 + 0.6 * (1.0 - heightAbove)) * feedPhase * motionScale * uDt * 30.0 * motionDamp;
+    // Medium-scale turbulence reaching into the central corridor specifically
+    // (rather than only the generic vortex-ring/cluster terms elsewhere) so
+    // the column develops internal asymmetric motion as it breaks up, instead
+    // of thinning out as one smooth, still-coherent taper.
+    velocity += turbulence.xy * coreBand * plumeActivity
+      * uPlumeStemParams.w * stemBreakup * motionScale * uDt * 60.0 * motionDamp;
 
     // 2 · Rising asymmetric vortex-particle ring. A small set of analytic
     // Gaussian vortices climbs with the plume; seeded offsets make radii,
@@ -3455,6 +3513,14 @@ export class ResearchFluidEngine {
       finite(plume.vortex, 0),
       finite(plume.persistence, 0),
       finite(plume.widen, 0),
+    );
+    this._uniform4f(
+      program,
+      'uPlumeStemParams',
+      finite(plume.feedTaperStart, 0.85),
+      finite(plume.feedTaperEnd, 1.05),
+      finite(plume.lateralJitter, 0),
+      finite(plume.turbulenceBlend, 0),
     );
     const dissipation = this.profile.dissipation || {
       mode: 0, lateStart: 1, finalStart: 1, sourceTaperEnd: 1,
