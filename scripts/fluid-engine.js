@@ -223,6 +223,22 @@ const BASE_PROFILE = Object.freeze({
   // Broad-plume research controls. mode 0 keeps every shipped preset on its
   // exact current behavior; only the Tsar historical reference opts in.
   plume: Object.freeze({ mode: 0, expansion: 0, vortex: 0, persistence: 0, widen: 0 }),
+  // Shockwave shell-layering research controls (2026-07 Tsar shockwave/stem/
+  // performance pass). mode 0 keeps every shipped preset byte-identical to
+  // before this pass — only the Tsar historical reference opts in. ringB/C/D
+  // are (radiusOffset, widthScale, strength, phaseOffset) for three secondary
+  // shell bands layered around the existing primary ring; irregularity is
+  // angular wobble strength; fadeStart/fadeSpan describe when the secondary
+  // structure softens back out (normalized time).
+  shockwave: Object.freeze({
+    mode: 0,
+    ringB: Object.freeze({ radiusOffset: 0, widthScale: 1, strength: 0, phaseOffset: 0 }),
+    ringC: Object.freeze({ radiusOffset: 0, widthScale: 1, strength: 0, phaseOffset: 0 }),
+    ringD: Object.freeze({ radiusOffset: 0, widthScale: 1, strength: 0, phaseOffset: 0 }),
+    irregularity: 0,
+    fadeStart: 1,
+    fadeSpan: 0.001,
+  }),
   // Smoke-material research controls (2026-07 Tsar smoke-material pass). mode 0
   // keeps every shipped preset byte-identical to before this pass; only the
   // Tsar historical reference opts in. sootAbsorption/dustAbsorption give soot
@@ -286,6 +302,13 @@ function defineFluidProfile(presetId, profileId, overrides = {}) {
     volume: { ...BASE_PROFILE.volume, ...(overrides.volume || {}) },
     quality: { ...BASE_PROFILE.quality, ...(overrides.quality || {}) },
     plume: { ...BASE_PROFILE.plume, ...(overrides.plume || {}) },
+    shockwave: {
+      ...BASE_PROFILE.shockwave,
+      ...(overrides.shockwave || {}),
+      ringB: { ...BASE_PROFILE.shockwave.ringB, ...(overrides.shockwave?.ringB || {}) },
+      ringC: { ...BASE_PROFILE.shockwave.ringC, ...(overrides.shockwave?.ringC || {}) },
+      ringD: { ...BASE_PROFILE.shockwave.ringD, ...(overrides.shockwave?.ringD || {}) },
+    },
     material: { ...BASE_PROFILE.material, ...(overrides.material || {}) },
     dissipation: { ...BASE_PROFILE.dissipation, ...(overrides.dissipation || {}) },
     core: { ...BASE_PROFILE.core, ...(overrides.core || {}) },
@@ -521,6 +544,25 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       volume: { scaleX: 1.4, scaleY: 1.42, depth: 1.48, opacity: 1.48, shadow: 1.5, bloom: 1.15, distortion: 1.32, erosion: 0.82, noiseScale: 0.86, dustVisibility: 0.58, exposure: 1.0, toneMap: 0.24, backgroundIllumination: 0.46, emissionCurve: 0.88 },
       quality: { grid: 1.14, pressure: 1.18, rays: 1.2, tracers: 1.44, detail: 1.28 },
       plume: { mode: 1, expansion: 0.65, vortex: 1.0, persistence: 0.78, widen: 0.6 },
+      // 2026-07 shockwave shell-layering pass: the audited defect was that
+      // profileRingKernel contributed exactly one fixed-radius band at flat
+      // 0.5 weight, so t10-t20 read as an outer sphere plus at most two faint
+      // arcs. Three secondary bands (ringB/C/D) nest around the primary ring
+      // at different radii, widths, and strengths so the structure reads as
+      // layered shell rather than one uniform line; small phaseOffsets stage
+      // their onset so they build up rather than all appearing/fading in
+      // lockstep, and fadeStart/fadeSpan ease them out well before the
+      // mature-phase dissipation ramp begins (lateStart 0.6 below) so they
+      // never compete with or mask genuine late-timeline clearing.
+      shockwave: {
+        mode: 1,
+        ringB: { radiusOffset: -0.32, widthScale: 1.35, strength: 0.42, phaseOffset: 0.015 },
+        ringC: { radiusOffset: 0.22, widthScale: 0.75, strength: 0.34, phaseOffset: 0.05 },
+        ringD: { radiusOffset: -0.55, widthScale: 1.9, strength: 0.24, phaseOffset: 0.03 },
+        irregularity: 0.05,
+        fadeStart: 0.42,
+        fadeSpan: 0.36,
+      },
       // 2026-07 smoke-material pass: soot absorbs more strongly than lofted
       // dust (independent optical-depth coefficients instead of one shared
       // curve), an energy-weighted third detail octave adds medium-scale
@@ -848,6 +890,25 @@ uniform vec4 uPlumeParams;
 uniform float uDissipationMode;
 uniform vec4 uDissipationParams;
 uniform vec4 uDissipationParams2;
+// Tsar-scale shockwave shell-layering research controls. uShockwaveMode is 0
+// for every shipped preset except the Tsar historical reference, so this
+// block is inert (byte-identical behavior) for all other events, and the
+// force pass keeps using the single primary ring (profileRingKernel) either
+// way — these bands are density-only additional shell structure, not new
+// pressure/velocity sources. Each of uShockwaveRingB/C/D packs (radiusOffset,
+// widthScale, strength, phaseOffset): radiusOffset is added to the primary
+// ring radius (uSourceAux.x, itself a multiple of source radius), widthScale
+// scales band thickness relative to the primary ring, strength is a
+// contribution multiplier, and phaseOffset is a normalized-time onset delay
+// so bands do not all appear/fade in lockstep. uShockwaveAux packs
+// (irregularity, fadeStart, fadeSpan, unused) — irregularity is angular
+// radius wobble strength, fadeStart/fadeSpan describe the shared
+// normalized-time window over which the secondary structure softens back out.
+uniform float uShockwaveMode;
+uniform vec4 uShockwaveRingB;
+uniform vec4 uShockwaveRingC;
+uniform vec4 uShockwaveRingD;
+uniform vec4 uShockwaveAux;
 `;
 
 const SOURCE_PROFILE_FUNCTIONS = `
@@ -906,6 +967,42 @@ float profileRingKernel(vec2 uv) {
   vec2 scaled = delta / max(vec2(0.002), uSourceShape.x * uSourceShape.yz);
   float distanceFromRing = abs(length(scaled) - uSourceAux.x);
   return exp(-distanceFromRing * distanceFromRing * 9.5);
+}
+
+// One nested secondary/tertiary/quaternary shell band around the primary
+// ring above. Inert unless uShockwaveMode is set (Tsar historical reference
+// only). angleSeed differentiates the angular wobble phase per band so
+// nested rings do not wobble in unison, which would just read as one thick
+// ring instead of layered structure.
+float profileShockwaveBand(vec2 uv, vec4 band, float angleSeed) {
+  vec2 delta = uv - profileSourceCenter();
+  vec2 scaled = delta / max(vec2(0.002), uSourceShape.x * uSourceShape.yz);
+  float angle = atan(scaled.y, scaled.x);
+  float wobble = uShockwaveAux.x * (
+    sin(angle * 3.0 + angleSeed) * 0.5
+    + sin(angle * 7.0 - angleSeed * 1.6) * 0.3
+    + sin(angle * 11.0 + angleSeed * 2.3) * 0.2
+  );
+  float ringRadius = max(0.02, uSourceAux.x + band.x) * (1.0 + wobble);
+  float distanceFromRing = abs(length(scaled) - ringRadius);
+  float sharpness = 9.5 / max(0.15, band.y * band.y);
+  float shell = exp(-distanceFromRing * distanceFromRing * sharpness);
+  float onset = smoothstep(band.w, band.w + 0.05, uNormalizedTime);
+  float fade = 1.0 - smoothstep(
+    uShockwaveAux.y + band.w * 0.4,
+    uShockwaveAux.y + uShockwaveAux.z,
+    uNormalizedTime
+  );
+  return shell * band.z * onset * clamp(fade, 0.0, 1.0);
+}
+
+// Sum of the secondary shell bands, zero (and byte-identical to before this
+// pass) for every preset except the Tsar historical reference.
+float profileShockwaveLayers(vec2 uv) {
+  if (uShockwaveMode < 0.5) return 0.0;
+  return profileShockwaveBand(uv, uShockwaveRingB, 1.7)
+    + profileShockwaveBand(uv, uShockwaveRingC, 3.4)
+    + profileShockwaveBand(uv, uShockwaveRingD, 5.1);
 }
 
 float profileGroundKernel(vec2 uv) {
@@ -1480,7 +1577,7 @@ void main() {
     float ground = profileGroundKernel(vUv);
     float ejecta = profileEjectaKernel(vUv);
     float trail = profileTrailKernel(vUv);
-    float ring = profileRingKernel(vUv);
+    float ring = profileRingKernel(vUv) + profileShockwaveLayers(vUv);
     float combustion = sourceEnabled(SOURCE_SUSTAINED) ? sustain : fireEnvelope;
     float hotEnvelope = onset * 1.45 + combustion * pulse * 0.72;
     float matterEnvelope = sustain * (0.35 + pulse * 0.65);
@@ -3379,6 +3476,29 @@ export class ResearchFluidEngine {
       finite(dissipation.outwardBoost, 0),
       finite(dissipation.buoyancyFalloff, 0),
       finite(dissipation.motionDamp, 0),
+    );
+    const shockwave = this.profile.shockwave || BASE_PROFILE.shockwave;
+    this._uniform1f(program, 'uShockwaveMode', shockwave.mode > 0 ? 1 : 0);
+    const bindShockwaveRing = (name, ring) => {
+      this._uniform4f(
+        program,
+        name,
+        finite(ring?.radiusOffset, 0),
+        finite(ring?.widthScale, 1),
+        finite(ring?.strength, 0),
+        finite(ring?.phaseOffset, 0),
+      );
+    };
+    bindShockwaveRing('uShockwaveRingB', shockwave.ringB);
+    bindShockwaveRing('uShockwaveRingC', shockwave.ringC);
+    bindShockwaveRing('uShockwaveRingD', shockwave.ringD);
+    this._uniform4f(
+      program,
+      'uShockwaveAux',
+      finite(shockwave.irregularity, 0),
+      finite(shockwave.fadeStart, 1),
+      finite(shockwave.fadeSpan, 0.001),
+      0,
     );
   }
 
