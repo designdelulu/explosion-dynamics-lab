@@ -287,7 +287,7 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
   }
 
   assert.ok(profile.tracerMaterial && typeof profile.tracerMaterial === "object", `${presetId}: tracerMaterial config missing`);
-  for (const key of ["mode", "occlusionStrength", "sizeVariance", "brightnessVariance"]) {
+  for (const key of ["mode", "occlusionStrength", "sizeVariance", "brightnessVariance", "minSizeFloor"]) {
     assert.ok(Number.isFinite(profile.tracerMaterial[key]), `${presetId}: tracerMaterial.${key} must be finite`);
   }
   if (presetId === "tsar-bomba-scale-reference") {
@@ -296,12 +296,14 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(t.occlusionStrength > 0, "Tsar tracer occlusion must be active");
     assert.ok(t.sizeVariance > 0 && t.sizeVariance < 1, "Tsar tracer size variance must be active and bounded (< 1 keeps size positive)");
     assert.ok(t.brightnessVariance > 0 && t.brightnessVariance < 1, "Tsar tracer brightness variance must be active and bounded (< 1 keeps brightness positive)");
+    assert.ok(t.minSizeFloor > 1.0, "Tsar tracer minSizeFloor must raise the point-size floor above the pre-pass 1.0px minimum");
   } else {
     const t = profile.tracerMaterial;
     assert.equal(t.mode, 0, `${presetId}: tracer-occlusion mode must remain off for non-Tsar presets`);
     assert.equal(t.occlusionStrength, 0, `${presetId}: tracerMaterial.occlusionStrength must stay neutral (0)`);
     assert.equal(t.sizeVariance, 0, `${presetId}: tracerMaterial.sizeVariance must stay neutral (0)`);
     assert.equal(t.brightnessVariance, 0, `${presetId}: tracerMaterial.brightnessVariance must stay neutral (0)`);
+    assert.equal(t.minSizeFloor, 0, `${presetId}: tracerMaterial.minSizeFloor must stay neutral (0)`);
   }
 }
 // The volume shader must carry the core uniforms; the tracer display vertex
@@ -339,6 +341,7 @@ for (const gatedTerm of [
   /float occlusion = uTracerMaterialMode > 0\.5\s*\n\s*\? mix\(exp\(-plume \* uTracerMaterialParams\.x\), 1\.0, diagnostic\)\s*\n\s*: 1\.0;/,
   /float brightnessJitter = uTracerMaterialMode > 0\.5/,
   /float sizeJitter = uTracerMaterialMode > 0\.5/,
+  /if \(uTracerMaterialMode > 0\.5\) \{\s*\n\s*baseSize = max\(baseSize, uTracerMaterialParams\.w\);\s*\n\s*\}/,
 ]) {
   assert.match(RESEARCH_FLUID_SHADER_SOURCES.tracerVertex, gatedTerm, `Tracer-material technique not properly gated behind uTracerMaterialMode: ${gatedTerm}`);
 }
@@ -355,7 +358,7 @@ for (const gatedTerm of [
   );
   assert.match(
     engineSourceForGating,
-    /const tracerMaterial = this\.profile\.tracerMaterial\s*\n\s*\|\|\s*\{ mode: 0, occlusionStrength: 0, sizeVariance: 0, brightnessVariance: 0 \};/,
+    /const tracerMaterial = this\.profile\.tracerMaterial\s*\n\s*\|\|\s*\{ mode: 0, occlusionStrength: 0, sizeVariance: 0, brightnessVariance: 0, minSizeFloor: 0 \};/,
     "Default tracerMaterial fallback (used when a profile omits tracerMaterial:) must match the neutral values asserted above",
   );
 }
@@ -660,39 +663,60 @@ assert.doesNotMatch(
   "Shockwave shell bands must stay density-only and not feed the velocity/force pass",
 );
 
-// --- Dense-phase raymarch performance optimization (2026-07) ----------------
-// Skipping the lighting/shading math for near-empty raymarch layers must
-// stay a bounded, unconditional (not Tsar-gated — output-equivalent for
-// every preset) optimization: the alpha threshold gate must wrap only the
-// shading math, while transmittance/shadowColumn keep updating from
-// density/alpha every step regardless, so loop iteration count and
-// early-exit timing are unaffected — verified structurally since this
-// session has no browser profiler to measure the real FPS effect.
-assert.match(
+// --- Dense-phase raymarch performance optimization reverted (2026-07) -------
+// The alpha-threshold shading skip added earlier in this branch was global
+// (not Tsar-gated) and never visually verified — a subsequent in-browser
+// check found a square/rectangular residual-smoke artifact on this branch
+// and flagged the skip as an unmeasured suspect. It has been reverted:
+// shading math must run unconditionally for every raymarch layer again,
+// matching production. This asserts the revert stuck (no reintroduction).
+assert.doesNotMatch(
   RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
-  /if \(alpha > 0\.0006\) \{/,
-  "Dense-phase shading skip must be present and bounded by a small alpha threshold",
+  /if \(alpha > 0\.0006\)/,
+  "Dense-phase shading skip must stay reverted — it was unverified and a suspect in the square-residue defect",
 );
 {
   const volume = RESEARCH_FLUID_SHADER_SOURCES.volumeFragment;
-  const skipStart = volume.indexOf("if (alpha > 0.0006) {");
+  const depthIndex = volume.indexOf("float alpha = 1.0 - exp(-opticalDepth);");
+  const accumulateIndex = volume.indexOf("accumulated += transmittance * alpha * layerColor;");
   const loopEnd = volume.indexOf("if (transmittance < 0.012) break;");
-  assert.ok(skipStart > 0 && loopEnd > skipStart, "Shading skip must precede the per-step early-exit check");
-  const between = volume.slice(skipStart, loopEnd);
-  assert.match(
-    between,
-    /transmittance \*= 1\.0 - alpha;/,
-    "transmittance must still update unconditionally after the shading-skip block, every step",
-  );
-  assert.match(
-    between,
-    /shadowColumn \+= density \* inverseSteps;/,
-    "shadowColumn must still update unconditionally after the shading-skip block, every step",
-  );
-  // Both unconditional updates must sit after the shading block closes, not
-  // inside it, so they run regardless of whether shading was skipped.
-  const closeBrace = between.lastIndexOf("}\n    transmittance *= 1.0 - alpha;");
-  assert.ok(closeBrace >= 0, "transmittance update must sit immediately after the shading-skip block closes");
+  assert.ok(depthIndex > 0 && accumulateIndex > depthIndex && loopEnd > accumulateIndex);
+  const between = volume.slice(depthIndex, loopEnd);
+  assert.doesNotMatch(between, /\{\s*\n\s*\/\/ One midpoint probe/, "Shading math must not be wrapped in a conditional block");
+}
+
+// --- Domain-edge organic envelope (2026-07 Tsar dissipation-artifact fix) --
+// edgeExtinction()'s default path multiplies an independent horizontal
+// falloff by an independent vertical falloff — a rounded-rectangle
+// (Chebyshev) envelope. Invisible while density saturates the interior, but
+// the visible isocontour of a near-uniform low-density residue, which is
+// exactly Tsar's late-dissipation tail once the stem/shockwave passes leave
+// mass spread more evenly for longer. uEdgeMode gates a merged superellipse
+// envelope on for Tsar only; every other preset keeps the original
+// independent-axis product, byte-identical to before this pass.
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /uniform float uEdgeMode;/,
+  "uEdgeMode uniform missing from volumeFragment",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /if \(uEdgeMode > 0\.5\) \{[\s\S]*?ellipseDistance[\s\S]*?\n  \}/,
+  "Tsar-only organic superellipse envelope missing from edgeExtinction()",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /float side = smoothstep\(0\.0, leftWidth, uv\.x\)/,
+  "Original independent-axis rectangle envelope must remain as the default (uEdgeMode 0) path",
+);
+for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
+  assert.ok(profile.edge && typeof profile.edge === "object", `${presetId}: edge config missing`);
+  assert.ok(Number.isFinite(profile.edge.mode), `${presetId}: edge.mode must be finite`);
+  if (presetId === "tsar-bomba-scale-reference") {
+    assert.equal(profile.edge.mode, 1, "Tsar must enable the organic domain-edge envelope");
+  } else {
+    assert.equal(profile.edge.mode, 0, `${presetId}: edge mode must remain off for non-Tsar presets`);
+  }
 }
 
 console.log("Explosion Dynamics Lab fluid contract test: PASS");
@@ -700,4 +724,4 @@ console.log(`  ${tiers.length} bounded tiers × ${EVENT_PRESETS.length} preset p
 console.log("  primitive diversity, profile budgets, palette-driven volume uniforms, fluid evolution, and GPU tracers verified");
 console.log("  non-WebGL runtime fails closed to the existing Canvas renderer");
 console.log("  Tsar shockwave shell-layering and stem taper/breakup gating verified Tsar-only");
-console.log("  dense-phase raymarch shading-skip bounded and structurally deterministic across every preset");
+console.log("  dense-phase raymarch shading skip reverted; domain-edge envelope now organic and Tsar-gated");

@@ -294,7 +294,15 @@ const BASE_PROFILE = Object.freeze({
   // dense smoke buries tracers instead of merely dimming them a little;
   // sizeVariance/brightnessVariance give each tracer a stable per-particle
   // random offset instead of one uniform size and brightness.
-  tracerMaterial: Object.freeze({ mode: 0, occlusionStrength: 0, sizeVariance: 0, brightnessVariance: 0 }),
+  tracerMaterial: Object.freeze({
+    mode: 0, occlusionStrength: 0, sizeVariance: 0, brightnessVariance: 0, minSizeFloor: 0,
+  }),
+  // Domain-edge envelope research control (2026-07 Tsar dissipation-artifact
+  // fix). mode 0 keeps every shipped preset byte-identical to before this
+  // pass (the original independent side/top rectangle envelope in
+  // edgeExtinction()); only the Tsar historical reference opts into the
+  // merged organic superellipse envelope.
+  edge: Object.freeze({ mode: 0 }),
 });
 
 function defineFluidProfile(presetId, profileId, overrides = {}) {
@@ -321,6 +329,7 @@ function defineFluidProfile(presetId, profileId, overrides = {}) {
     dissipation: { ...BASE_PROFILE.dissipation, ...(overrides.dissipation || {}) },
     core: { ...BASE_PROFILE.core, ...(overrides.core || {}) },
     tracerMaterial: { ...BASE_PROFILE.tracerMaterial, ...(overrides.tracerMaterial || {}) },
+    edge: { ...BASE_PROFILE.edge, ...(overrides.edge || {}) },
   });
 }
 
@@ -646,7 +655,25 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       // partially attenuates. sizeVariance/brightnessVariance give each
       // tracer a stable per-particle random offset instead of one uniform
       // size and brightness.
-      tracerMaterial: { mode: 1, occlusionStrength: 2.6, sizeVariance: 0.5, brightnessVariance: 0.45 },
+      // minSizeFloor (2026-07 dissipation-artifact addendum): at the shared
+      // 1.0px baseSize floor, TRACER_FRAGMENT's radial coverage falloff has
+      // no subpixels to work with — a tracer at minimum size is visually
+      // indistinguishable from a solid square pixel regardless of the
+      // falloff math. Raising the floor for Tsar only gives that falloff
+      // room to actually render round.
+      tracerMaterial: {
+        mode: 1, occlusionStrength: 2.6, sizeVariance: 0.5, brightnessVariance: 0.45, minSizeFloor: 1.8,
+      },
+      // 2026-07 dissipation-artifact fix: the shared side/top boundary
+      // envelope (edgeExtinction()) is an independent-per-axis rectangle.
+      // Invisible while the fireball/plume saturate the interior, but once
+      // the broader lateral turbulence from the stem-breakup fix and the
+      // extended shockwave bands leave low, near-uniform residual density
+      // sitting inside that envelope for longer, its own axis-aligned
+      // isocontour becomes the visible silhouette — a faint square/
+      // rectangular cloud during and after late dissipation. mode 1 switches
+      // Tsar only to the merged organic superellipse envelope.
+      edge: { mode: 1 },
     },
   ),
 });
@@ -1890,10 +1917,11 @@ uniform vec3 uTracerColorA;
 uniform vec3 uTracerColorB;
 uniform vec3 uTracerColorC;
 uniform uint uSeed;
-// Tracer-material research controls (2026-07 Tsar core/tracer polish).
+// Tracer-material research controls (2026-07 Tsar core/tracer polish, plus
+// the 2026-07 dissipation-artifact addendum's minSizeFloor).
 // uTracerMaterialMode is 0 for every shipped preset (byte-identical
 // rendering) and 1 only for the Tsar historical reference. uTracerMaterialParams
-// packs (occlusionStrength, sizeVariance, brightnessVariance, spare).
+// packs (occlusionStrength, sizeVariance, brightnessVariance, minSizeFloor).
 uniform float uTracerMaterialMode;
 uniform vec4 uTracerMaterialParams;
 ${SEEDED_HASH}
@@ -1967,6 +1995,15 @@ void main() {
   vTracerColor = vec4(color, alpha);
   gl_Position = vec4(screenUv * 2.0 - 1.0, 0.0, 1.0);
   float baseSize = clamp(min(uResolution.x, uResolution.y) * 0.003, 1.0, 3.2);
+  // Tsar-only: at the shared 1.0px floor above, TRACER_FRAGMENT's radial
+  // coverage falloff has no subpixels to work with, so a tracer at minimum
+  // size reads as a solid square regardless of the falloff math. Raising the
+  // floor gives that falloff room to actually render round. Left at the
+  // original floor (uTracerMaterialParams.w defaults to 0, so max() is a
+  // no-op) for every other preset.
+  if (uTracerMaterialMode > 0.5) {
+    baseSize = max(baseSize, uTracerMaterialParams.w);
+  }
   float typeSize = uTracerType == 4 || uTracerType == 5 ? 0.82 : (uTracerType == 6 ? 0.68 : 1.0);
   // Tsar-only: a stable per-particle size offset, same hash family as the
   // brightness jitter above but a different salt so the two vary independently.
@@ -2030,6 +2067,14 @@ uniform vec4 uMaterialParams;
 // 0.0, 0.0) reduce every formula below to its original, pre-pass value.
 uniform float uCoreMode;
 uniform vec4 uCoreParams;
+// Domain-edge envelope research control (2026-07 Tsar dissipation-artifact
+// fix). uEdgeMode is 0 for every shipped preset (byte-identical rendering,
+// the original independent side/top smoothstep rectangle below) and 1 only
+// for the Tsar historical reference, which instead merges side/top into one
+// warped superellipse distance so low-density late-timeline residue erodes
+// into an irregular blob instead of tracing the rectangular simulation
+// domain. See edgeExtinction() below.
+uniform float uEdgeMode;
 uniform vec3 uPaletteBackground;
 uniform vec3 uPaletteEmber;
 uniform vec3 uPaletteFlame;
@@ -2062,19 +2107,49 @@ vec3 toneMap(vec3 color) {
   return mix(aces, reinhard, clamp(uVolumeProfile2.y, 0.0, 1.0));
 }
 
-// Organic extinction toward the simulation-domain boundary. Wide, nonlinear,
-// seeded-asymmetric side and top zones with low-frequency wobble dissolve
-// density, emission, scattering, and bloom well before the computational
-// edge, so no rectangular or capsule silhouette can ever appear. The ground
-// edge keeps a deliberately narrow band to preserve surface contact.
+// Extinction toward the simulation-domain boundary. The ground edge keeps a
+// deliberately narrow band to preserve surface contact on every preset.
+//
+// The default (uEdgeMode 0) path below multiplies an independent per-axis
+// horizontal falloff by an independent per-axis vertical falloff. That
+// product is mathematically a rounded rectangle (a Chebyshev/max-metric
+// envelope) despite the smoothing at each edge — at high density the
+// rectangle's interior plateau is fully saturated and invisible, but at low,
+// near-uniform residual density (Tsar's late dissipation tail) the
+// envelope's own axis-aligned isocontour becomes the visible silhouette,
+// reading as a faint square/rectangular cloud. Left unfixed here (rather
+// than gated) it is the only side/top boundary term every other preset also
+// uses, and none of them have been audited against this specific low-density
+// failure mode, so it stays byte-identical there.
 float edgeExtinction(vec2 uv, float wobble, float asymmetry) {
+  float ground = smoothstep(0.0, 0.04, uv.y);
+  if (uEdgeMode > 0.5) {
+    // Tsar-only organic envelope: side and top falloff are merged into one
+    // warped superellipse distance (rather than multiplied as independent
+    // axes), so the isocontour is a continuous irregular curve, never a
+    // straight vertical or flat horizontal edge. wobble (a spatially-varying,
+    // slowly time-animated curl-detail sample) perturbs the distance itself,
+    // not just each side's width, so the boundary erodes unevenly rather
+    // than reading as a clean oval.
+    float centerX = 0.5 + asymmetry * 1.6;
+    float leftRadius = clamp(0.42 + wobble * 0.05, 0.3, 0.48);
+    float rightRadius = clamp(0.42 - wobble * 0.04, 0.3, 0.48);
+    float topRadius = clamp(0.46 + wobble * 0.06, 0.32, 0.5);
+    float dx = uv.x - centerX;
+    float sideRadius = dx < 0.0 ? leftRadius : rightRadius;
+    vec2 normalized = vec2(dx / sideRadius, (1.0 - uv.y) / topRadius);
+    float ellipseDistance = pow(abs(normalized.x), 2.6) + pow(abs(normalized.y), 2.6)
+      + wobble * 0.22;
+    float envelope = 1.0 - smoothstep(0.55, 1.0, ellipseDistance);
+    float mask = envelope * ground;
+    return mask * mask * (3.0 - 2.0 * mask);
+  }
   float leftWidth = clamp(0.2 + asymmetry + wobble * 0.06, 0.09, 0.34);
   float rightWidth = clamp(0.2 - asymmetry - wobble * 0.05, 0.09, 0.34);
   float topWidth = clamp(0.26 + wobble * 0.07, 0.14, 0.38);
   float side = smoothstep(0.0, leftWidth, uv.x)
     * smoothstep(0.0, rightWidth, 1.0 - uv.x);
   float top = smoothstep(0.0, topWidth, 1.0 - uv.y);
-  float ground = smoothstep(0.0, 0.04, uv.y);
   float mask = side * top * ground;
   return mask * mask * (3.0 - 2.0 * mask);
 }
@@ -2295,22 +2370,6 @@ void main() {
     float opticalDepth = density * inverseSteps * 3.2 * uVolumeProfile0.y;
     float alpha = 1.0 - exp(-opticalDepth);
 
-    // Dense-phase performance: a non-convex mushroom silhouette leaves many
-    // ray layers inside the bounding domain but essentially empty (gaps
-    // between lobes, thin edges). Those layers' contribution to accumulated
-    // color is transmittance*alpha*layerColor — already bounded to a
-    // negligible amount by alpha alone regardless of what layerColor would
-    // have been, so the two extra light/sky occlusion samples and the
-    // shading math below (self-shadow, sky light, core highlight, scatter)
-    // are skipped for them. transmittance and shadowColumn still update from
-    // density/alpha unconditionally below, so the loop's iteration count,
-    // early-exit timing, and accumulated optical thickness are byte-for-byte
-    // unchanged — only per-step shading cost for near-empty layers drops.
-    // 0.0006 bounds the skipped color's worst-case contribution to a
-    // fraction of a linear-light unit, well under 8-bit/tone-mapped
-    // visibility, so this is deterministic and output-preserving for every
-    // preset and export mode, not just Tsar.
-    if (alpha > 0.0006) {
     // One midpoint probe approximates extinction along the fire-to-smoke light
     // path. Combined with accumulated view-ray density, this gives inexpensive
     // internal self-shadowing and lets incandescent material illuminate smoke.
@@ -2384,7 +2443,6 @@ void main() {
     vec3 layerColor = smokeColor * smoke + emission + fireScatter
       + mix(uPaletteSmokeLight, uPaletteCore, 0.18) * edgeScatter;
     accumulated += transmittance * alpha * layerColor;
-    }
     transmittance *= 1.0 - alpha;
     shadowColumn += density * inverseSteps;
     if (transmittance < 0.012) break;
@@ -3632,6 +3690,8 @@ export class ResearchFluidEngine {
       finite(core.structureBlend, 0),
       finite(core.bloomGateScale, 0),
     );
+    const edge = this.profile.edge || { mode: 0 };
+    this._uniform1f(program, 'uEdgeMode', edge.mode > 0 ? 1 : 0);
   }
 
   _bindPaletteUniforms(program) {
@@ -3830,7 +3890,7 @@ export class ResearchFluidEngine {
     );
     this._uniform1ui(program, 'uSeed', this.settings.seed);
     const tracerMaterial = this.profile.tracerMaterial
-      || { mode: 0, occlusionStrength: 0, sizeVariance: 0, brightnessVariance: 0 };
+      || { mode: 0, occlusionStrength: 0, sizeVariance: 0, brightnessVariance: 0, minSizeFloor: 0 };
     this._uniform1f(program, 'uTracerMaterialMode', tracerMaterial.mode > 0 ? 1 : 0);
     this._uniform4f(
       program,
@@ -3838,7 +3898,7 @@ export class ResearchFluidEngine {
       finite(tracerMaterial.occlusionStrength, 0),
       finite(tracerMaterial.sizeVariance, 0),
       finite(tracerMaterial.brightnessVariance, 0),
-      0,
+      finite(tracerMaterial.minSizeFloor, 0),
     );
     gl.enable(gl.BLEND);
     gl.blendEquation(gl.FUNC_ADD);
