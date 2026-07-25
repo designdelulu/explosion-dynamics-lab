@@ -2295,6 +2295,22 @@ void main() {
     float opticalDepth = density * inverseSteps * 3.2 * uVolumeProfile0.y;
     float alpha = 1.0 - exp(-opticalDepth);
 
+    // Dense-phase performance: a non-convex mushroom silhouette leaves many
+    // ray layers inside the bounding domain but essentially empty (gaps
+    // between lobes, thin edges). Those layers' contribution to accumulated
+    // color is transmittance*alpha*layerColor — already bounded to a
+    // negligible amount by alpha alone regardless of what layerColor would
+    // have been, so the two extra light/sky occlusion samples and the
+    // shading math below (self-shadow, sky light, core highlight, scatter)
+    // are skipped for them. transmittance and shadowColumn still update from
+    // density/alpha unconditionally below, so the loop's iteration count,
+    // early-exit timing, and accumulated optical thickness are byte-for-byte
+    // unchanged — only per-step shading cost for near-empty layers drops.
+    // 0.0006 bounds the skipped color's worst-case contribution to a
+    // fraction of a linear-light unit, well under 8-bit/tone-mapped
+    // visibility, so this is deterministic and output-preserving for every
+    // preset and export mode, not just Tsar.
+    if (alpha > 0.0006) {
     // One midpoint probe approximates extinction along the fire-to-smoke light
     // path. Combined with accumulated view-ray density, this gives inexpensive
     // internal self-shadowing and lets incandescent material illuminate smoke.
@@ -2368,6 +2384,7 @@ void main() {
     vec3 layerColor = smokeColor * smoke + emission + fireScatter
       + mix(uPaletteSmokeLight, uPaletteCore, 0.18) * edgeScatter;
     accumulated += transmittance * alpha * layerColor;
+    }
     transmittance *= 1.0 - alpha;
     shadowColumn += density * inverseSteps;
     if (transmittance < 0.012) break;
