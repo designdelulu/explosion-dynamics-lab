@@ -254,6 +254,23 @@ const BASE_PROFILE = Object.freeze({
     buoyancyFalloff: 0,
     motionDamp: 0,
   }),
+  // Early-core research controls (2026-07 Tsar core/tracer polish). mode 0
+  // keeps every shipped preset byte-identical to before this pass; only the
+  // Tsar historical reference opts in. highlightThreshold/highlightSharpness
+  // reproduce the original white-hot highlight term exactly at their default
+  // values (1.5, 2.0); structureBlend folds self-shadow and turbulence detail
+  // into the highlight so it reads as irregular thermal pockets instead of a
+  // flat plateau; bloomGateScale suppresses bloom specifically in low-gradient
+  // (flat) regions of the temperature field.
+  core: Object.freeze({ mode: 0, highlightThreshold: 1.5, highlightSharpness: 2.0, structureBlend: 0, bloomGateScale: 0 }),
+  // Tracer-material research controls (2026-07 Tsar core/tracer polish). mode
+  // 0 keeps every shipped preset byte-identical to before this pass; only the
+  // Tsar historical reference opts in. occlusionStrength adds a Beer-Lambert
+  // falloff on top of the existing density-weighted tracer visibility so
+  // dense smoke buries tracers instead of merely dimming them a little;
+  // sizeVariance/brightnessVariance give each tracer a stable per-particle
+  // random offset instead of one uniform size and brightness.
+  tracerMaterial: Object.freeze({ mode: 0, occlusionStrength: 0, sizeVariance: 0, brightnessVariance: 0 }),
 });
 
 function defineFluidProfile(presetId, profileId, overrides = {}) {
@@ -271,6 +288,8 @@ function defineFluidProfile(presetId, profileId, overrides = {}) {
     plume: { ...BASE_PROFILE.plume, ...(overrides.plume || {}) },
     material: { ...BASE_PROFILE.material, ...(overrides.material || {}) },
     dissipation: { ...BASE_PROFILE.dissipation, ...(overrides.dissipation || {}) },
+    core: { ...BASE_PROFILE.core, ...(overrides.core || {}) },
+    tracerMaterial: { ...BASE_PROFILE.tracerMaterial, ...(overrides.tracerMaterial || {}) },
   });
 }
 
@@ -508,6 +527,17 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       // billowing, and warmCoolContrast widens the lit/shadowed range for
       // readable internal depth.
       material: { mode: 1, sootAbsorption: 1.6, dustAbsorption: 0.35, detailBoost: 1.4, warmCoolContrast: 0.85 },
+      // 2026-07 core/tracer polish: t5-t10 was reading as a flat white
+      // capsule because the white-hot highlight term saturated to its
+      // maximum (pow(...)=1.0) across most of the amplified Tsar core
+      // temperature range. Raising the threshold and sharpness narrows full
+      // saturation to genuinely the hottest voxels; structureBlend folds in
+      // self-shadow and turbulence detail so the highlight breaks into
+      // irregular thermal pockets instead of one uniform plateau;
+      // bloomGateScale suppresses bloom specifically where the local
+      // temperature gradient is flat (the plateau itself) while leaving
+      // bloom around real edges untouched.
+      core: { mode: 1, highlightThreshold: 2.35, highlightSharpness: 3.2, structureBlend: 0.8, bloomGateScale: 11 },
       // 2026-07 late-dissipation pass: the approved broad plume/persistence
       // fix kept the cloud fully intact through mature cap formation (correct)
       // but never relaxed afterward, so the field never lost mass. The mature
@@ -544,6 +574,17 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
         buoyancyFalloff: 0.5,
         motionDamp: 0.85,
       },
+      // 2026-07 core/tracer polish: tracers rendered above smoke regardless
+      // of how buried they were and shared one fixed size/brightness, which
+      // read as a layer of repetitive dots sitting on top of the volume
+      // instead of embedded within it. occlusionStrength adds a
+      // Beer-Lambert-style falloff (exp(-localDensity * occlusionStrength))
+      // on top of the existing density-weighted visibility so dense smoke
+      // suppresses tracers, thin smoke lets them through, and medium density
+      // partially attenuates. sizeVariance/brightnessVariance give each
+      // tracer a stable per-particle random offset instead of one uniform
+      // size and brightness.
+      tracerMaterial: { mode: 1, occlusionStrength: 2.6, sizeVariance: 0.5, brightnessVariance: 0.45 },
     },
   ),
 });
@@ -1693,6 +1734,21 @@ uniform vec4 uLayerVisibility;
 uniform vec3 uTracerColorA;
 uniform vec3 uTracerColorB;
 uniform vec3 uTracerColorC;
+uniform uint uSeed;
+// Tracer-material research controls (2026-07 Tsar core/tracer polish).
+// uTracerMaterialMode is 0 for every shipped preset (byte-identical
+// rendering) and 1 only for the Tsar historical reference. uTracerMaterialParams
+// packs (occlusionStrength, sizeVariance, brightnessVariance, spare).
+uniform float uTracerMaterialMode;
+uniform vec4 uTracerMaterialParams;
+${SEEDED_HASH}
+
+float tracerDisplayRandom(uint index, uint generation, uint salt) {
+  uint value = index * 0x9e3779b9u;
+  value ^= generation * 0x85ebca6bu;
+  value ^= uSeed + salt * 0xc2b2ae35u;
+  return float(mixBits(value)) / 4294967295.0;
+}
 
 void main() {
   vec4 state = texelFetch(uTracers, ivec2(gl_VertexID, 0), 0);
@@ -1723,7 +1779,29 @@ void main() {
   // view only — diagnostics keep full visibility for verification).
   float edgeFade = smoothstep(0.0, 0.12, state.x) * smoothstep(0.0, 0.12, 1.0 - state.x)
     * smoothstep(0.0, 0.16, 1.0 - state.y) * smoothstep(0.0, 0.03, state.y);
-  float alpha = mix(plume * 0.34, 0.88, diagnostic) * ageFade * mix(edgeFade, 1.0, diagnostic);
+  // Tsar-only (uTracerMaterialMode): dense smoke should bury a tracer, not
+  // just dim it a little — occlusion adds a Beer-Lambert-style falloff on
+  // top of the existing density-weighted visibility above (exp(-density *
+  // occlusionStrength)), so thin smoke still reveals tracers, medium density
+  // partially attenuates them, and dense smoke suppresses them almost
+  // entirely, reusing the same local density sample the volume renderer
+  // already computes rather than a second expensive pass. Left at 1.0 (and
+  // skipped in diagnostic view, matching edgeFade above) for every other
+  // preset.
+  uint tracerIndex = uint(gl_VertexID);
+  uint tracerGeneration = uint(max(0.0, floor(state.w + 0.5)));
+  float occlusion = uTracerMaterialMode > 0.5
+    ? mix(exp(-plume * uTracerMaterialParams.x), 1.0, diagnostic)
+    : 1.0;
+  // Tsar-only: a stable per-particle brightness offset (hashed from the
+  // tracer's index/generation, so it stays consistent frame to frame instead
+  // of flickering) breaks up the repetitive-dot look.
+  float brightnessJitter = uTracerMaterialMode > 0.5
+    ? mix(1.0 - uTracerMaterialParams.z, 1.0 + uTracerMaterialParams.z,
+        tracerDisplayRandom(tracerIndex, tracerGeneration, 53u))
+    : 1.0;
+  float alpha = mix(plume * 0.34, 0.88, diagnostic) * ageFade
+    * mix(edgeFade, 1.0, diagnostic) * occlusion * brightnessJitter;
   vec3 warm = mix(uTracerColorA, uTracerColorB,
     clamp(scalar.r + scalar.b, 0.0, 1.0));
   float particulate = clamp(scalar.a * 0.75 + scalar.g * 0.22, 0.0, 1.0);
@@ -1735,7 +1813,13 @@ void main() {
   gl_Position = vec4(screenUv * 2.0 - 1.0, 0.0, 1.0);
   float baseSize = clamp(min(uResolution.x, uResolution.y) * 0.003, 1.0, 3.2);
   float typeSize = uTracerType == 4 || uTracerType == 5 ? 0.82 : (uTracerType == 6 ? 0.68 : 1.0);
-  gl_PointSize = baseSize * typeSize * mix(0.72, 1.18, diagnostic) * mix(1.0, 0.86, uReducedMotion);
+  // Tsar-only: a stable per-particle size offset, same hash family as the
+  // brightness jitter above but a different salt so the two vary independently.
+  float sizeJitter = uTracerMaterialMode > 0.5
+    ? mix(1.0 - uTracerMaterialParams.y, 1.0 + uTracerMaterialParams.y,
+        tracerDisplayRandom(tracerIndex, tracerGeneration, 41u))
+    : 1.0;
+  gl_PointSize = baseSize * typeSize * sizeJitter * mix(0.72, 1.18, diagnostic) * mix(1.0, 0.86, uReducedMotion);
 }`;
 
 const TRACER_FRAGMENT = `#version 300 es
@@ -1784,6 +1868,13 @@ uniform vec4 uVolumeProfile2;
 // dustAbsorption, detailBoost, warmCoolContrast).
 uniform float uMaterialMode;
 uniform vec4 uMaterialParams;
+// Early-core research controls (2026-07 Tsar core/tracer polish). uCoreMode
+// is 0 for every shipped preset (byte-identical rendering) and 1 only for
+// the Tsar historical reference. uCoreParams packs (highlightThreshold,
+// highlightSharpness, structureBlend, bloomGateScale). Defaults (1.5, 2.0,
+// 0.0, 0.0) reduce every formula below to its original, pre-pass value.
+uniform float uCoreMode;
+uniform vec4 uCoreParams;
 uniform vec3 uPaletteBackground;
 uniform vec3 uPaletteEmber;
 uniform vec3 uPaletteFlame;
@@ -2095,9 +2186,24 @@ void main() {
     // Overexposed white-hot core where normalized temperature runs highest —
     // the early fireball keeps a saturated center inside a structured
     // orange-to-ember gradient instead of flattening into one white disk.
+    // Tsar-only (uCoreMode): the default threshold/sharpness (1.5, 2.0)
+    // saturate to a flat pow(...)=1.0 plateau across most of the Tsar core's
+    // amplified temperature range, which is the flat-white-blob defect this
+    // pass fixes. Raising the threshold and sharpness narrows the fully
+    // saturated zone to genuinely the hottest voxels; structureBlend folds in
+    // self-shadow and turbulence detail so occluded/turbulent pockets darken
+    // instead of the whole core reading as one uniform highlight. When
+    // uCoreMode is 0, coreThreshold/coreSharpness/coreStructure reduce to
+    // (1.5, 2.0, 1.0) — identical to the pre-pass formula.
+    float coreThreshold = uCoreMode > 0.5 ? uCoreParams.x : 1.5;
+    float coreSharpness = uCoreMode > 0.5 ? uCoreParams.y : 2.0;
+    float coreStructure = uCoreMode > 0.5
+      ? mix(1.0, clamp(selfShadow * (0.6 + 0.4 * detailModulation), 0.0, 1.3), uCoreParams.z)
+      : 1.0;
     emission += uPaletteCore
-      * pow(clamp((temperature - 1.5) * 0.85, 0.0, 1.0), 2.0)
-      * (0.4 + incandescent * 0.45);
+      * pow(clamp((temperature - coreThreshold) * 0.85, 0.0, 1.0), coreSharpness)
+      * (0.4 + incandescent * 0.45)
+      * coreStructure;
     // Every radiance source is masked by the same extinction as density —
     // saturated emission can never outline the domain where alpha has faded.
     emission *= layerFade;
@@ -2115,6 +2221,8 @@ void main() {
   // Restrained neighboring emission produces a cheap bloom without making the
   // fluid simulation depend on output resolution.
   vec3 bloom = vec3(0.0);
+  float bloomHeatSum = 0.0;
+  float bloomHeatSumSq = 0.0;
   const vec2 directions[8] = vec2[8](
     vec2(1.0, 0.0), vec2(-1.0, 0.0), vec2(0.0, 1.0), vec2(0.0, -1.0),
     vec2(0.707, 0.707), vec2(-0.707, 0.707), vec2(0.707, -0.707), vec2(-0.707, -0.707)
@@ -2124,10 +2232,20 @@ void main() {
     float neighborHeat = neighbor.r * uLayerVisibility.w
       + neighbor.b * uLayerVisibility.x;
     bloom += heatRamp(neighborHeat) * neighbor.b * uLayerVisibility.x;
+    bloomHeatSum += neighborHeat;
+    bloomHeatSumSq += neighborHeat * neighborHeat;
   }
+  // Tsar-only (uCoreMode): bloom is meant to spread light from real edges,
+  // not thicken an already-flat, uniformly hot plateau. bloomGate measures
+  // the local variance across the 8 neighbor samples above and suppresses
+  // bloom where that variance is low (flat regions), while leaving it intact
+  // around genuine gradients. When uCoreMode is 0, bloomGate is 1.0 and the
+  // bloom contribution is unchanged from the pre-pass formula.
+  float bloomVariance = max(0.0, bloomHeatSumSq / 8.0 - (bloomHeatSum / 8.0) * (bloomHeatSum / 8.0));
+  float bloomGate = uCoreMode > 0.5 ? clamp(sqrt(bloomVariance) * uCoreParams.w, 0.0, 1.0) : 1.0;
   // Bloom is extracted after the same boundary extinction so it can never
   // spread clipped edge pixels back into view.
-  accumulated += bloom * 0.018 * uPhase.x * uVolumeProfile0.w
+  accumulated += bloom * 0.018 * uPhase.x * uVolumeProfile0.w * bloomGate
     * edgeExtinction(distortedUv, boundaryWobble, sideAsymmetry);
   accumulated += uPaletteBackground * uVolumeProfile2.z * (1.0 - transmittance) * 0.12;
 
@@ -3300,6 +3418,17 @@ export class ResearchFluidEngine {
       finite(material.detailBoost, 0),
       finite(material.warmCoolContrast, 0),
     );
+    const core = this.profile.core
+      || { mode: 0, highlightThreshold: 1.5, highlightSharpness: 2.0, structureBlend: 0, bloomGateScale: 0 };
+    this._uniform1f(program, 'uCoreMode', core.mode > 0 ? 1 : 0);
+    this._uniform4f(
+      program,
+      'uCoreParams',
+      finite(core.highlightThreshold, 1.5),
+      finite(core.highlightSharpness, 2.0),
+      finite(core.structureBlend, 0),
+      finite(core.bloomGateScale, 0),
+    );
   }
 
   _bindPaletteUniforms(program) {
@@ -3495,6 +3624,18 @@ export class ResearchFluidEngine {
       ...(tracerType === TRACER_TYPE_IDS['plasma-filament']
         ? this.settings.palette.plasma
         : this.settings.palette.dust),
+    );
+    this._uniform1ui(program, 'uSeed', this.settings.seed);
+    const tracerMaterial = this.profile.tracerMaterial
+      || { mode: 0, occlusionStrength: 0, sizeVariance: 0, brightnessVariance: 0 };
+    this._uniform1f(program, 'uTracerMaterialMode', tracerMaterial.mode > 0 ? 1 : 0);
+    this._uniform4f(
+      program,
+      'uTracerMaterialParams',
+      finite(tracerMaterial.occlusionStrength, 0),
+      finite(tracerMaterial.sizeVariance, 0),
+      finite(tracerMaterial.brightnessVariance, 0),
+      0,
     );
     gl.enable(gl.BLEND);
     gl.blendEquation(gl.FUNC_ADD);

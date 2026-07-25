@@ -251,6 +251,124 @@ the prior expression, so non-Tsar rendering is byte-identical.
   well-scoped, low-risk follow-up rather than folded in as a fourth
   technique.
 
+## Tsar-scale core/tracer polish (2026-07)
+
+A narrowly scoped visual-polish pass targeting two specific defects visible
+in the approved broad-plume/smoke-material/late-dissipation build: the
+t5–t10 early core reading as a flat white capsule instead of a structured
+fireball, and tracers ignoring occlusion by intervening smoke. Plume
+structure, dissipation timing, camera behavior, terrain, and every non-Tsar
+preset are unchanged.
+
+### Read-only audit of the active path
+
+Captured the approved build at t2.5/5/7/10/15/30/50/54 (Tsar preset, seed
+1842, three viewports) before changing anything. t2.5–t10 rendered as a
+uniform, hard-edged white/light-grey mass with no visible internal shading —
+not merely bright, genuinely flat, with a sharp transition to background
+rather than a soft volumetric falloff.
+
+Traced `VOLUME_FRAGMENT`'s per-layer emission term (`scripts/fluid-engine.js`):
+
+- The "overexposed white-hot core" bonus term
+  (`emission += uPaletteCore * pow(clamp((temperature - 1.5) * 0.85, 0, 1), 2.0)
+  * (0.4 + incandescent * 0.45)`) is **not** gated by `uMaterialMode` or any
+  other flag — it runs identically for every preset. Its saturation point
+  (`pow(...) == 1.0`) is reached at `temperature >= 2.68`. The developer
+  diagnostics panel reports Tsar's measured max temperature at t7 as `2.9176`
+  — comfortably past that point across a wide spatial area, not a narrow
+  peak — so the term outputs flat, maximum `uPaletteCore` over most of the
+  visible core instead of a graded highlight. This is the root cause of the
+  flat-white-blob appearance: excessive incandescence combined with a
+  highlight roll-off that saturates far too early for Tsar's amplified
+  source (`heat: 1.4`), not a missing mechanism.
+- The same term ignores `selfShadow` and `detailModulation` entirely — both
+  are already computed per layer and used elsewhere in the same function —
+  so even self-occluded, turbulent interior voxels receive the identical
+  full-strength highlight as exposed, laminar ones. This removes the
+  internal depth/irregularity a real fireball would show.
+- Bloom (`accumulated += bloom * 0.018 * ...`) samples 8 neighbor texels and
+  adds `heatRamp(neighborHeat) * neighbor.b` unconditionally. Over a broad,
+  already-flat hot region every neighbor sample is roughly equal, so bloom
+  adds a second, spatially uniform layer of brightening on top of an already
+  uniform highlight — reinforcing the plateau instead of softening real
+  edges.
+- Tone mapping, exponential opacity, and self-shadowing itself were already
+  correct (confirmed by the smoke-material audit above); the defect is
+  specifically in the two unguarded terms above, not the broader pipeline.
+
+Tracer audit (`TRACER_VERTEX`, `scripts/fluid-engine.js`) confirmed exactly
+what the smoke-material pass's deferred follow-up (above) predicted: alpha
+is `plume * 0.34` — local density at the tracer's own position, with no
+attenuation from smoke between the tracer and the camera. Cropped, magnified
+comparisons at t10 showed tracers rendering at identical, undimmed
+brightness whether they sat in thin edge smoke or deep in the densest part
+of the core. `gl_PointSize` is a fixed `baseSize * typeSize` with no
+per-particle randomization, so every tracer in a given type is pixel-for-
+pixel identical in size and brightness — the "repetitive dots" complaint.
+
+### Techniques selected (Tsar-gated via new `core` and `tracerMaterial` profile blocks)
+
+Mirrors the existing `plume`/`material`/`dissipation` pattern exactly:
+`BASE_PROFILE.core = { mode: 0, highlightThreshold: 1.5, highlightSharpness:
+2.0, structureBlend: 0, bloomGateScale: 0 }` and `BASE_PROFILE.tracerMaterial
+= { mode: 0, occlusionStrength: 0, sizeVariance: 0, brightnessVariance: 0 }`
+for every preset; only Tsar sets `mode: 1` with tuned values. `uCoreMode`/
+`uTracerMaterialMode` gate all new shader terms; at their default values
+every gated expression collapses algebraically to the prior formula, so
+non-Tsar rendering is byte-identical (asserted directly in
+`tools/fluid-contract-test.mjs`).
+
+1. **Highlight threshold/sharpness + self-shadow/turbulence structure
+   blend.** Raises the white-core saturation point from `temperature >= 2.68`
+   to `>= 3.58` (Tsar: `highlightThreshold: 2.35`, `highlightSharpness: 3.2`)
+   so full saturation is reached only by genuinely the hottest voxels instead
+   of most of the visible core, and multiplies the term by
+   `selfShadow * (0.6 + 0.4 * detailModulation)` (Tsar: `structureBlend:
+   0.8`) so occluded and turbulent regions darken relative to exposed,
+   laminar ones — breaking the flat plateau into irregular thermal pockets
+   using data the shader already computes, no new texture samples. Confirmed
+   visually: t5/t7/t10 now show a shaded dome with turbulent ring structure
+   and dark interior pockets instead of a flat capsule.
+2. **Bloom gradient gate.** Computes the variance of the same 8 neighbor
+   heat samples bloom already reads and scales the bloom contribution by
+   `sqrt(variance) * bloomGateScale` (Tsar: `11`), so bloom is suppressed in
+   flat (low-gradient) regions — exactly the plateau this pass fixes — while
+   staying at full strength around genuine edges. No new samples; reuses the
+   existing 8-tap loop.
+3. **Beer-Lambert tracer occlusion.** Adds `exp(-plume * occlusionStrength)`
+   (Tsar: `2.6`) as a multiplicative attenuation on top of the existing
+   density-weighted visibility, reusing the same local density sample the
+   volume renderer's own opacity curve is built from rather than a second
+   pass. This is the follow-up the smoke-material audit explicitly deferred.
+   Skipped in diagnostic tracer view (`uDiagnostic == 8`), matching the
+   existing `edgeFade` bypass for verification.
+4. **Per-tracer size/brightness jitter.** A stable hash of each tracer's
+   index and generation (same hash family already used for respawn
+   placement in `TRACER_ADVECT_FRAGMENT`, duplicated locally in
+   `TRACER_VERTEX` since the two are separate shader programs) drives a
+   `±sizeVariance`/`±brightnessVariance` (Tsar: `0.5`/`0.45`) offset per
+   particle, so tracers of the same type are no longer pixel-identical.
+
+### Not selected this pass
+
+- Palette edits (`uPaletteHot` collapsing to nearly `uPaletteCore` for the
+  active "Natural Fire" palette, narrowing the orange mid-tone band) — the
+  palette is shared across every preset and palette selection is a
+  user-facing control independent of the preset; a Tsar-only override would
+  need its own gating mechanism this pass doesn't introduce. The threshold/
+  structure changes above already resolve the flat-plateau defect (the
+  actual acceptance criterion) without touching shared palette data.
+- Reworking the temperature/incandescent field's cooling rate. The measured
+  max temperature (`2.9176`) is high but not literally unbounded, and the
+  highlight-term fix above resolves the visible symptom without touching
+  simulation-affecting scalars (`uProfilePhysics`, `uProfileDecay`), which
+  the task scope explicitly excludes (no plume/dissipation-timing changes).
+- Tracer count, generation logic, or position distribution — unchanged;
+  only display-time occlusion/size/brightness and the existing
+  dissipation-aware lifetime (already correct per t54 evidence) were
+  touched, per the "do not increase global tracer budgets" constraint.
+
 ## Browser numerical design
 
 The shared event-family simulation uses deterministic fixed steps and a WebGL2 field pipeline. Source injection is selected from bounded normalized primitives—radial and directional impulses, rings, ground sheets, vertical jets, offset kernels, pulsed columns, ejecta curtains, trails, sustained visual-combustion regions, and turbulent clusters—without introducing materials or engineering inputs:
