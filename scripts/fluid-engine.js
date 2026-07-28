@@ -495,9 +495,22 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
         mode: 1, sootAbsorption: 1.35, dustAbsorption: 0.6,
         detailBoost: 0.55, warmCoolContrast: 0.52,
       },
+      shockwave: {
+        mode: 1,
+        ringB: { radiusOffset: -0.22, widthScale: 1.15, strength: 0.24, phaseOffset: 0.01 },
+        ringC: { radiusOffset: 0.14, widthScale: 0.82, strength: 0.18, phaseOffset: 0.035 },
+        ringD: { radiusOffset: 0, widthScale: 1, strength: 0, phaseOffset: 0 },
+        irregularity: 0.035,
+        fadeStart: 0.28,
+        fadeSpan: 0.12,
+      },
       core: {
         mode: 1, highlightThreshold: 2.02, highlightSharpness: 2.7,
         structureBlend: 0.58, bloomGateScale: 7.5,
+      },
+      tracerMaterial: {
+        mode: 1, occlusionStrength: 1.7, sizeVariance: 0.35,
+        brightnessVariance: 0.32, minSizeFloor: 1.45,
       },
     },
   ),
@@ -1675,8 +1688,9 @@ void main() {
   if (uProfileKind == 9) {
     // Preserve the established Research Model scalar branch, with its neutral
     // values reducing exactly to the original injection. Profile scalar
-    // weights provide low-yield-only heat/material separation without
-    // entering generic shader logic by preset ID.
+    // weights provide low-yield-only heat/material separation, while the
+    // existing shockwave block adds subordinate bands without entering
+    // generic shader logic by preset ID.
     float lateSmoke = smoothstep(0.05, 0.13, uNormalizedTime)
       * (1.0 - smoothstep(0.5, 0.92, uNormalizedTime));
     temperature += source * core * (flashEnvelope * 2.2 + fireEnvelope * 0.42)
@@ -1684,6 +1698,14 @@ void main() {
     incandescent += source * core * (flashEnvelope * 1.5 + fireEnvelope * 0.7)
       * uSourceScalar.z * uDt * 3.4;
     smoke += source * core * lateSmoke * uSourceScalar.y * uDt * 0.8;
+
+    // The preserved branch predates profileShockwaveLayers(). Calling the
+    // shared helper here makes its two low-yield bands active behind the same
+    // uShockwaveMode gate used by Tsar; mode 0 still returns exact zero.
+    float secondaryRings = profileShockwaveLayers(vUv);
+    temperature += source * secondaryRings * uDt * 0.34;
+    incandescent += source * secondaryRings * uDt * 0.12;
+    smoke += source * secondaryRings * uDt * 0.035;
 
     // The dust shell is a generic visual interaction cue. Airburst altitude keeps
     // it deliberately subordinate to the rising thermal/smoke volume.
