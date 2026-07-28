@@ -706,8 +706,23 @@ assert.match(
 );
 assert.match(
   RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
-  /float side = smoothstep\(0\.0, leftWidth, uv\.x\)/,
+  /float side = smoothstep\(0\.0, profile\.x, uv\.x\)\s*\n\s*\* smoothstep\(0\.0, profile\.y, 1\.0 - uv\.x\);/,
   "Original independent-axis rectangle envelope must remain as the default (uEdgeMode 0) path",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /vec4 edgeProfile = edgeExtinctionProfile\(boundaryWobble, sideAsymmetry\);[\s\S]*?for \(int index = 0;/,
+  "Invariant edge center/radii must be prepared once before the volume ray loop",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /#ifdef BALANCED_EDGE_FAST_POWER[\s\S]*?approximatePow2p6[\s\S]*?#else[\s\S]*?pow\(abs\(normalized\.x\), 2\.6\)[\s\S]*?#endif/,
+  "Balanced edge-power approximation and exact High/Mobile fallback must remain compile-time exclusive",
+);
+assert.match(
+  engineSource,
+  /this\.tier\.id === 'balanced' \? BALANCED_VOLUME_FRAGMENT : VOLUME_FRAGMENT/,
+  "Only the Balanced tier may compile the fitted edge-power shader variant",
 );
 for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
   assert.ok(profile.edge && typeof profile.edge === "object", `${presetId}: edge config missing`);

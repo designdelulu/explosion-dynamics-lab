@@ -2121,7 +2121,35 @@ vec3 toneMap(vec3 color) {
 // than gated) it is the only side/top boundary term every other preset also
 // uses, and none of them have been audited against this specific low-density
 // failure mode, so it stays byte-identical there.
-float edgeExtinction(vec2 uv, float wobble, float asymmetry) {
+// Center/radius terms depend on the pixel's one boundary-wobble sample, not
+// ray depth, so prepare them once before the volume loop.
+vec4 edgeExtinctionProfile(float wobble, float asymmetry) {
+  if (uEdgeMode > 0.5) {
+    return vec4(
+      0.5 + asymmetry * 1.6,
+      clamp(0.42 + wobble * 0.05, 0.3, 0.48),
+      clamp(0.42 - wobble * 0.04, 0.3, 0.48),
+      clamp(0.46 + wobble * 0.06, 0.32, 0.5)
+    );
+  }
+  return vec4(
+    clamp(0.2 + asymmetry + wobble * 0.06, 0.09, 0.34),
+    clamp(0.2 - asymmetry - wobble * 0.05, 0.09, 0.34),
+    clamp(0.26 + wobble * 0.07, 0.14, 0.38),
+    0.0
+  );
+}
+
+#ifdef BALANCED_EDGE_FAST_POWER
+// Close fit for x^2.6 over the edge transition's useful range. Balanced uses
+// this multiply/sqrt form to avoid two generic pow() calls per ray step.
+float approximatePow2p6(float value) {
+  float root = sqrt(value);
+  return value * value * root * mix(1.0, root, 0.2);
+}
+#endif
+
+float edgeExtinction(vec2 uv, vec4 profile, float wobble) {
   float ground = smoothstep(0.0, 0.04, uv.y);
   if (uEdgeMode > 0.5) {
     // Tsar-only organic envelope: side and top falloff are merged into one
@@ -2131,25 +2159,24 @@ float edgeExtinction(vec2 uv, float wobble, float asymmetry) {
     // slowly time-animated curl-detail sample) perturbs the distance itself,
     // not just each side's width, so the boundary erodes unevenly rather
     // than reading as a clean oval.
-    float centerX = 0.5 + asymmetry * 1.6;
-    float leftRadius = clamp(0.42 + wobble * 0.05, 0.3, 0.48);
-    float rightRadius = clamp(0.42 - wobble * 0.04, 0.3, 0.48);
-    float topRadius = clamp(0.46 + wobble * 0.06, 0.32, 0.5);
-    float dx = uv.x - centerX;
-    float sideRadius = dx < 0.0 ? leftRadius : rightRadius;
-    vec2 normalized = vec2(dx / sideRadius, (1.0 - uv.y) / topRadius);
-    float ellipseDistance = pow(abs(normalized.x), 2.6) + pow(abs(normalized.y), 2.6)
-      + wobble * 0.22;
+    float dx = uv.x - profile.x;
+    float sideRadius = dx < 0.0 ? profile.y : profile.z;
+    vec2 normalized = vec2(dx / sideRadius, (1.0 - uv.y) / profile.w);
+#ifdef BALANCED_EDGE_FAST_POWER
+    float ellipseDistance = approximatePow2p6(abs(normalized.x))
+      + approximatePow2p6(abs(normalized.y));
+#else
+    float ellipseDistance = pow(abs(normalized.x), 2.6)
+      + pow(abs(normalized.y), 2.6);
+#endif
+    ellipseDistance += wobble * 0.22;
     float envelope = 1.0 - smoothstep(0.55, 1.0, ellipseDistance);
     float mask = envelope * ground;
     return mask * mask * (3.0 - 2.0 * mask);
   }
-  float leftWidth = clamp(0.2 + asymmetry + wobble * 0.06, 0.09, 0.34);
-  float rightWidth = clamp(0.2 - asymmetry - wobble * 0.05, 0.09, 0.34);
-  float topWidth = clamp(0.26 + wobble * 0.07, 0.14, 0.38);
-  float side = smoothstep(0.0, leftWidth, uv.x)
-    * smoothstep(0.0, rightWidth, 1.0 - uv.x);
-  float top = smoothstep(0.0, topWidth, 1.0 - uv.y);
+  float side = smoothstep(0.0, profile.x, uv.x)
+    * smoothstep(0.0, profile.y, 1.0 - uv.x);
+  float top = smoothstep(0.0, profile.z, 1.0 - uv.y);
   float mask = side * top * ground;
   return mask * mask * (3.0 - 2.0 * mask);
 }
@@ -2287,6 +2314,7 @@ void main() {
     vec3(localUv * vec2(1.3, 1.7), seedPhase + uTime * 0.0012)
   )).z;
   float sideAsymmetry = (fract(seedPhase * 7.31) - 0.5) * 0.06;
+  vec4 edgeProfile = edgeExtinctionProfile(boundaryWobble, sideAsymmetry);
   float inverseSteps = 1.0 / float(max(uRaySteps, 1));
   const int MAX_RAY_STEPS = 48;
   for (int index = 0; index < MAX_RAY_STEPS; index += 1) {
@@ -2336,7 +2364,7 @@ void main() {
     // Organic extinction toward the domain edges: clamped samples can never
     // duplicate into visible bands, and density dissolves long before the
     // computational boundary.
-    float layerFade = edgeExtinction(layerUv, boundaryWobble, sideAsymmetry);
+    float layerFade = edgeExtinction(layerUv, edgeProfile, boundaryWobble);
     vec4 scalar = sampleField(uScalar, layerUv);
     float smokeDensity = max(0.0, scalar.g * 0.9 * uLayerVisibility.y);
     float dustDensity = max(0.0,
@@ -2476,7 +2504,7 @@ void main() {
   // Bloom is extracted after the same boundary extinction so it can never
   // spread clipped edge pixels back into view.
   accumulated += bloom * 0.018 * uPhase.x * uVolumeProfile0.w * bloomGate
-    * edgeExtinction(distortedUv, boundaryWobble, sideAsymmetry);
+    * edgeExtinction(distortedUv, edgeProfile, boundaryWobble);
   accumulated += uPaletteBackground * uVolumeProfile2.z * (1.0 - transmittance) * 0.12;
 
   // Density governs opacity across the fire-to-cloud handoff. Phase values
@@ -2491,11 +2519,18 @@ void main() {
   // The composite alpha shares the organic extinction (gently, as its square
   // root — per-layer density and emission already carry the full mask), so
   // the volume rectangle can never appear against the environment behind it.
-  float domainFade = sqrt(edgeExtinction(localUv, boundaryWobble, sideAsymmetry));
+  float domainFade = sqrt(edgeExtinction(localUv, edgeProfile, boundaryWobble));
   float alpha = clamp((1.0 - transmittance) * atmosphericFade * domainFade, 0.0, 0.98);
   vec3 mapped = toneMap(accumulated * illuminationEnvelope);
   outputColor = vec4(mapped * alpha, alpha);
 }`;
+
+// Keep tier selection at compile time: a runtime uniform branch caused this
+// GPU/driver to predicate both power paths and erased the Balanced benefit.
+const BALANCED_VOLUME_FRAGMENT = VOLUME_FRAGMENT.replace(
+  '#version 300 es\n',
+  '#version 300 es\n#define BALANCED_EDGE_FAST_POWER\n',
+);
 
 export const RESEARCH_FLUID_SHADER_SOURCES = Object.freeze({
   fullscreenVertex: FULLSCREEN_VERTEX,
@@ -3145,7 +3180,11 @@ export class ResearchFluidEngine {
         ['metrics', FULLSCREEN_VERTEX, METRICS_FRAGMENT],
         ['tracerAdvect', FULLSCREEN_VERTEX, TRACER_ADVECT_FRAGMENT],
         ['tracerDisplay', TRACER_VERTEX, TRACER_FRAGMENT],
-        ['volume', FULLSCREEN_VERTEX, VOLUME_FRAGMENT],
+        [
+          'volume',
+          FULLSCREEN_VERTEX,
+          this.tier.id === 'balanced' ? BALANCED_VOLUME_FRAGMENT : VOLUME_FRAGMENT,
+        ],
       ];
       for (const [name, vertexSource, fragmentSource] of definitions) {
         this._programs[name] = this._createProgram(name, vertexSource, fragmentSource);
