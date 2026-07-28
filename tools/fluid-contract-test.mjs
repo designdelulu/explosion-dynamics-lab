@@ -287,7 +287,7 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
   }
 
   assert.ok(profile.tracerMaterial && typeof profile.tracerMaterial === "object", `${presetId}: tracerMaterial config missing`);
-  for (const key of ["mode", "occlusionStrength", "sizeVariance", "brightnessVariance"]) {
+  for (const key of ["mode", "occlusionStrength", "sizeVariance", "brightnessVariance", "minSizeFloor"]) {
     assert.ok(Number.isFinite(profile.tracerMaterial[key]), `${presetId}: tracerMaterial.${key} must be finite`);
   }
   if (presetId === "tsar-bomba-scale-reference") {
@@ -296,12 +296,14 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(t.occlusionStrength > 0, "Tsar tracer occlusion must be active");
     assert.ok(t.sizeVariance > 0 && t.sizeVariance < 1, "Tsar tracer size variance must be active and bounded (< 1 keeps size positive)");
     assert.ok(t.brightnessVariance > 0 && t.brightnessVariance < 1, "Tsar tracer brightness variance must be active and bounded (< 1 keeps brightness positive)");
+    assert.ok(t.minSizeFloor > 1.0, "Tsar tracer minSizeFloor must raise the point-size floor above the pre-pass 1.0px minimum");
   } else {
     const t = profile.tracerMaterial;
     assert.equal(t.mode, 0, `${presetId}: tracer-occlusion mode must remain off for non-Tsar presets`);
     assert.equal(t.occlusionStrength, 0, `${presetId}: tracerMaterial.occlusionStrength must stay neutral (0)`);
     assert.equal(t.sizeVariance, 0, `${presetId}: tracerMaterial.sizeVariance must stay neutral (0)`);
     assert.equal(t.brightnessVariance, 0, `${presetId}: tracerMaterial.brightnessVariance must stay neutral (0)`);
+    assert.equal(t.minSizeFloor, 0, `${presetId}: tracerMaterial.minSizeFloor must stay neutral (0)`);
   }
 }
 // The volume shader must carry the core uniforms; the tracer display vertex
@@ -339,6 +341,7 @@ for (const gatedTerm of [
   /float occlusion = uTracerMaterialMode > 0\.5\s*\n\s*\? mix\(exp\(-plume \* uTracerMaterialParams\.x\), 1\.0, diagnostic\)\s*\n\s*: 1\.0;/,
   /float brightnessJitter = uTracerMaterialMode > 0\.5/,
   /float sizeJitter = uTracerMaterialMode > 0\.5/,
+  /if \(uTracerMaterialMode > 0\.5\) \{\s*\n\s*baseSize = max\(baseSize, uTracerMaterialParams\.w\);\s*\n\s*\}/,
 ]) {
   assert.match(RESEARCH_FLUID_SHADER_SOURCES.tracerVertex, gatedTerm, `Tracer-material technique not properly gated behind uTracerMaterialMode: ${gatedTerm}`);
 }
@@ -355,7 +358,7 @@ for (const gatedTerm of [
   );
   assert.match(
     engineSourceForGating,
-    /const tracerMaterial = this\.profile\.tracerMaterial\s*\n\s*\|\|\s*\{ mode: 0, occlusionStrength: 0, sizeVariance: 0, brightnessVariance: 0 \};/,
+    /const tracerMaterial = this\.profile\.tracerMaterial\s*\n\s*\|\|\s*\{ mode: 0, occlusionStrength: 0, sizeVariance: 0, brightnessVariance: 0, minSizeFloor: 0 \};/,
     "Default tracerMaterial fallback (used when a profile omits tracerMaterial:) must match the neutral values asserted above",
   );
 }
@@ -556,7 +559,184 @@ for (const [index, preset] of EVENT_PRESETS.entries()) {
 }
 assert.ok(effectivePerformanceFingerprints.size >= 8, "Per-profile performance settings are not materially adaptive");
 
+// --- Tsar-scale shockwave shell-layering + stem taper/breakup (2026-07) -----
+// Same opt-in contract as the plume/material/dissipation/core controls above:
+// every profile except the Tsar historical reference keeps
+// shockwave.mode 0 (all three secondary bands neutral: zero strength, unit
+// width) and plume.feedTaperStart/feedTaperEnd/lateralJitter/turbulenceBlend
+// at their neutral defaults (0.85, 1.05, 0, 0 — the exact pre-pass hardcoded
+// coreBand taper window), so simulation is byte-identical to before this pass.
+for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
+  assert.ok(profile.shockwave && typeof profile.shockwave === "object", `${presetId}: shockwave config missing`);
+  for (const ringKey of ["ringB", "ringC", "ringD"]) {
+    const ring = profile.shockwave[ringKey];
+    assert.ok(ring && typeof ring === "object", `${presetId}: shockwave.${ringKey} config missing`);
+    for (const key of ["radiusOffset", "widthScale", "strength", "phaseOffset"]) {
+      assert.ok(Number.isFinite(ring[key]), `${presetId}: shockwave.${ringKey}.${key} must be finite`);
+    }
+  }
+  for (const key of ["mode", "irregularity", "fadeStart", "fadeSpan"]) {
+    assert.ok(Number.isFinite(profile.shockwave[key]), `${presetId}: shockwave.${key} must be finite`);
+  }
+  for (const key of ["feedTaperStart", "feedTaperEnd", "lateralJitter", "turbulenceBlend"]) {
+    assert.ok(Number.isFinite(profile.plume[key]), `${presetId}: plume.${key} must be finite`);
+  }
+  if (presetId === "tsar-bomba-scale-reference") {
+    const s = profile.shockwave;
+    assert.equal(s.mode, 1, "Tsar must enable the shockwave shell-layering mode");
+    for (const ringKey of ["ringB", "ringC", "ringD"]) {
+      assert.ok(s[ringKey].strength > 0, `Tsar shockwave.${ringKey}.strength must be active`);
+      assert.ok(s[ringKey].widthScale > 0, `Tsar shockwave.${ringKey}.widthScale must be positive`);
+    }
+    // Radii must be distinct (nested, not stacked on the primary ring) and
+    // widths/strengths must not all match (avoid uniform-looking rings).
+    const radii = ["ringB", "ringC", "ringD"].map((key) => s[key].radiusOffset);
+    assert.equal(new Set(radii).size, 3, "Tsar shockwave band radius offsets must be distinct");
+    const widths = ["ringB", "ringC", "ringD"].map((key) => s[key].widthScale);
+    assert.equal(new Set(widths).size, 3, "Tsar shockwave band widths must be distinct (avoid equal-width rings)");
+    const strengths = ["ringB", "ringC", "ringD"].map((key) => s[key].strength);
+    assert.equal(new Set(strengths).size, 3, "Tsar shockwave band strengths must be distinct (avoid identical alpha)");
+    assert.ok(s.fadeStart > 0 && s.fadeStart < 1, "Tsar shockwave fadeStart must fall within the timeline");
+    assert.ok(s.fadeSpan > 0, "Tsar shockwave fadeSpan must be a real softening window, not an abrupt cutoff");
+    assert.ok(
+      s.fadeStart + s.fadeSpan < profile.dissipation.lateStart,
+      "Tsar shockwave bands must fully soften out before the late-dissipation ramp begins",
+    );
+
+    const p = profile.plume;
+    assert.ok(p.feedTaperStart > 0 && p.feedTaperStart < 1, "Tsar feedTaperStart must fall within the timeline");
+    assert.ok(p.feedTaperEnd > p.feedTaperStart, "Tsar feedTaperEnd must follow feedTaperStart");
+    assert.ok(p.feedTaperStart < 0.85, "Tsar coreBand must taper earlier than the old end-of-timeline default (0.85)");
+    assert.ok(p.lateralJitter > 0, "Tsar stem lateral decorrelation must be active");
+    assert.ok(p.turbulenceBlend > 0, "Tsar stem turbulence blend must be active");
+  } else {
+    const s = profile.shockwave;
+    assert.equal(s.mode, 0, `${presetId}: shockwave mode must remain off for non-Tsar presets`);
+    for (const ringKey of ["ringB", "ringC", "ringD"]) {
+      assert.equal(s[ringKey].strength, 0, `${presetId}: shockwave.${ringKey}.strength must stay neutral (0)`);
+      assert.equal(s[ringKey].widthScale, 1, `${presetId}: shockwave.${ringKey}.widthScale must stay neutral (1)`);
+      assert.equal(s[ringKey].radiusOffset, 0, `${presetId}: shockwave.${ringKey}.radiusOffset must stay neutral (0)`);
+    }
+    const p = profile.plume;
+    assert.equal(p.feedTaperStart, 0.85, `${presetId}: plume.feedTaperStart must stay at the pre-pass default (0.85)`);
+    assert.equal(p.feedTaperEnd, 1.05, `${presetId}: plume.feedTaperEnd must stay at the pre-pass default (1.05)`);
+    assert.equal(p.lateralJitter, 0, `${presetId}: plume.lateralJitter must stay neutral (0)`);
+    assert.equal(p.turbulenceBlend, 0, `${presetId}: plume.turbulenceBlend must stay neutral (0)`);
+  }
+}
+// The scalar/velocity shaders must carry the new uniforms (declared once in
+// the shared SOURCE_PROFILE_UNIFORMS block).
+for (const uniform of ["uShockwaveMode", "uShockwaveRingB", "uShockwaveRingC", "uShockwaveRingD", "uShockwaveAux", "uPlumeStemParams"]) {
+  assert.match(
+    `${RESEARCH_FLUID_SHADER_SOURCES.forceFragment}\n${RESEARCH_FLUID_SHADER_SOURCES.scalarFragment}`,
+    new RegExp(`uniform[^;]*\\b${uniform}\\b`),
+    `${uniform}: uniform missing from shaders`,
+  );
+}
+// The three secondary bands must be reachable only through uShockwaveMode,
+// and must collapse to zero (not affecting the pre-existing single-ring
+// behavior) when it is 0.
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.scalarFragment,
+  /if \(uShockwaveMode < 0\.5\) return 0\.0;/,
+  "Shockwave layers not properly gated behind uShockwaveMode",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.scalarFragment,
+  /float ring = profileRingKernel\(vUv\) \+ profileShockwaveLayers\(vUv\);/,
+  "Shockwave layers must be summed into the same ring term feeding thermalKernel",
+);
+// The force shader's velocity-shaping ring term must remain the single
+// primary ring only — the new bands are density-only shell structure and
+// must not become new pressure/velocity sources.
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.forceFragment,
+  /float ringKernel = profileRingKernel\(vUv\);/,
+  "Force shader must keep using only the primary ring for velocity shaping",
+);
+// profileShockwaveLayers() is defined in the shared SOURCE_PROFILE_FUNCTIONS
+// block (so it necessarily appears, unused, in forceFragment's source text
+// too) but must never be invoked there to compute a velocity term.
+assert.doesNotMatch(
+  RESEARCH_FLUID_SHADER_SOURCES.forceFragment,
+  /=\s*profileShockwaveLayers\(|\+\s*profileShockwaveLayers\(/,
+  "Shockwave shell bands must stay density-only and not feed the velocity/force pass",
+);
+
+// --- Dense-phase raymarch performance optimization reverted (2026-07) -------
+// The alpha-threshold shading skip added earlier in this branch was global
+// (not Tsar-gated) and never visually verified — a subsequent in-browser
+// check found a square/rectangular residual-smoke artifact on this branch
+// and flagged the skip as an unmeasured suspect. It has been reverted:
+// shading math must run unconditionally for every raymarch layer again,
+// matching production. This asserts the revert stuck (no reintroduction).
+assert.doesNotMatch(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /if \(alpha > 0\.0006\)/,
+  "Dense-phase shading skip must stay reverted — it was unverified and a suspect in the square-residue defect",
+);
+{
+  const volume = RESEARCH_FLUID_SHADER_SOURCES.volumeFragment;
+  const depthIndex = volume.indexOf("float alpha = 1.0 - exp(-opticalDepth);");
+  const accumulateIndex = volume.indexOf("accumulated += transmittance * alpha * layerColor;");
+  const loopEnd = volume.indexOf("if (transmittance < 0.012) break;");
+  assert.ok(depthIndex > 0 && accumulateIndex > depthIndex && loopEnd > accumulateIndex);
+  const between = volume.slice(depthIndex, loopEnd);
+  assert.doesNotMatch(between, /\{\s*\n\s*\/\/ One midpoint probe/, "Shading math must not be wrapped in a conditional block");
+}
+
+// --- Domain-edge organic envelope (2026-07 Tsar dissipation-artifact fix) --
+// edgeExtinction()'s default path multiplies an independent horizontal
+// falloff by an independent vertical falloff — a rounded-rectangle
+// (Chebyshev) envelope. Invisible while density saturates the interior, but
+// the visible isocontour of a near-uniform low-density residue, which is
+// exactly Tsar's late-dissipation tail once the stem/shockwave passes leave
+// mass spread more evenly for longer. uEdgeMode gates a merged superellipse
+// envelope on for Tsar only; every other preset keeps the original
+// independent-axis product, byte-identical to before this pass.
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /uniform float uEdgeMode;/,
+  "uEdgeMode uniform missing from volumeFragment",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /if \(uEdgeMode > 0\.5\) \{[\s\S]*?ellipseDistance[\s\S]*?\n  \}/,
+  "Tsar-only organic superellipse envelope missing from edgeExtinction()",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /float side = smoothstep\(0\.0, profile\.x, uv\.x\)\s*\n\s*\* smoothstep\(0\.0, profile\.y, 1\.0 - uv\.x\);/,
+  "Original independent-axis rectangle envelope must remain as the default (uEdgeMode 0) path",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /vec4 edgeProfile = edgeExtinctionProfile\(boundaryWobble, sideAsymmetry\);[\s\S]*?for \(int index = 0;/,
+  "Invariant edge center/radii must be prepared once before the volume ray loop",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /#ifdef BALANCED_EDGE_FAST_POWER[\s\S]*?approximatePow2p6[\s\S]*?#else[\s\S]*?pow\(abs\(normalized\.x\), 2\.6\)[\s\S]*?#endif/,
+  "Balanced edge-power approximation and exact High/Mobile fallback must remain compile-time exclusive",
+);
+assert.match(
+  engineSource,
+  /this\.tier\.id === 'balanced' \? BALANCED_VOLUME_FRAGMENT : VOLUME_FRAGMENT/,
+  "Only the Balanced tier may compile the fitted edge-power shader variant",
+);
+for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
+  assert.ok(profile.edge && typeof profile.edge === "object", `${presetId}: edge config missing`);
+  assert.ok(Number.isFinite(profile.edge.mode), `${presetId}: edge.mode must be finite`);
+  if (presetId === "tsar-bomba-scale-reference") {
+    assert.equal(profile.edge.mode, 1, "Tsar must enable the organic domain-edge envelope");
+  } else {
+    assert.equal(profile.edge.mode, 0, `${presetId}: edge mode must remain off for non-Tsar presets`);
+  }
+}
+
 console.log("Explosion Dynamics Lab fluid contract test: PASS");
 console.log(`  ${tiers.length} bounded tiers × ${EVENT_PRESETS.length} preset profiles across seven event families`);
 console.log("  primitive diversity, profile budgets, palette-driven volume uniforms, fluid evolution, and GPU tracers verified");
 console.log("  non-WebGL runtime fails closed to the existing Canvas renderer");
+console.log("  Tsar shockwave shell-layering and stem taper/breakup gating verified Tsar-only");
+console.log("  dense-phase raymarch shading skip reverted; domain-edge envelope now organic and Tsar-gated");

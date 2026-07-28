@@ -222,7 +222,31 @@ const BASE_PROFILE = Object.freeze({
   quality: Object.freeze({ grid: 1, pressure: 1, rays: 1, tracers: 1, detail: 1 }),
   // Broad-plume research controls. mode 0 keeps every shipped preset on its
   // exact current behavior; only the Tsar historical reference opts in.
-  plume: Object.freeze({ mode: 0, expansion: 0, vortex: 0, persistence: 0, widen: 0 }),
+  // feedTaperStart/feedTaperEnd/lateralJitter/turbulenceBlend are the central
+  // -stem taper/breakup controls (2026-07 shockwave/stem/performance pass);
+  // feedTaperStart/End default to the original hardcoded coreBand taper
+  // window (0.85-1.05) so any future preset that enables plume mode without
+  // overriding them keeps the prior behavior exactly.
+  plume: Object.freeze({
+    mode: 0, expansion: 0, vortex: 0, persistence: 0, widen: 0,
+    feedTaperStart: 0.85, feedTaperEnd: 1.05, lateralJitter: 0, turbulenceBlend: 0,
+  }),
+  // Shockwave shell-layering research controls (2026-07 Tsar shockwave/stem/
+  // performance pass). mode 0 keeps every shipped preset byte-identical to
+  // before this pass — only the Tsar historical reference opts in. ringB/C/D
+  // are (radiusOffset, widthScale, strength, phaseOffset) for three secondary
+  // shell bands layered around the existing primary ring; irregularity is
+  // angular wobble strength; fadeStart/fadeSpan describe when the secondary
+  // structure softens back out (normalized time).
+  shockwave: Object.freeze({
+    mode: 0,
+    ringB: Object.freeze({ radiusOffset: 0, widthScale: 1, strength: 0, phaseOffset: 0 }),
+    ringC: Object.freeze({ radiusOffset: 0, widthScale: 1, strength: 0, phaseOffset: 0 }),
+    ringD: Object.freeze({ radiusOffset: 0, widthScale: 1, strength: 0, phaseOffset: 0 }),
+    irregularity: 0,
+    fadeStart: 1,
+    fadeSpan: 0.001,
+  }),
   // Smoke-material research controls (2026-07 Tsar smoke-material pass). mode 0
   // keeps every shipped preset byte-identical to before this pass; only the
   // Tsar historical reference opts in. sootAbsorption/dustAbsorption give soot
@@ -270,7 +294,15 @@ const BASE_PROFILE = Object.freeze({
   // dense smoke buries tracers instead of merely dimming them a little;
   // sizeVariance/brightnessVariance give each tracer a stable per-particle
   // random offset instead of one uniform size and brightness.
-  tracerMaterial: Object.freeze({ mode: 0, occlusionStrength: 0, sizeVariance: 0, brightnessVariance: 0 }),
+  tracerMaterial: Object.freeze({
+    mode: 0, occlusionStrength: 0, sizeVariance: 0, brightnessVariance: 0, minSizeFloor: 0,
+  }),
+  // Domain-edge envelope research control (2026-07 Tsar dissipation-artifact
+  // fix). mode 0 keeps every shipped preset byte-identical to before this
+  // pass (the original independent side/top rectangle envelope in
+  // edgeExtinction()); only the Tsar historical reference opts into the
+  // merged organic superellipse envelope.
+  edge: Object.freeze({ mode: 0 }),
 });
 
 function defineFluidProfile(presetId, profileId, overrides = {}) {
@@ -286,10 +318,18 @@ function defineFluidProfile(presetId, profileId, overrides = {}) {
     volume: { ...BASE_PROFILE.volume, ...(overrides.volume || {}) },
     quality: { ...BASE_PROFILE.quality, ...(overrides.quality || {}) },
     plume: { ...BASE_PROFILE.plume, ...(overrides.plume || {}) },
+    shockwave: {
+      ...BASE_PROFILE.shockwave,
+      ...(overrides.shockwave || {}),
+      ringB: { ...BASE_PROFILE.shockwave.ringB, ...(overrides.shockwave?.ringB || {}) },
+      ringC: { ...BASE_PROFILE.shockwave.ringC, ...(overrides.shockwave?.ringC || {}) },
+      ringD: { ...BASE_PROFILE.shockwave.ringD, ...(overrides.shockwave?.ringD || {}) },
+    },
     material: { ...BASE_PROFILE.material, ...(overrides.material || {}) },
     dissipation: { ...BASE_PROFILE.dissipation, ...(overrides.dissipation || {}) },
     core: { ...BASE_PROFILE.core, ...(overrides.core || {}) },
     tracerMaterial: { ...BASE_PROFILE.tracerMaterial, ...(overrides.tracerMaterial || {}) },
+    edge: { ...BASE_PROFILE.edge, ...(overrides.edge || {}) },
   });
 }
 
@@ -520,7 +560,38 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       // hot phase reads as a structured fireball instead of a flat white disc.
       volume: { scaleX: 1.4, scaleY: 1.42, depth: 1.48, opacity: 1.48, shadow: 1.5, bloom: 1.15, distortion: 1.32, erosion: 0.82, noiseScale: 0.86, dustVisibility: 0.58, exposure: 1.0, toneMap: 0.24, backgroundIllumination: 0.46, emissionCurve: 0.88 },
       quality: { grid: 1.14, pressure: 1.18, rays: 1.2, tracers: 1.44, detail: 1.28 },
-      plume: { mode: 1, expansion: 0.65, vortex: 1.0, persistence: 0.78, widen: 0.6 },
+      // feedTaperStart/End (2026-07 shockwave/stem/performance pass): the
+      // audited hard vertical seam came from coreBand staying fed almost to
+      // the end of the timeline (old 0.85-1.05 taper, ~t46-54) while the
+      // mature cap is fully formed by ~30s (0.6) — moving the taper to
+      // 0.32-0.62 (~t17-33) lets the column break up right after cap
+      // formation instead of holding one straight painted line through the
+      // whole dense mid-timeline. lateralJitter/turbulenceBlend drive the
+      // stemBreakup decorrelation (off-center drift + medium-scale
+      // turbulence folded into the corridor) over that same window.
+      plume: {
+        mode: 1, expansion: 0.65, vortex: 1.0, persistence: 0.78, widen: 0.6,
+        feedTaperStart: 0.32, feedTaperEnd: 0.62, lateralJitter: 0.35, turbulenceBlend: 0.16,
+      },
+      // 2026-07 shockwave shell-layering pass: the audited defect was that
+      // profileRingKernel contributed exactly one fixed-radius band at flat
+      // 0.5 weight, so t10-t20 read as an outer sphere plus at most two faint
+      // arcs. Three secondary bands (ringB/C/D) nest around the primary ring
+      // at different radii, widths, and strengths so the structure reads as
+      // layered shell rather than one uniform line; small phaseOffsets stage
+      // their onset so they build up rather than all appearing/fading in
+      // lockstep, and fadeStart/fadeSpan ease them out well before the
+      // mature-phase dissipation ramp begins (lateStart 0.6 below) so they
+      // never compete with or mask genuine late-timeline clearing.
+      shockwave: {
+        mode: 1,
+        ringB: { radiusOffset: -0.32, widthScale: 1.35, strength: 0.42, phaseOffset: 0.015 },
+        ringC: { radiusOffset: 0.22, widthScale: 0.75, strength: 0.34, phaseOffset: 0.05 },
+        ringD: { radiusOffset: -0.55, widthScale: 1.9, strength: 0.24, phaseOffset: 0.03 },
+        irregularity: 0.05,
+        fadeStart: 0.44,
+        fadeSpan: 0.14,
+      },
       // 2026-07 smoke-material pass: soot absorbs more strongly than lofted
       // dust (independent optical-depth coefficients instead of one shared
       // curve), an energy-weighted third detail octave adds medium-scale
@@ -584,7 +655,25 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       // partially attenuates. sizeVariance/brightnessVariance give each
       // tracer a stable per-particle random offset instead of one uniform
       // size and brightness.
-      tracerMaterial: { mode: 1, occlusionStrength: 2.6, sizeVariance: 0.5, brightnessVariance: 0.45 },
+      // minSizeFloor (2026-07 dissipation-artifact addendum): at the shared
+      // 1.0px baseSize floor, TRACER_FRAGMENT's radial coverage falloff has
+      // no subpixels to work with — a tracer at minimum size is visually
+      // indistinguishable from a solid square pixel regardless of the
+      // falloff math. Raising the floor for Tsar only gives that falloff
+      // room to actually render round.
+      tracerMaterial: {
+        mode: 1, occlusionStrength: 2.6, sizeVariance: 0.5, brightnessVariance: 0.45, minSizeFloor: 1.8,
+      },
+      // 2026-07 dissipation-artifact fix: the shared side/top boundary
+      // envelope (edgeExtinction()) is an independent-per-axis rectangle.
+      // Invisible while the fireball/plume saturate the interior, but once
+      // the broader lateral turbulence from the stem-breakup fix and the
+      // extended shockwave bands leave low, near-uniform residual density
+      // sitting inside that envelope for longer, its own axis-aligned
+      // isocontour becomes the visible silhouette — a faint square/
+      // rectangular cloud during and after late dissipation. mode 1 switches
+      // Tsar only to the merged organic superellipse envelope.
+      edge: { mode: 1 },
     },
   ),
 });
@@ -839,6 +928,11 @@ uniform vec4 uProfileAux;
 // (expansion, vortexStrength, persistence, columnWiden).
 uniform float uPlumeMode;
 uniform vec4 uPlumeParams;
+// Tsar-scale central-stem taper/breakup research controls, inert under the
+// same uPlumeMode gate as uPlumeParams above. Packs (feedTaperStart,
+// feedTaperEnd, lateralJitter, turbulenceBlend) — see the coreBand/
+// stemBreakup usage in FORCE_FRAGMENT for what each term does.
+uniform vec4 uPlumeStemParams;
 // Tsar-scale late-dissipation research controls. uDissipationMode is 0 for
 // every shipped preset except the Tsar historical reference, so this block is
 // inert (byte-identical behavior) for all other events. uDissipationParams
@@ -848,6 +942,25 @@ uniform vec4 uPlumeParams;
 uniform float uDissipationMode;
 uniform vec4 uDissipationParams;
 uniform vec4 uDissipationParams2;
+// Tsar-scale shockwave shell-layering research controls. uShockwaveMode is 0
+// for every shipped preset except the Tsar historical reference, so this
+// block is inert (byte-identical behavior) for all other events, and the
+// force pass keeps using the single primary ring (profileRingKernel) either
+// way — these bands are density-only additional shell structure, not new
+// pressure/velocity sources. Each of uShockwaveRingB/C/D packs (radiusOffset,
+// widthScale, strength, phaseOffset): radiusOffset is added to the primary
+// ring radius (uSourceAux.x, itself a multiple of source radius), widthScale
+// scales band thickness relative to the primary ring, strength is a
+// contribution multiplier, and phaseOffset is a normalized-time onset delay
+// so bands do not all appear/fade in lockstep. uShockwaveAux packs
+// (irregularity, fadeStart, fadeSpan, unused) — irregularity is angular
+// radius wobble strength, fadeStart/fadeSpan describe the shared
+// normalized-time window over which the secondary structure softens back out.
+uniform float uShockwaveMode;
+uniform vec4 uShockwaveRingB;
+uniform vec4 uShockwaveRingC;
+uniform vec4 uShockwaveRingD;
+uniform vec4 uShockwaveAux;
 `;
 
 const SOURCE_PROFILE_FUNCTIONS = `
@@ -906,6 +1019,42 @@ float profileRingKernel(vec2 uv) {
   vec2 scaled = delta / max(vec2(0.002), uSourceShape.x * uSourceShape.yz);
   float distanceFromRing = abs(length(scaled) - uSourceAux.x);
   return exp(-distanceFromRing * distanceFromRing * 9.5);
+}
+
+// One nested secondary/tertiary/quaternary shell band around the primary
+// ring above. Inert unless uShockwaveMode is set (Tsar historical reference
+// only). angleSeed differentiates the angular wobble phase per band so
+// nested rings do not wobble in unison, which would just read as one thick
+// ring instead of layered structure.
+float profileShockwaveBand(vec2 uv, vec4 band, float angleSeed) {
+  vec2 delta = uv - profileSourceCenter();
+  vec2 scaled = delta / max(vec2(0.002), uSourceShape.x * uSourceShape.yz);
+  float angle = atan(scaled.y, scaled.x);
+  float wobble = uShockwaveAux.x * (
+    sin(angle * 3.0 + angleSeed) * 0.5
+    + sin(angle * 7.0 - angleSeed * 1.6) * 0.3
+    + sin(angle * 11.0 + angleSeed * 2.3) * 0.2
+  );
+  float ringRadius = max(0.02, uSourceAux.x + band.x) * (1.0 + wobble);
+  float distanceFromRing = abs(length(scaled) - ringRadius);
+  float sharpness = 9.5 / max(0.15, band.y * band.y);
+  float shell = exp(-distanceFromRing * distanceFromRing * sharpness);
+  float onset = smoothstep(band.w, band.w + 0.05, uNormalizedTime);
+  float fade = 1.0 - smoothstep(
+    uShockwaveAux.y + band.w * 0.4,
+    uShockwaveAux.y + uShockwaveAux.z,
+    uNormalizedTime
+  );
+  return shell * band.z * onset * clamp(fade, 0.0, 1.0);
+}
+
+// Sum of the secondary shell bands, zero (and byte-identical to before this
+// pass) for every preset except the Tsar historical reference.
+float profileShockwaveLayers(vec2 uv) {
+  if (uShockwaveMode < 0.5) return 0.0;
+  return profileShockwaveBand(uv, uShockwaveRingB, 1.7)
+    + profileShockwaveBand(uv, uShockwaveRingC, 3.4)
+    + profileShockwaveBand(uv, uShockwaveRingD, 5.1);
 }
 
 float profileGroundKernel(vec2 uv) {
@@ -1282,18 +1431,51 @@ void main() {
     // little longer before also relaxing.
     float developPhase = smoothstep(0.02, 0.14, uNormalizedTime)
       * (1.0 - smoothstep(0.55, 0.9, uNormalizedTime));
+    // Stem taper/breakup (uPlumeStemParams: feedTaperStart, feedTaperEnd,
+    // lateralJitter, turbulenceBlend). The audited seam came from coreBand
+    // staying centered at lateral=0 and fully fed almost to the end of the
+    // timeline (old hardcoded 0.85-1.05 taper) — a single deterministic
+    // narrow band reads as a straight structural line rather than organic
+    // turbulence, especially since this is a 2D density field (no depth
+    // slices to decorrelate it across). feedTaperStart/End move that taper
+    // to right after cap formation instead. stemBreakup ramps up in the runup
+    // to the taper and stays engaged through it: it offsets the corridor off
+    // dead-center using the same curl-detail turbulence sample already
+    // computed above (free — no extra texture read), widens the band while
+    // its own feedPhase strength is easing down, and blends a portion of
+    // that turbulence directly into the corridor's velocity so the feed
+    // hands off to organic motion instead of just switching off.
+    float feedTaperStart = uPlumeStemParams.x;
+    float feedTaperEnd = uPlumeStemParams.y;
     float feedPhase = smoothstep(0.02, 0.1, uNormalizedTime)
-      * (1.0 - smoothstep(0.85, 1.05, uNormalizedTime));
+      * (1.0 - smoothstep(feedTaperStart, feedTaperEnd, uNormalizedTime));
+    float stemBreakup = smoothstep(feedTaperStart * 0.45, feedTaperStart, uNormalizedTime);
     float widenBand = smoothstep(0.015, 0.12, heightAbove)
       * (1.0 - smoothstep(0.85, 1.15, heightAbove));
     float expansion = plumeActivity * widenBand
       * (0.35 + heightAbove * 0.85) * developPhase;
     velocity.x += lateralSign * expansion * uPlumeParams.x * motionScale * uDt * 60.0 * motionDamp;
     // A gentle upward feed inside the widened core keeps the stem continuous
-    // with the cap rather than pinching off.
-    float coreBand = exp(-lateral * lateral / max(0.004, uSourceShape.x * uSourceShape.x * 9.0));
+    // with the cap rather than pinching off early. lateralOffset decorrelates
+    // the corridor away from a perfectly fixed x=0 line as breakup ramps up;
+    // widthGrow relaxes the band from a narrow column into a broader, softer
+    // one over the same window instead of holding one fixed width until it
+    // simply cuts off.
+    float lateralOffset = turbulence.z * uPlumeStemParams.z * stemBreakup;
+    float coreLateral = lateral - lateralOffset;
+    float widthGrow = mix(1.0, 2.4, stemBreakup);
+    float coreBand = exp(
+      -coreLateral * coreLateral
+      / max(0.004, uSourceShape.x * uSourceShape.x * 9.0 * widthGrow * widthGrow)
+    );
     velocity.y += coreBand * plumeActivity * uPlumeParams.w
       * (0.4 + 0.6 * (1.0 - heightAbove)) * feedPhase * motionScale * uDt * 30.0 * motionDamp;
+    // Medium-scale turbulence reaching into the central corridor specifically
+    // (rather than only the generic vortex-ring/cluster terms elsewhere) so
+    // the column develops internal asymmetric motion as it breaks up, instead
+    // of thinning out as one smooth, still-coherent taper.
+    velocity += turbulence.xy * coreBand * plumeActivity
+      * uPlumeStemParams.w * stemBreakup * motionScale * uDt * 60.0 * motionDamp;
 
     // 2 · Rising asymmetric vortex-particle ring. A small set of analytic
     // Gaussian vortices climbs with the plume; seeded offsets make radii,
@@ -1480,7 +1662,7 @@ void main() {
     float ground = profileGroundKernel(vUv);
     float ejecta = profileEjectaKernel(vUv);
     float trail = profileTrailKernel(vUv);
-    float ring = profileRingKernel(vUv);
+    float ring = profileRingKernel(vUv) + profileShockwaveLayers(vUv);
     float combustion = sourceEnabled(SOURCE_SUSTAINED) ? sustain : fireEnvelope;
     float hotEnvelope = onset * 1.45 + combustion * pulse * 0.72;
     float matterEnvelope = sustain * (0.35 + pulse * 0.65);
@@ -1735,10 +1917,11 @@ uniform vec3 uTracerColorA;
 uniform vec3 uTracerColorB;
 uniform vec3 uTracerColorC;
 uniform uint uSeed;
-// Tracer-material research controls (2026-07 Tsar core/tracer polish).
+// Tracer-material research controls (2026-07 Tsar core/tracer polish, plus
+// the 2026-07 dissipation-artifact addendum's minSizeFloor).
 // uTracerMaterialMode is 0 for every shipped preset (byte-identical
 // rendering) and 1 only for the Tsar historical reference. uTracerMaterialParams
-// packs (occlusionStrength, sizeVariance, brightnessVariance, spare).
+// packs (occlusionStrength, sizeVariance, brightnessVariance, minSizeFloor).
 uniform float uTracerMaterialMode;
 uniform vec4 uTracerMaterialParams;
 ${SEEDED_HASH}
@@ -1812,6 +1995,15 @@ void main() {
   vTracerColor = vec4(color, alpha);
   gl_Position = vec4(screenUv * 2.0 - 1.0, 0.0, 1.0);
   float baseSize = clamp(min(uResolution.x, uResolution.y) * 0.003, 1.0, 3.2);
+  // Tsar-only: at the shared 1.0px floor above, TRACER_FRAGMENT's radial
+  // coverage falloff has no subpixels to work with, so a tracer at minimum
+  // size reads as a solid square regardless of the falloff math. Raising the
+  // floor gives that falloff room to actually render round. Left at the
+  // original floor (uTracerMaterialParams.w defaults to 0, so max() is a
+  // no-op) for every other preset.
+  if (uTracerMaterialMode > 0.5) {
+    baseSize = max(baseSize, uTracerMaterialParams.w);
+  }
   float typeSize = uTracerType == 4 || uTracerType == 5 ? 0.82 : (uTracerType == 6 ? 0.68 : 1.0);
   // Tsar-only: a stable per-particle size offset, same hash family as the
   // brightness jitter above but a different salt so the two vary independently.
@@ -1875,6 +2067,14 @@ uniform vec4 uMaterialParams;
 // 0.0, 0.0) reduce every formula below to its original, pre-pass value.
 uniform float uCoreMode;
 uniform vec4 uCoreParams;
+// Domain-edge envelope research control (2026-07 Tsar dissipation-artifact
+// fix). uEdgeMode is 0 for every shipped preset (byte-identical rendering,
+// the original independent side/top smoothstep rectangle below) and 1 only
+// for the Tsar historical reference, which instead merges side/top into one
+// warped superellipse distance so low-density late-timeline residue erodes
+// into an irregular blob instead of tracing the rectangular simulation
+// domain. See edgeExtinction() below.
+uniform float uEdgeMode;
 uniform vec3 uPaletteBackground;
 uniform vec3 uPaletteEmber;
 uniform vec3 uPaletteFlame;
@@ -1907,19 +2107,76 @@ vec3 toneMap(vec3 color) {
   return mix(aces, reinhard, clamp(uVolumeProfile2.y, 0.0, 1.0));
 }
 
-// Organic extinction toward the simulation-domain boundary. Wide, nonlinear,
-// seeded-asymmetric side and top zones with low-frequency wobble dissolve
-// density, emission, scattering, and bloom well before the computational
-// edge, so no rectangular or capsule silhouette can ever appear. The ground
-// edge keeps a deliberately narrow band to preserve surface contact.
-float edgeExtinction(vec2 uv, float wobble, float asymmetry) {
-  float leftWidth = clamp(0.2 + asymmetry + wobble * 0.06, 0.09, 0.34);
-  float rightWidth = clamp(0.2 - asymmetry - wobble * 0.05, 0.09, 0.34);
-  float topWidth = clamp(0.26 + wobble * 0.07, 0.14, 0.38);
-  float side = smoothstep(0.0, leftWidth, uv.x)
-    * smoothstep(0.0, rightWidth, 1.0 - uv.x);
-  float top = smoothstep(0.0, topWidth, 1.0 - uv.y);
+// Extinction toward the simulation-domain boundary. The ground edge keeps a
+// deliberately narrow band to preserve surface contact on every preset.
+//
+// The default (uEdgeMode 0) path below multiplies an independent per-axis
+// horizontal falloff by an independent per-axis vertical falloff. That
+// product is mathematically a rounded rectangle (a Chebyshev/max-metric
+// envelope) despite the smoothing at each edge — at high density the
+// rectangle's interior plateau is fully saturated and invisible, but at low,
+// near-uniform residual density (Tsar's late dissipation tail) the
+// envelope's own axis-aligned isocontour becomes the visible silhouette,
+// reading as a faint square/rectangular cloud. Left unfixed here (rather
+// than gated) it is the only side/top boundary term every other preset also
+// uses, and none of them have been audited against this specific low-density
+// failure mode, so it stays byte-identical there.
+// Center/radius terms depend on the pixel's one boundary-wobble sample, not
+// ray depth, so prepare them once before the volume loop.
+vec4 edgeExtinctionProfile(float wobble, float asymmetry) {
+  if (uEdgeMode > 0.5) {
+    return vec4(
+      0.5 + asymmetry * 1.6,
+      clamp(0.42 + wobble * 0.05, 0.3, 0.48),
+      clamp(0.42 - wobble * 0.04, 0.3, 0.48),
+      clamp(0.46 + wobble * 0.06, 0.32, 0.5)
+    );
+  }
+  return vec4(
+    clamp(0.2 + asymmetry + wobble * 0.06, 0.09, 0.34),
+    clamp(0.2 - asymmetry - wobble * 0.05, 0.09, 0.34),
+    clamp(0.26 + wobble * 0.07, 0.14, 0.38),
+    0.0
+  );
+}
+
+#ifdef BALANCED_EDGE_FAST_POWER
+// Close fit for x^2.6 over the edge transition's useful range. Balanced uses
+// this multiply/sqrt form to avoid two generic pow() calls per ray step.
+float approximatePow2p6(float value) {
+  float root = sqrt(value);
+  return value * value * root * mix(1.0, root, 0.2);
+}
+#endif
+
+float edgeExtinction(vec2 uv, vec4 profile, float wobble) {
   float ground = smoothstep(0.0, 0.04, uv.y);
+  if (uEdgeMode > 0.5) {
+    // Tsar-only organic envelope: side and top falloff are merged into one
+    // warped superellipse distance (rather than multiplied as independent
+    // axes), so the isocontour is a continuous irregular curve, never a
+    // straight vertical or flat horizontal edge. wobble (a spatially-varying,
+    // slowly time-animated curl-detail sample) perturbs the distance itself,
+    // not just each side's width, so the boundary erodes unevenly rather
+    // than reading as a clean oval.
+    float dx = uv.x - profile.x;
+    float sideRadius = dx < 0.0 ? profile.y : profile.z;
+    vec2 normalized = vec2(dx / sideRadius, (1.0 - uv.y) / profile.w);
+#ifdef BALANCED_EDGE_FAST_POWER
+    float ellipseDistance = approximatePow2p6(abs(normalized.x))
+      + approximatePow2p6(abs(normalized.y));
+#else
+    float ellipseDistance = pow(abs(normalized.x), 2.6)
+      + pow(abs(normalized.y), 2.6);
+#endif
+    ellipseDistance += wobble * 0.22;
+    float envelope = 1.0 - smoothstep(0.55, 1.0, ellipseDistance);
+    float mask = envelope * ground;
+    return mask * mask * (3.0 - 2.0 * mask);
+  }
+  float side = smoothstep(0.0, profile.x, uv.x)
+    * smoothstep(0.0, profile.y, 1.0 - uv.x);
+  float top = smoothstep(0.0, profile.z, 1.0 - uv.y);
   float mask = side * top * ground;
   return mask * mask * (3.0 - 2.0 * mask);
 }
@@ -2057,6 +2314,7 @@ void main() {
     vec3(localUv * vec2(1.3, 1.7), seedPhase + uTime * 0.0012)
   )).z;
   float sideAsymmetry = (fract(seedPhase * 7.31) - 0.5) * 0.06;
+  vec4 edgeProfile = edgeExtinctionProfile(boundaryWobble, sideAsymmetry);
   float inverseSteps = 1.0 / float(max(uRaySteps, 1));
   const int MAX_RAY_STEPS = 48;
   for (int index = 0; index < MAX_RAY_STEPS; index += 1) {
@@ -2106,7 +2364,7 @@ void main() {
     // Organic extinction toward the domain edges: clamped samples can never
     // duplicate into visible bands, and density dissolves long before the
     // computational boundary.
-    float layerFade = edgeExtinction(layerUv, boundaryWobble, sideAsymmetry);
+    float layerFade = edgeExtinction(layerUv, edgeProfile, boundaryWobble);
     vec4 scalar = sampleField(uScalar, layerUv);
     float smokeDensity = max(0.0, scalar.g * 0.9 * uLayerVisibility.y);
     float dustDensity = max(0.0,
@@ -2246,7 +2504,7 @@ void main() {
   // Bloom is extracted after the same boundary extinction so it can never
   // spread clipped edge pixels back into view.
   accumulated += bloom * 0.018 * uPhase.x * uVolumeProfile0.w * bloomGate
-    * edgeExtinction(distortedUv, boundaryWobble, sideAsymmetry);
+    * edgeExtinction(distortedUv, edgeProfile, boundaryWobble);
   accumulated += uPaletteBackground * uVolumeProfile2.z * (1.0 - transmittance) * 0.12;
 
   // Density governs opacity across the fire-to-cloud handoff. Phase values
@@ -2261,11 +2519,18 @@ void main() {
   // The composite alpha shares the organic extinction (gently, as its square
   // root — per-layer density and emission already carry the full mask), so
   // the volume rectangle can never appear against the environment behind it.
-  float domainFade = sqrt(edgeExtinction(localUv, boundaryWobble, sideAsymmetry));
+  float domainFade = sqrt(edgeExtinction(localUv, edgeProfile, boundaryWobble));
   float alpha = clamp((1.0 - transmittance) * atmosphericFade * domainFade, 0.0, 0.98);
   vec3 mapped = toneMap(accumulated * illuminationEnvelope);
   outputColor = vec4(mapped * alpha, alpha);
 }`;
+
+// Keep tier selection at compile time: a runtime uniform branch caused this
+// GPU/driver to predicate both power paths and erased the Balanced benefit.
+const BALANCED_VOLUME_FRAGMENT = VOLUME_FRAGMENT.replace(
+  '#version 300 es\n',
+  '#version 300 es\n#define BALANCED_EDGE_FAST_POWER\n',
+);
 
 export const RESEARCH_FLUID_SHADER_SOURCES = Object.freeze({
   fullscreenVertex: FULLSCREEN_VERTEX,
@@ -2915,7 +3180,11 @@ export class ResearchFluidEngine {
         ['metrics', FULLSCREEN_VERTEX, METRICS_FRAGMENT],
         ['tracerAdvect', FULLSCREEN_VERTEX, TRACER_ADVECT_FRAGMENT],
         ['tracerDisplay', TRACER_VERTEX, TRACER_FRAGMENT],
-        ['volume', FULLSCREEN_VERTEX, VOLUME_FRAGMENT],
+        [
+          'volume',
+          FULLSCREEN_VERTEX,
+          this.tier.id === 'balanced' ? BALANCED_VOLUME_FRAGMENT : VOLUME_FRAGMENT,
+        ],
       ];
       for (const [name, vertexSource, fragmentSource] of definitions) {
         this._programs[name] = this._createProgram(name, vertexSource, fragmentSource);
@@ -3359,6 +3628,14 @@ export class ResearchFluidEngine {
       finite(plume.persistence, 0),
       finite(plume.widen, 0),
     );
+    this._uniform4f(
+      program,
+      'uPlumeStemParams',
+      finite(plume.feedTaperStart, 0.85),
+      finite(plume.feedTaperEnd, 1.05),
+      finite(plume.lateralJitter, 0),
+      finite(plume.turbulenceBlend, 0),
+    );
     const dissipation = this.profile.dissipation || {
       mode: 0, lateStart: 1, finalStart: 1, sourceTaperEnd: 1,
       retentionFloorSmoke: 1, retentionFloorDust: 1, outwardBoost: 0, buoyancyFalloff: 0, motionDamp: 0,
@@ -3379,6 +3656,29 @@ export class ResearchFluidEngine {
       finite(dissipation.outwardBoost, 0),
       finite(dissipation.buoyancyFalloff, 0),
       finite(dissipation.motionDamp, 0),
+    );
+    const shockwave = this.profile.shockwave || BASE_PROFILE.shockwave;
+    this._uniform1f(program, 'uShockwaveMode', shockwave.mode > 0 ? 1 : 0);
+    const bindShockwaveRing = (name, ring) => {
+      this._uniform4f(
+        program,
+        name,
+        finite(ring?.radiusOffset, 0),
+        finite(ring?.widthScale, 1),
+        finite(ring?.strength, 0),
+        finite(ring?.phaseOffset, 0),
+      );
+    };
+    bindShockwaveRing('uShockwaveRingB', shockwave.ringB);
+    bindShockwaveRing('uShockwaveRingC', shockwave.ringC);
+    bindShockwaveRing('uShockwaveRingD', shockwave.ringD);
+    this._uniform4f(
+      program,
+      'uShockwaveAux',
+      finite(shockwave.irregularity, 0),
+      finite(shockwave.fadeStart, 1),
+      finite(shockwave.fadeSpan, 0.001),
+      0,
     );
   }
 
@@ -3429,6 +3729,8 @@ export class ResearchFluidEngine {
       finite(core.structureBlend, 0),
       finite(core.bloomGateScale, 0),
     );
+    const edge = this.profile.edge || { mode: 0 };
+    this._uniform1f(program, 'uEdgeMode', edge.mode > 0 ? 1 : 0);
   }
 
   _bindPaletteUniforms(program) {
@@ -3627,7 +3929,7 @@ export class ResearchFluidEngine {
     );
     this._uniform1ui(program, 'uSeed', this.settings.seed);
     const tracerMaterial = this.profile.tracerMaterial
-      || { mode: 0, occlusionStrength: 0, sizeVariance: 0, brightnessVariance: 0 };
+      || { mode: 0, occlusionStrength: 0, sizeVariance: 0, brightnessVariance: 0, minSizeFloor: 0 };
     this._uniform1f(program, 'uTracerMaterialMode', tracerMaterial.mode > 0 ? 1 : 0);
     this._uniform4f(
       program,
@@ -3635,7 +3937,7 @@ export class ResearchFluidEngine {
       finite(tracerMaterial.occlusionStrength, 0),
       finite(tracerMaterial.sizeVariance, 0),
       finite(tracerMaterial.brightnessVariance, 0),
-      0,
+      finite(tracerMaterial.minSizeFloor, 0),
     );
     gl.enable(gl.BLEND);
     gl.blendEquation(gl.FUNC_ADD);
