@@ -488,6 +488,12 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       },
       plume: {
         mode: 1, expansion: 0.36, vortex: 0.58, persistence: 0.34, widen: 0.38,
+        feedTaperStart: 0.19, feedTaperEnd: 0.44,
+        lateralJitter: 0.2, turbulenceBlend: 0.1,
+      },
+      material: {
+        mode: 1, sootAbsorption: 1.35, dustAbsorption: 0.6,
+        detailBoost: 0.55, warmCoolContrast: 0.52,
       },
       core: {
         mode: 1, highlightThreshold: 2.02, highlightSharpness: 2.7,
