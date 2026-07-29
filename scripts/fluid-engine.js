@@ -473,8 +473,8 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       // coupling is stronger without becoming a scaled-down historical plume.
       source: {
         centerY: 0.255, radius: 0.068, aspectX: 1.06, aspectY: 0.86,
-        radial: 1.07, vertical: 0.92, turbulence: 0.9,
-        heat: 0.92, smoke: 1, incandescent: 1.05, dust: 0.34,
+        radial: 1.07, vertical: 0.92, turbulence: 1.05,
+        heat: 0.54, smoke: 1, incandescent: 1.12, dust: 0.34,
         capScale: 1.24, capRoll: 1.27,
       },
       physics: {
@@ -483,14 +483,14 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       },
       volume: {
         scaleX: 1.06, scaleY: 0.68, depth: 1.12, opacity: 0.76,
-        shadow: 1.45, bloom: 0.9, distortion: 1.08, erosion: 1.14,
+        shadow: 1.45, bloom: 0.86, distortion: 1.08, erosion: 1.14,
         noiseScale: 1.16, dustVisibility: 0.58, exposure: 0.92,
         toneMap: 0.38, backgroundIllumination: 0.24, emissionCurve: 1,
       },
       plume: {
-        mode: 2, expansion: 0.006, vortex: 0.02, persistence: 0.015, widen: 0.022,
-        feedTaperStart: 0.12, feedTaperEnd: 0.32,
-        lateralJitter: 0.2, turbulenceBlend: 0.1,
+        mode: 2, expansion: 0.012, vortex: 0.04, persistence: 0.015, widen: 0.018,
+        feedTaperStart: 0.08, feedTaperEnd: 0.24,
+        lateralJitter: 0.32, turbulenceBlend: 0.15,
       },
       material: {
         mode: 1, sootAbsorption: 1.22, dustAbsorption: 0.72,
@@ -506,8 +506,8 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
         fadeSpan: 0.12,
       },
       core: {
-        mode: 1, highlightThreshold: 2.3, highlightSharpness: 3,
-        structureBlend: 0.75, bloomGateScale: 8,
+        mode: 1, highlightThreshold: 2.32, highlightSharpness: 3.08,
+        structureBlend: 0.79, bloomGateScale: 8.8,
       },
       tracerMaterial: {
         mode: 1, occlusionStrength: 1.8, sizeVariance: 0.35,
@@ -1320,10 +1320,13 @@ void main() {
     // radial lift, vertical feed, and curl coupling without an ID check or a
     // global behavior change.
     vec2 radial = sourceDelta / max(length(sourceDelta), 0.006);
+    float sourceFeedTaper = uPlumeMode > 1.5
+      ? 1.0 - smoothstep(uPlumeStemParams.x, uPlumeStemParams.y, uNormalizedTime)
+      : 1.0;
     velocity += radial * sourceKernel * impulseEnvelope * (0.46 + 0.16 * uEnergy)
       * uSourceMotion.x * motionScale * uDt * 60.0;
     velocity.y += sourceKernel * rollingEnvelope * (0.20 + 0.13 * uEnergy)
-      * uSourceMotion.y * motionScale * uDt;
+      * uSourceMotion.y * sourceFeedTaper * motionScale * uDt;
     velocity += turbulence.xy * sourceKernel * (impulseEnvelope + rollingEnvelope * 0.42)
       * 0.026 * (uSourceMotion.w / 0.65) * motionScale * uDt * 60.0;
   } else {
@@ -1510,7 +1513,9 @@ void main() {
     // widthGrow relaxes the band from a narrow column into a broader, softer
     // one over the same window instead of holding one fixed width until it
     // simply cuts off.
-    float lateralOffset = turbulence.z * uPlumeStemParams.z * stemBreakup;
+    float corridorAsymmetry = uSeedOffsetsA.x * 0.24 * (0.4 + 0.6 * heightAbove);
+    float lateralOffset = (turbulence.z + corridorAsymmetry)
+      * uPlumeStemParams.z * stemBreakup;
     float coreLateral = lateral - lateralOffset;
     float widthGrow = mix(1.0, 2.4, stemBreakup);
     float coreBand = exp(
@@ -1694,6 +1699,12 @@ void main() {
     // weights provide low-yield-only heat/material separation, while the
     // existing shockwave block adds subordinate bands without entering
     // generic shader logic by preset ID.
+    float corridorWander = uSeedOffsetsA.x * uPlumeStemParams.z
+      * smoothstep(0.06, 0.18, uNormalizedTime) * 0.1;
+    vec2 lowYieldDelta = delta - vec2(corridorWander, 0.0);
+    float lowYieldCore = exp(
+      -dot(lowYieldDelta, lowYieldDelta) / max(0.0005, radius * radius)
+    );
     float lateSmoke = smoothstep(0.05, 0.13, uNormalizedTime)
       * (1.0 - smoothstep(0.5, 0.92, uNormalizedTime));
     // Reuse the source-detail sample as deterministic low-yield thermal
@@ -1707,11 +1718,12 @@ void main() {
       0.12,
       1.35
     );
-    temperature += source * core * thermalPockets * (flashEnvelope * 2.2 + fireEnvelope * 0.42)
+    float thermalStructure = thermalPockets * thermalPockets * thermalPockets;
+    temperature += source * lowYieldCore * thermalStructure * (flashEnvelope * 2.2 + fireEnvelope * 0.42)
       * uSourceScalar.x * uDt * 8.0;
-    incandescent += source * core * thermalPockets * (flashEnvelope * 1.5 + fireEnvelope * 0.7)
+    incandescent += source * lowYieldCore * thermalPockets * (flashEnvelope * 1.5 + fireEnvelope * 0.7)
       * uSourceScalar.z * uDt * 3.4;
-    smoke += source * core * lateSmoke * uSourceScalar.y * uDt * 0.8;
+    smoke += source * lowYieldCore * lateSmoke * uSourceScalar.y * uDt * 0.8;
 
     // The preserved branch predates profileShockwaveLayers(). Calling the
     // shared helper here makes its two low-yield bands active behind the same

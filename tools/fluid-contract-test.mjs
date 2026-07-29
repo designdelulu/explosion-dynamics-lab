@@ -100,6 +100,10 @@ assert.equal(flagshipProfile.profileId, "nuclear-airburst-fluid-v1");
 assert.equal(flagshipProfile.profileKind, 9);
 assert.equal(flagshipProfile.preserveResearchSource, true);
 assert.deepEqual(flagshipProfile.sourcePrimitives, ["radial-impulse", "vertical-jet", "paired-cap-vortices"]);
+assert.equal(flagshipProfile.source.heat, 0.54, "Low-yield temperature source must retain the narrowed heat plateau");
+assert.equal(flagshipProfile.source.incandescent, 1.12, "Low-yield incandescence must preserve the white-hot center");
+assert.equal(flagshipProfile.source.turbulence, 1.05, "Low-yield source turbulence must retain the stem-decorrelation tune");
+assert.equal(flagshipProfile.volume.bloom, 0.86, "Low-yield bloom must retain the structured-core tune");
 
 assert.equal(RESEARCH_FLUID_DIAGNOSTICS.beauty, 0);
 assert.equal(RESEARCH_FLUID_DIAGNOSTICS.final, RESEARCH_FLUID_DIAGNOSTICS.beauty);
@@ -282,6 +286,11 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     const c = profile.core;
     const tsarCore = RESEARCH_FLUID_PROFILES[TSAR_ID].core;
     assert.equal(c.mode, 1, "Low-yield must enable core-polish mode");
+    assert.deepEqual(
+      c,
+      { mode: 1, highlightThreshold: 2.32, highlightSharpness: 3.08, structureBlend: 0.79, bloomGateScale: 8.8 },
+      "Low-yield core separation must retain the approved final-pass values",
+    );
     assert.ok(c.highlightThreshold > 1.5 && c.highlightThreshold < tsarCore.highlightThreshold);
     assert.ok(c.highlightSharpness > 2 && c.highlightSharpness < tsarCore.highlightSharpness);
     assert.ok(c.structureBlend > 0 && c.structureBlend < tsarCore.structureBlend);
@@ -423,8 +432,8 @@ assert.match(shaders.forceFragment, /leftTangent[\s\S]*rightTangent[\s\S]*circul
 assert.match(shaders.forceFragment, /entrainment[\s\S]*velocity\.x/, "column entrainment missing");
 assert.match(
   shaders.forceFragment,
-  /uProfileKind\s*==\s*9[\s\S]*uSourceMotion\.x[\s\S]*uSourceMotion\.y[\s\S]*uSourceMotion\.w\s*\/\s*0\.65/,
-  "Nuclear Airburst branch must consume profile-specific radial, vertical, and turbulence weights",
+  /uProfileKind\s*==\s*9[\s\S]*float sourceFeedTaper = uPlumeMode > 1\.5[\s\S]*uSourceMotion\.x[\s\S]*uSourceMotion\.y \* sourceFeedTaper[\s\S]*uSourceMotion\.w\s*\/\s*0\.65/,
+  "Nuclear Airburst branch must taper its preserved vertical feed and consume profile-specific motion weights",
 );
 assert.match(
   shaders.scalarFragment,
@@ -433,8 +442,8 @@ assert.match(
 );
 assert.match(
   shaders.scalarFragment,
-  /uProfileKind\s*==\s*9[\s\S]*float thermalPockets = clamp\([\s\S]*uSourceMotion\.w\s*\/\s*0\.65[\s\S]*temperature \+= source \* core \* thermalPockets[\s\S]*incandescent \+= source \* core \* thermalPockets/,
-  "Nuclear Airburst source must reuse deterministic curl detail for thermal pockets",
+  /uProfileKind\s*==\s*9[\s\S]*float corridorWander = uSeedOffsetsA\.x \* uPlumeStemParams\.z[\s\S]*float lowYieldCore = exp\([\s\S]*float thermalPockets = clamp\([\s\S]*float thermalStructure = thermalPockets \* thermalPockets \* thermalPockets[\s\S]*temperature \+= source \* lowYieldCore \* thermalStructure[\s\S]*incandescent \+= source \* lowYieldCore \* thermalPockets/,
+  "Nuclear Airburst source must retain deterministic corridor wander and nonlinear thermal separation",
 );
 for (const shaderSource of Object.values(RESEARCH_FLUID_SHADER_SOURCES)) {
   assert.doesNotMatch(shaderSource, /low-yield-nuclear-airburst|tsar-bomba-scale-reference/, "Generic shader logic must not contain preset IDs");
@@ -631,6 +640,21 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
 
     const p = profile.plume;
     const tsarPlume = RESEARCH_FLUID_PROFILES[TSAR_ID].plume;
+    assert.deepEqual(
+      p,
+      {
+        mode: 2,
+        expansion: 0.012,
+        vortex: 0.04,
+        persistence: 0.015,
+        widen: 0.018,
+        feedTaperStart: 0.08,
+        feedTaperEnd: 0.24,
+        lateralJitter: 0.32,
+        turbulenceBlend: 0.15,
+      },
+      "Low-yield stem and plume controls must retain the approved final-pass values",
+    );
     assert.ok(p.feedTaperStart > 0 && p.feedTaperStart < p.feedTaperEnd);
     assert.ok(p.feedTaperStart < tsarPlume.feedTaperStart, "Low-yield feed must taper earlier than Tsar");
     assert.ok(p.feedTaperEnd < tsarPlume.feedTaperEnd, "Low-yield feed must finish tapering earlier than Tsar");
