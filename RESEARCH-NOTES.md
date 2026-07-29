@@ -419,6 +419,38 @@ Expected tracked changes are limited to `scripts/fluid-engine.js`,
 performance logs, comparisons, and generated exports remain under ignored
 `scratch/low-yield-airburst-visual-poc/`.
 
+## Low-yield dense shockwave pass (2026-07)
+
+The approved rollout still read as sparse because its profile exposed only the
+shared three explicit subordinate-ring slots, enabled two of them at strengths
+`0.24` and `0.18`, and left the third disabled. Those fixed shells were
+density-only additions close to the primary radius; they did not populate the
+interior bubble, varied only through a shared angular wobble, and faded as one
+small group. The analytical compositor continued to supply the clearest outer
+shock, so the final image usually resolved as one leading shell plus two faint
+echoes rather than a layered compression field.
+
+The retained solution uses `shockwave.mode: 2` only for
+`low-yield-nuclear-airburst`. Mode 1 and its three explicit bands remain
+unchanged for Tsar. The new mode evaluates one deterministic warped radial
+coordinate in the volume compositor, maps it to the nearest contour, and
+derives stable per-contour width/strength variation from the contour index and
+seed. This produces ten internal echoes in High, nine in Balanced, and seven
+in Mobile without a per-band shader loop. The family spans the interior
+`0.27–0.94` of the primary radius, biases strength toward the leading region,
+and varies spacing, width, angular continuity, front/rear visibility, onset,
+and fade.
+
+Mode 2 preserves the approved `0.24` and `0.18` explicit scalar rings,
+including their original irregularity and fade values, so temperature,
+incandescent, smoke, velocity, pressure, plume, and primary-ring simulation
+remain unchanged. The dense family exists only in the contour compositor,
+which samples the real ray-marched transmittance: rear segments are buried
+more strongly, front segments retain limited contrast, and fully opaque
+fireball or smoke still occludes every echo. Internal echoes begin in stages,
+soften from roughly t3.5, and are mostly cleared around t8; no smoke/plume
+dissipation value is changed.
+
 ## Browser numerical design
 
 The shared event-family simulation uses deterministic fixed steps and a WebGL2 field pipeline. Source injection is selected from bounded normalized primitives—radial and directional impulses, rings, ground sheets, vertical jets, offset kernels, pulsed columns, ejecta curtains, trails, sustained visual-combustion regions, and turbulent clusters—without introducing materials or engineering inputs:
