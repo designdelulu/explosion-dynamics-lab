@@ -221,8 +221,9 @@ const BASE_PROFILE = Object.freeze({
   }),
   quality: Object.freeze({ grid: 1, pressure: 1, rays: 1, tracers: 1, detail: 1 }),
   // Broad-plume research controls. mode 0 keeps a preset on its exact prior
-  // behavior; the low-yield airburst and Tsar historical reference opt in
-  // with separately tuned values.
+  // behavior; mode 1 is the existing historical-scale Tsar path, while mode 2
+  // gives low-yield its separate shaping path with the standard absorbing
+  // boundary.
   // feedTaperStart/feedTaperEnd/lateralJitter/turbulenceBlend are the central
   // -stem taper/breakup controls (2026-07 shockwave/stem/performance pass);
   // feedTaperStart/End default to the original hardcoded coreBand taper
@@ -471,29 +472,29 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       // motion leads vertical motion, the source is modestly wider, and curl
       // coupling is stronger without becoming a scaled-down historical plume.
       source: {
-        radius: 0.074, aspectX: 1.12, aspectY: 0.88,
-        radial: 1.16, vertical: 0.9, turbulence: 1.02,
-        heat: 0.94, smoke: 1.2, incandescent: 0.92, dust: 0.32,
-        capScale: 1.3, capRoll: 1.34,
+        centerY: 0.255, radius: 0.068, aspectX: 1.06, aspectY: 0.86,
+        radial: 1.07, vertical: 0.92, turbulence: 0.9,
+        heat: 0.92, smoke: 1, incandescent: 1.05, dust: 0.34,
+        capScale: 1.24, capRoll: 1.27,
       },
       physics: {
-        buoyancy: 0.9, vorticity: 1.28, velocityRetention: 0.993,
-        cooling: 0.86, smokeConversion: 1.18, scalarRetention: 0.999,
+        buoyancy: 0.88, vorticity: 1.12, velocityRetention: 0.991,
+        cooling: 0.9, smokeConversion: 0.78, scalarRetention: 0.998,
       },
       volume: {
-        scaleX: 1.48, scaleY: 1.04, depth: 1.22, opacity: 1.18,
-        shadow: 1.4, bloom: 1.08, distortion: 1.14, erosion: 1.08,
-        noiseScale: 1.1, dustVisibility: 0.58, exposure: 1,
-        toneMap: 0.18, backgroundIllumination: 0.3, emissionCurve: 0.9,
+        scaleX: 1.06, scaleY: 0.68, depth: 1.12, opacity: 0.76,
+        shadow: 1.45, bloom: 0.9, distortion: 1.08, erosion: 1.14,
+        noiseScale: 1.16, dustVisibility: 0.58, exposure: 0.92,
+        toneMap: 0.38, backgroundIllumination: 0.24, emissionCurve: 1,
       },
       plume: {
-        mode: 1, expansion: 0.36, vortex: 0.58, persistence: 0.34, widen: 0.38,
-        feedTaperStart: 0.19, feedTaperEnd: 0.44,
+        mode: 2, expansion: 0.006, vortex: 0.02, persistence: 0.015, widen: 0.022,
+        feedTaperStart: 0.12, feedTaperEnd: 0.32,
         lateralJitter: 0.2, turbulenceBlend: 0.1,
       },
       material: {
-        mode: 1, sootAbsorption: 1.35, dustAbsorption: 0.6,
-        detailBoost: 0.55, warmCoolContrast: 0.52,
+        mode: 1, sootAbsorption: 1.22, dustAbsorption: 0.72,
+        detailBoost: 0.35, warmCoolContrast: 0.45,
       },
       shockwave: {
         mode: 1,
@@ -505,11 +506,11 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
         fadeSpan: 0.12,
       },
       core: {
-        mode: 1, highlightThreshold: 2.02, highlightSharpness: 2.7,
-        structureBlend: 0.58, bloomGateScale: 7.5,
+        mode: 1, highlightThreshold: 2.3, highlightSharpness: 3,
+        structureBlend: 0.75, bloomGateScale: 8,
       },
       tracerMaterial: {
-        mode: 1, occlusionStrength: 1.7, sizeVariance: 0.35,
+        mode: 1, occlusionStrength: 1.8, sizeVariance: 0.35,
         brightnessVariance: 0.32, minSizeFloor: 1.45,
       },
     },
@@ -961,14 +962,14 @@ uniform vec4 uSeedOffsetsB;
 uniform vec4 uProfilePhysics;
 uniform vec4 uProfileDecay;
 uniform vec4 uProfileAux;
-// Tsar-scale broad-plume research controls. uPlumeMode is 0 for every shipped
-// preset except the Tsar historical reference, so this block is inert
-// (byte-identical behavior) for all other events. uPlumeParams packs
+// Profile-gated broad-plume research controls. uPlumeMode 0 is inert, mode 1
+// is the existing historical-scale variant, and mode 2 is the restrained
+// low-yield variant. uPlumeParams packs
 // (expansion, vortexStrength, persistence, columnWiden).
 uniform float uPlumeMode;
 uniform vec4 uPlumeParams;
-// Tsar-scale central-stem taper/breakup research controls, inert under the
-// same uPlumeMode gate as uPlumeParams above. Packs (feedTaperStart,
+// Central-stem taper/breakup controls, inert under the same uPlumeMode gate as
+// uPlumeParams above. Packs (feedTaperStart,
 // feedTaperEnd, lateralJitter, turbulenceBlend) — see the coreBand/
 // stemBreakup usage in FORCE_FRAGMENT for what each term does.
 uniform vec4 uPlumeStemParams;
@@ -1444,8 +1445,9 @@ void main() {
   velocity.y -= ceiling * smoothstep(0.09, 0.26, rimDistance)
     * (smoke + dust * 0.6) * 0.55 * uProfileAux.y * uDt;
 
-  // ---- Tsar-scale broad turbulent plume (research proof of concept) ----
-  // Inert unless uPlumeMode is set (Tsar historical reference only). Combines
+  // ---- Profile-gated broad turbulent plume (research mechanism) ----
+  // Inert unless uPlumeMode is set. Low-yield and Tsar opt in with separate
+  // modes and magnitudes. Combines
   // three paper-grounded mechanisms to break the narrow rising tube into a
   // broad, coherent, asymmetric mushroom body:
   //   1. Gas-expansion outward turning (Nguyen/Fedkiw/Jensen 2002, Fig 6-7):
@@ -1614,9 +1616,9 @@ void main() {
   temperature = max(0.0,
     temperature * exp(-uCooling * uProfileDecay.y * uDt * (0.42 + smoke * 0.08)) - radiativeLoss
   );
-  // Tsar-scale persistence (uPlumeParams.z): the monumental cloud must retain
-  // visible mass across its mature phase, so smoke dissipation is nudged
-  // toward unity for the Tsar reference only (inert elsewhere). Deferred
+  // Profile persistence (uPlumeParams.z): an opted-in cloud may retain visible
+  // mass across its mature phase, so smoke dissipation is nudged toward unity
+  // by a preset-specific amount (inert elsewhere). Deferred
   // dissipation is a documented CG smoke technique (Fedkiw/Stam/Jensen 2001:
   // low numerical dissipation keeps large plumes alive). The persistence
   // TARGET itself eases from 1.0 down to a real per-step floor once the
@@ -1646,15 +1648,16 @@ void main() {
   // The top margin absorbs far more gently than the sides so a developed cap
   // resting near the stratification ceiling persists through the late
   // timeline instead of being silently destroyed.
-  // The broad Tsar cap spreads wider and higher than other events, so its
-  // side/top guard bands are narrowed for that profile only — otherwise the
-  // umbrella's outer edges would be absorbed before they finish rolling.
-  float sideMargin = uPlumeMode > 0.5 ? 0.075 : 0.12;
-  float topMargin = uPlumeMode > 0.5 ? 0.035 : 0.055;
+  // Mode 1 is the historical-scale variant. Its cap spreads wider and higher
+  // than other events, so its side/top guard bands are narrowed; mode 2
+  // (low-yield shaping) deliberately retains the normal absorbing boundary.
+  float historicalBoundary = step(0.5, uPlumeMode) * (1.0 - step(1.5, uPlumeMode));
+  float sideMargin = mix(0.12, 0.075, historicalBoundary);
+  float topMargin = mix(0.055, 0.035, historicalBoundary);
   float sideGuard = smoothstep(0.0, sideMargin, vUv.x)
     * smoothstep(0.0, sideMargin, 1.0 - vUv.x);
   float topGuard = smoothstep(0.0, topMargin, 1.0 - vUv.y);
-  float topRetain = uPlumeMode > 0.5 ? 0.985 : 0.965;
+  float topRetain = mix(0.965, 0.985, historicalBoundary);
   float guardRetention = mix(pow(0.8, uDt * 60.0), 1.0, sideGuard)
     * mix(pow(topRetain, uDt * 60.0), 1.0, topGuard);
   temperature *= guardRetention;
@@ -1693,9 +1696,20 @@ void main() {
     // generic shader logic by preset ID.
     float lateSmoke = smoothstep(0.05, 0.13, uNormalizedTime)
       * (1.0 - smoothstep(0.5, 0.92, uNormalizedTime));
-    temperature += source * core * (flashEnvelope * 2.2 + fireEnvelope * 0.42)
+    // Reuse the source-detail sample as deterministic low-yield thermal
+    // pockets. The previous preserved source multiplied one smooth Gaussian
+    // by a narrow 0.46–1.10 spectral range every step, which diffused into a
+    // flat uniformly white orb. This wider, profile-weighted modulation
+    // leaves a white-hot center but opens orange and shadowed pockets without
+    // another texture read or any change to generic/Tsar source injection.
+    float thermalPockets = clamp(
+      0.68 + sourceDetail * 0.58 * (uSourceMotion.w / 0.65),
+      0.12,
+      1.35
+    );
+    temperature += source * core * thermalPockets * (flashEnvelope * 2.2 + fireEnvelope * 0.42)
       * uSourceScalar.x * uDt * 8.0;
-    incandescent += source * core * (flashEnvelope * 1.5 + fireEnvelope * 0.7)
+    incandescent += source * core * thermalPockets * (flashEnvelope * 1.5 + fireEnvelope * 0.7)
       * uSourceScalar.z * uDt * 3.4;
     smoke += source * core * lateSmoke * uSourceScalar.y * uDt * 0.8;
 
@@ -3681,7 +3695,7 @@ export class ResearchFluidEngine {
     this._uniform4f(program, 'uProfileDecay', ...state.decay);
     this._uniform4f(program, 'uProfileAux', ...state.profileAux);
     const plume = this.profile.plume || { mode: 0, expansion: 0, vortex: 0, persistence: 0, widen: 0 };
-    this._uniform1f(program, 'uPlumeMode', plume.mode > 0 ? 1 : 0);
+    this._uniform1f(program, 'uPlumeMode', clamp(finite(plume.mode, 0), 0, 2));
     this._uniform4f(
       program,
       'uPlumeParams',
@@ -4104,8 +4118,14 @@ export class ResearchFluidEngine {
 
   _sourceCenter() {
     if (this.profile.preserveResearchSource) {
-      // Preserve the flagship's established generic low-airburst placement.
-      return [0.5, clamp(0.27 + this.settings.altitude * 0.17, 0.2, 0.48)];
+      // Preserve the flagship's established generic low-airburst placement,
+      // while allowing its profile anchor to lower the source without moving
+      // the camera or affecting any other event. BASE_PROFILE.centerY is the
+      // exact neutral point, so the original source position is unchanged
+      // unless this isolated profile opts in.
+      const profileOffsetY = finite(this.profile.source.centerY, BASE_PROFILE.source.centerY)
+        - BASE_PROFILE.source.centerY;
+      return [0.5, clamp(0.27 + this.settings.altitude * 0.17 + profileOffsetY, 0.2, 0.48)];
     }
     // Other event families use normalized profile anchors. Altitude is only an
     // artistic offset inside the bounded field, never a real height or depth.

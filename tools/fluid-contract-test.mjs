@@ -12,6 +12,10 @@ import {
 } from "../scripts/fluid-engine.js";
 import { EVENT_PRESETS, PALETTES } from "../scripts/data.js";
 
+const LOW_YIELD_ID = "low-yield-nuclear-airburst";
+const TSAR_ID = "tsar-bomba-scale-reference";
+const RESEARCH_MODE_IDS = new Set([LOW_YIELD_ID, TSAR_ID]);
+
 const tiers = Object.values(RESEARCH_FLUID_TIERS);
 assert.deepEqual(tiers.map(({ id }) => id), ["mobile", "balanced", "high"]);
 for (const tier of tiers) {
@@ -113,17 +117,24 @@ assert.equal(RESEARCH_FLUID_DIAGNOSTICS.tracers, 8);
 assert.equal(RESEARCH_FLUID_DEFAULTS.presetId, "low-yield-nuclear-airburst");
 assert.equal(RESEARCH_FLUID_DEFAULTS.tier, "balanced");
 
-// --- Tsar-scale broad-plume research proof of concept (2026-07) ---------------
-// The plume research controls must remain opt-in: every profile except the
-// Tsar historical reference keeps mode 0 so its simulated behavior is
-// byte-identical to before this pass.
+// --- Profile-gated broad-plume research controls (2026-07) -------------------
+// Low-yield and Tsar opt in with distinct scales; all other presets remain
+// byte-identical and neutral.
 for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
   assert.ok(profile.plume && typeof profile.plume === "object", `${presetId}: plume config missing`);
   for (const key of ["mode", "expansion", "vortex", "persistence", "widen"]) {
     assert.ok(Number.isFinite(profile.plume[key]), `${presetId}: plume.${key} must be finite`);
   }
-  if (presetId === "tsar-bomba-scale-reference") {
-    assert.equal(profile.plume.mode, 1, "Tsar must enable the broad-plume mode");
+  if (presetId === LOW_YIELD_ID) {
+    assert.equal(profile.plume.mode, 2, "Low-yield must enable its separate mode 2 with standard absorbing boundaries");
+    assert.ok(profile.plume.expansion > 0 && profile.plume.expansion < RESEARCH_FLUID_PROFILES[TSAR_ID].plume.expansion);
+    assert.ok(profile.plume.vortex > 0 && profile.plume.vortex < RESEARCH_FLUID_PROFILES[TSAR_ID].plume.vortex);
+    assert.ok(profile.plume.persistence > 0 && profile.plume.persistence < RESEARCH_FLUID_PROFILES[TSAR_ID].plume.persistence);
+    assert.ok(profile.plume.widen > 0 && profile.plume.widen < RESEARCH_FLUID_PROFILES[TSAR_ID].plume.widen);
+    assert.ok(profile.source.radius > 0.065, "Low-yield source must widen from the preserved neutral radius");
+    assert.ok(profile.source.radial > profile.source.vertical, "Low-yield radial injection must lead vertical feed");
+  } else if (presetId === TSAR_ID) {
+    assert.equal(profile.plume.mode, 1, "Tsar must retain its existing historical-scale plume mode 1");
     assert.ok(profile.plume.expansion > 0, "Tsar expansion must be active");
     assert.ok(profile.plume.vortex > 0, "Tsar vortex population must be active");
     assert.ok(profile.plume.persistence > 0, "Tsar persistence must be active");
@@ -131,7 +142,7 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     // so the column is no longer a pencil jet.
     assert.ok(profile.source.radial >= profile.source.vertical, "Tsar radial injection must not be dominated by vertical");
   } else {
-    assert.equal(profile.plume.mode, 0, `${presetId}: broad-plume mode must remain off for non-Tsar presets`);
+    assert.equal(profile.plume.mode, 0, `${presetId}: broad-plume mode must remain neutral`);
   }
 }
 // The shaders and engine bindings must carry the plume uniforms.
@@ -143,22 +154,24 @@ for (const uniform of ["uPlumeMode", "uPlumeParams"]) {
   );
 }
 
-// --- Tsar-scale smoke-material research proof of concept (2026-07) -----------
-// Same opt-in contract as the plume controls above: every profile except the
-// Tsar historical reference keeps material.mode 0, so its rendering is
-// byte-identical to before this pass.
+// --- Profile-gated smoke-material controls (2026-07) -------------------------
 for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
   assert.ok(profile.material && typeof profile.material === "object", `${presetId}: material config missing`);
   for (const key of ["mode", "sootAbsorption", "dustAbsorption", "detailBoost", "warmCoolContrast"]) {
     assert.ok(Number.isFinite(profile.material[key]), `${presetId}: material.${key} must be finite`);
   }
-  if (presetId === "tsar-bomba-scale-reference") {
+  if (presetId === LOW_YIELD_ID) {
+    assert.equal(profile.material.mode, 1, "Low-yield must enable restrained smoke material");
+    assert.ok(profile.material.sootAbsorption > profile.material.dustAbsorption);
+    assert.ok(profile.material.detailBoost > 0 && profile.material.detailBoost < RESEARCH_FLUID_PROFILES[TSAR_ID].material.detailBoost);
+    assert.ok(profile.material.warmCoolContrast > 0 && profile.material.warmCoolContrast < RESEARCH_FLUID_PROFILES[TSAR_ID].material.warmCoolContrast);
+  } else if (presetId === TSAR_ID) {
     assert.equal(profile.material.mode, 1, "Tsar must enable the smoke-material mode");
     assert.ok(profile.material.sootAbsorption > profile.material.dustAbsorption, "Tsar soot must absorb more strongly than lofted dust");
     assert.ok(profile.material.detailBoost > 0, "Tsar energy-weighted detail octave must be active");
     assert.ok(profile.material.warmCoolContrast > 0, "Tsar lit/shadowed contrast widening must be active");
   } else {
-    assert.equal(profile.material.mode, 0, `${presetId}: smoke-material mode must remain off for non-Tsar presets`);
+    assert.equal(profile.material.mode, 0, `${presetId}: smoke-material mode must remain neutral`);
     assert.equal(profile.material.sootAbsorption, 1, `${presetId}: default soot absorption must stay neutral`);
     assert.equal(profile.material.dustAbsorption, 1, `${presetId}: default dust absorption must stay neutral`);
   }
@@ -259,18 +272,21 @@ assert.equal(
   "Scalar shader must taper exactly one sustain envelope",
 );
 
-// --- Tsar-scale core/tracer polish (2026-07) ---------------------------------
-// Same opt-in contract as the plume/material/dissipation controls above:
-// every profile except the Tsar historical reference keeps core.mode 0 (the
-// default threshold/sharpness/structureBlend/bloomGateScale of 1.5, 2.0, 0, 0
-// reduce every gated formula below to its pre-pass expression) and
-// tracerMaterial.mode 0 (occlusion/size/brightness variance all neutral).
+// --- Profile-gated core/tracer polish (2026-07) ------------------------------
 for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
   assert.ok(profile.core && typeof profile.core === "object", `${presetId}: core config missing`);
   for (const key of ["mode", "highlightThreshold", "highlightSharpness", "structureBlend", "bloomGateScale"]) {
     assert.ok(Number.isFinite(profile.core[key]), `${presetId}: core.${key} must be finite`);
   }
-  if (presetId === "tsar-bomba-scale-reference") {
+  if (presetId === LOW_YIELD_ID) {
+    const c = profile.core;
+    const tsarCore = RESEARCH_FLUID_PROFILES[TSAR_ID].core;
+    assert.equal(c.mode, 1, "Low-yield must enable core-polish mode");
+    assert.ok(c.highlightThreshold > 1.5 && c.highlightThreshold < tsarCore.highlightThreshold);
+    assert.ok(c.highlightSharpness > 2 && c.highlightSharpness < tsarCore.highlightSharpness);
+    assert.ok(c.structureBlend > 0 && c.structureBlend < tsarCore.structureBlend);
+    assert.ok(c.bloomGateScale > 0 && c.bloomGateScale < tsarCore.bloomGateScale);
+  } else if (presetId === TSAR_ID) {
     const c = profile.core;
     assert.equal(c.mode, 1, "Tsar must enable core-polish mode");
     assert.ok(c.highlightThreshold > 1.5, "Tsar highlight threshold must be raised above the default plateau point");
@@ -279,7 +295,7 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(c.bloomGateScale > 0, "Tsar bloom gradient gate must be active");
   } else {
     const c = profile.core;
-    assert.equal(c.mode, 0, `${presetId}: core-polish mode must remain off for non-Tsar presets`);
+    assert.equal(c.mode, 0, `${presetId}: core-polish mode must remain neutral`);
     assert.equal(c.highlightThreshold, 1.5, `${presetId}: core.highlightThreshold must stay neutral (1.5)`);
     assert.equal(c.highlightSharpness, 2.0, `${presetId}: core.highlightSharpness must stay neutral (2.0)`);
     assert.equal(c.structureBlend, 0, `${presetId}: core.structureBlend must stay neutral (0)`);
@@ -290,7 +306,15 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
   for (const key of ["mode", "occlusionStrength", "sizeVariance", "brightnessVariance", "minSizeFloor"]) {
     assert.ok(Number.isFinite(profile.tracerMaterial[key]), `${presetId}: tracerMaterial.${key} must be finite`);
   }
-  if (presetId === "tsar-bomba-scale-reference") {
+  if (presetId === LOW_YIELD_ID) {
+    const t = profile.tracerMaterial;
+    const tsarTracer = RESEARCH_FLUID_PROFILES[TSAR_ID].tracerMaterial;
+    assert.equal(t.mode, 1, "Low-yield must enable tracer-material mode");
+    assert.ok(t.occlusionStrength > 0 && t.occlusionStrength < tsarTracer.occlusionStrength);
+    assert.ok(t.sizeVariance > 0 && t.sizeVariance < tsarTracer.sizeVariance);
+    assert.ok(t.brightnessVariance > 0 && t.brightnessVariance < tsarTracer.brightnessVariance);
+    assert.ok(t.minSizeFloor > 1 && t.minSizeFloor < tsarTracer.minSizeFloor);
+  } else if (presetId === TSAR_ID) {
     const t = profile.tracerMaterial;
     assert.equal(t.mode, 1, "Tsar must enable tracer-occlusion mode");
     assert.ok(t.occlusionStrength > 0, "Tsar tracer occlusion must be active");
@@ -299,7 +323,7 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(t.minSizeFloor > 1.0, "Tsar tracer minSizeFloor must raise the point-size floor above the pre-pass 1.0px minimum");
   } else {
     const t = profile.tracerMaterial;
-    assert.equal(t.mode, 0, `${presetId}: tracer-occlusion mode must remain off for non-Tsar presets`);
+    assert.equal(t.mode, 0, `${presetId}: tracer-occlusion mode must remain neutral`);
     assert.equal(t.occlusionStrength, 0, `${presetId}: tracerMaterial.occlusionStrength must stay neutral (0)`);
     assert.equal(t.sizeVariance, 0, `${presetId}: tracerMaterial.sizeVariance must stay neutral (0)`);
     assert.equal(t.brightnessVariance, 0, `${presetId}: tracerMaterial.brightnessVariance must stay neutral (0)`);
@@ -397,7 +421,24 @@ assert.match(shaders.forceFragment, /uWind\s*\*\s*uDt/, "normalized wind force m
 assert.match(shaders.forceFragment, /curlGradient[\s\S]*uVorticity/, "vorticity confinement missing");
 assert.match(shaders.forceFragment, /leftTangent[\s\S]*rightTangent[\s\S]*circulation/, "paired-vortex cap circulation missing");
 assert.match(shaders.forceFragment, /entrainment[\s\S]*velocity\.x/, "column entrainment missing");
-assert.match(shaders.forceFragment, /uProfileKind\s*==\s*9[\s\S]*original centered impulse\/updraft math intact/, "Nuclear Airburst regression branch changed");
+assert.match(
+  shaders.forceFragment,
+  /uProfileKind\s*==\s*9[\s\S]*uSourceMotion\.x[\s\S]*uSourceMotion\.y[\s\S]*uSourceMotion\.w\s*\/\s*0\.65/,
+  "Nuclear Airburst branch must consume profile-specific radial, vertical, and turbulence weights",
+);
+assert.match(
+  shaders.scalarFragment,
+  /uProfileKind\s*==\s*9[\s\S]*uSourceScalar\.x[\s\S]*uSourceScalar\.z[\s\S]*uSourceScalar\.y[\s\S]*secondaryRings/,
+  "Nuclear Airburst branch must consume profile-specific scalar separation and shock layering",
+);
+assert.match(
+  shaders.scalarFragment,
+  /uProfileKind\s*==\s*9[\s\S]*float thermalPockets = clamp\([\s\S]*uSourceMotion\.w\s*\/\s*0\.65[\s\S]*temperature \+= source \* core \* thermalPockets[\s\S]*incandescent \+= source \* core \* thermalPockets/,
+  "Nuclear Airburst source must reuse deterministic curl detail for thermal pockets",
+);
+for (const shaderSource of Object.values(RESEARCH_FLUID_SHADER_SOURCES)) {
+  assert.doesNotMatch(shaderSource, /low-yield-nuclear-airburst|tsar-bomba-scale-reference/, "Generic shader logic must not contain preset IDs");
+}
 assert.match(shaders.forceFragment, /trailKernel\s*\*\s*entry\s*\*\s*onset/, "Meteor entry impulse must precede impact staging");
 assert.match(shaders.forceFragment, /ejectaKernel\s*\*\s*onset\s*\*\s*stagedImpact/, "Meteor ejecta force must begin at impact stage");
 assert.match(shaders.forceFragment, /sourceEnabled\(SOURCE_MULTIPLE\)[\s\S]*sourceEnabled\(SOURCE_TURBULENT\)[\s\S]*clusterKernel/, "Cluster turbulence must obey declared source primitives");
@@ -559,13 +600,7 @@ for (const [index, preset] of EVENT_PRESETS.entries()) {
 }
 assert.ok(effectivePerformanceFingerprints.size >= 8, "Per-profile performance settings are not materially adaptive");
 
-// --- Tsar-scale shockwave shell-layering + stem taper/breakup (2026-07) -----
-// Same opt-in contract as the plume/material/dissipation/core controls above:
-// every profile except the Tsar historical reference keeps
-// shockwave.mode 0 (all three secondary bands neutral: zero strength, unit
-// width) and plume.feedTaperStart/feedTaperEnd/lateralJitter/turbulenceBlend
-// at their neutral defaults (0.85, 1.05, 0, 0 — the exact pre-pass hardcoded
-// coreBand taper window), so simulation is byte-identical to before this pass.
+// --- Profile-gated shockwave layering + stem taper/breakup (2026-07) --------
 for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
   assert.ok(profile.shockwave && typeof profile.shockwave === "object", `${presetId}: shockwave config missing`);
   for (const ringKey of ["ringB", "ringC", "ringD"]) {
@@ -581,7 +616,27 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
   for (const key of ["feedTaperStart", "feedTaperEnd", "lateralJitter", "turbulenceBlend"]) {
     assert.ok(Number.isFinite(profile.plume[key]), `${presetId}: plume.${key} must be finite`);
   }
-  if (presetId === "tsar-bomba-scale-reference") {
+  if (presetId === LOW_YIELD_ID) {
+    const s = profile.shockwave;
+    const tsarShock = RESEARCH_FLUID_PROFILES[TSAR_ID].shockwave;
+    assert.equal(s.mode, 1, "Low-yield must enable shockwave layering");
+    assert.ok(s.ringB.strength > 0 && s.ringC.strength > 0, "Low-yield needs two subordinate bands");
+    assert.equal(s.ringD.strength, 0, "Low-yield must not inherit Tsar's third subordinate band");
+    assert.notEqual(s.ringB.radiusOffset, s.ringC.radiusOffset);
+    assert.notEqual(s.ringB.widthScale, s.ringC.widthScale);
+    assert.notEqual(s.ringB.strength, s.ringC.strength);
+    assert.ok(s.ringB.strength < tsarShock.ringB.strength);
+    assert.ok(s.ringC.strength < tsarShock.ringC.strength);
+    assert.ok(s.fadeStart + s.fadeSpan < tsarShock.fadeStart + tsarShock.fadeSpan);
+
+    const p = profile.plume;
+    const tsarPlume = RESEARCH_FLUID_PROFILES[TSAR_ID].plume;
+    assert.ok(p.feedTaperStart > 0 && p.feedTaperStart < p.feedTaperEnd);
+    assert.ok(p.feedTaperStart < tsarPlume.feedTaperStart, "Low-yield feed must taper earlier than Tsar");
+    assert.ok(p.feedTaperEnd < tsarPlume.feedTaperEnd, "Low-yield feed must finish tapering earlier than Tsar");
+    assert.ok(p.lateralJitter > 0 && p.lateralJitter < tsarPlume.lateralJitter);
+    assert.ok(p.turbulenceBlend > 0 && p.turbulenceBlend < tsarPlume.turbulenceBlend);
+  } else if (presetId === TSAR_ID) {
     const s = profile.shockwave;
     assert.equal(s.mode, 1, "Tsar must enable the shockwave shell-layering mode");
     for (const ringKey of ["ringB", "ringC", "ringD"]) {
@@ -611,7 +666,7 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(p.turbulenceBlend > 0, "Tsar stem turbulence blend must be active");
   } else {
     const s = profile.shockwave;
-    assert.equal(s.mode, 0, `${presetId}: shockwave mode must remain off for non-Tsar presets`);
+    assert.equal(s.mode, 0, `${presetId}: shockwave mode must remain neutral`);
     for (const ringKey of ["ringB", "ringC", "ringD"]) {
       assert.equal(s[ringKey].strength, 0, `${presetId}: shockwave.${ringKey}.strength must stay neutral (0)`);
       assert.equal(s[ringKey].widthScale, 1, `${presetId}: shockwave.${ringKey}.widthScale must stay neutral (1)`);
@@ -641,11 +696,16 @@ assert.match(
   /if \(uShockwaveMode < 0\.5\) return 0\.0;/,
   "Shockwave layers not properly gated behind uShockwaveMode",
 );
-assert.match(
-  RESEARCH_FLUID_SHADER_SOURCES.scalarFragment,
+for (const gatedConsumer of [
+  /float secondaryRings = profileShockwaveLayers\(vUv\);/,
   /float ring = profileRingKernel\(vUv\) \+ profileShockwaveLayers\(vUv\);/,
-  "Shockwave layers must be summed into the same ring term feeding thermalKernel",
-);
+]) {
+  assert.match(
+    RESEARCH_FLUID_SHADER_SOURCES.scalarFragment,
+    gatedConsumer,
+    "Both the preserved low-yield branch and generic primitive branch must consume shockwave layers",
+  );
+}
 // The force shader's velocity-shaping ring term must remain the single
 // primary ring only — the new bands are density-only shell structure and
 // must not become new pressure/velocity sources.
@@ -724,6 +784,11 @@ assert.match(
   /this\.tier\.id === 'balanced' \? BALANCED_VOLUME_FRAGMENT : VOLUME_FRAGMENT/,
   "Only the Balanced tier may compile the fitted edge-power shader variant",
 );
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.scalarFragment,
+  /float historicalBoundary = step\(0\.5, uPlumeMode\) \* \(1\.0 - step\(1\.5, uPlumeMode\)\);[\s\S]*float sideMargin = mix\(0\.12, 0\.075, historicalBoundary\);[\s\S]*float topMargin = mix\(0\.055, 0\.035, historicalBoundary\);/,
+  "Only historical-scale plume mode 1 may use the narrow Tsar boundary guards",
+);
 for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
   assert.ok(profile.edge && typeof profile.edge === "object", `${presetId}: edge config missing`);
   assert.ok(Number.isFinite(profile.edge.mode), `${presetId}: edge.mode must be finite`);
@@ -738,5 +803,5 @@ console.log("Explosion Dynamics Lab fluid contract test: PASS");
 console.log(`  ${tiers.length} bounded tiers × ${EVENT_PRESETS.length} preset profiles across seven event families`);
 console.log("  primitive diversity, profile budgets, palette-driven volume uniforms, fluid evolution, and GPU tracers verified");
 console.log("  non-WebGL runtime fails closed to the existing Canvas renderer");
-console.log("  Tsar shockwave shell-layering and stem taper/breakup gating verified Tsar-only");
+console.log("  low-yield mode 2 and historical-scale mode 1 remain profile-isolated");
 console.log("  dense-phase raymarch shading skip reverted; domain-edge envelope now organic and Tsar-gated");
