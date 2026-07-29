@@ -233,13 +233,11 @@ const BASE_PROFILE = Object.freeze({
     mode: 0, expansion: 0, vortex: 0, persistence: 0, widen: 0,
     feedTaperStart: 0.85, feedTaperEnd: 1.05, lateralJitter: 0, turbulenceBlend: 0,
   }),
-  // Shockwave shell-layering research controls (2026-07 Tsar shockwave/stem/
-  // performance pass). mode 0 keeps a preset byte-identical to before this
-  // mechanism — low-yield and Tsar use separate ring tuning. ringB/C/D
-  // are (radiusOffset, widthScale, strength, phaseOffset) for three secondary
-  // shell bands layered around the existing primary ring; irregularity is
-  // angular wobble strength; fadeStart/fadeSpan describe when the secondary
-  // structure softens back out (normalized time).
+  // Shockwave shell-layering research controls. mode 0 is inert, mode 1 keeps
+  // the established three explicit Tsar bands, and mode 2 selects the compact
+  // deterministic contour family used only by low-yield. The dense family is
+  // described by quality-specific counts plus bounded radius, spacing, width,
+  // strength, angular-continuity, depth, onset, and fade variation.
   shockwave: Object.freeze({
     mode: 0,
     ringB: Object.freeze({ radiusOffset: 0, widthScale: 1, strength: 0, phaseOffset: 0 }),
@@ -248,6 +246,23 @@ const BASE_PROFILE = Object.freeze({
     irregularity: 0,
     fadeStart: 1,
     fadeSpan: 0.001,
+    denseBandsHigh: 0,
+    denseBandsBalanced: 0,
+    denseBandsMobile: 0,
+    denseInnerRadius: 0,
+    denseOuterRadius: 0,
+    denseSpacingVariation: 0,
+    denseWidthMin: 0,
+    denseWidthMax: 0,
+    denseInnerStrength: 0,
+    denseOuterStrength: 0,
+    denseSegmentVariation: 0,
+    denseDepthContrast: 0,
+    denseOnsetSpread: 0,
+    denseFadeVariation: 0,
+    denseIrregularity: 0,
+    denseFadeStart: 0,
+    denseFadeSpan: 0,
   }),
   // Smoke-material research controls (2026-07 Tsar smoke-material pass). mode 0
   // keeps a preset byte-identical to before this mechanism; low-yield and Tsar
@@ -497,13 +512,30 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
         detailBoost: 0.35, warmCoolContrast: 0.45,
       },
       shockwave: {
-        mode: 1,
+        mode: 2,
         ringB: { radiusOffset: -0.22, widthScale: 1.15, strength: 0.24, phaseOffset: 0.01 },
         ringC: { radiusOffset: 0.14, widthScale: 0.82, strength: 0.18, phaseOffset: 0.035 },
         ringD: { radiusOffset: 0, widthScale: 1, strength: 0, phaseOffset: 0 },
         irregularity: 0.035,
         fadeStart: 0.28,
         fadeSpan: 0.12,
+        denseBandsHigh: 10,
+        denseBandsBalanced: 9,
+        denseBandsMobile: 7,
+        denseInnerRadius: 0.27,
+        denseOuterRadius: 0.94,
+        denseSpacingVariation: 0.42,
+        denseWidthMin: 0.04,
+        denseWidthMax: 0.095,
+        denseInnerStrength: 0.11,
+        denseOuterStrength: 0.34,
+        denseSegmentVariation: 1,
+        denseDepthContrast: 0.52,
+        denseOnsetSpread: 0.055,
+        denseFadeVariation: 0.045,
+        denseIrregularity: 0.068,
+        denseFadeStart: 0.12,
+        denseFadeSpan: 0.15,
       },
       core: {
         mode: 1, highlightThreshold: 2.32, highlightSharpness: 3.08,
@@ -982,20 +1014,9 @@ uniform vec4 uPlumeStemParams;
 uniform float uDissipationMode;
 uniform vec4 uDissipationParams;
 uniform vec4 uDissipationParams2;
-// Tsar-scale shockwave shell-layering research controls. uShockwaveMode is 0
-// for every shipped preset except the Tsar historical reference, so this
-// block is inert (byte-identical behavior) for all other events, and the
-// force pass keeps using the single primary ring (profileRingKernel) either
-// way — these bands are density-only additional shell structure, not new
-// pressure/velocity sources. Each of uShockwaveRingB/C/D packs (radiusOffset,
-// widthScale, strength, phaseOffset): radiusOffset is added to the primary
-// ring radius (uSourceAux.x, itself a multiple of source radius), widthScale
-// scales band thickness relative to the primary ring, strength is a
-// contribution multiplier, and phaseOffset is a normalized-time onset delay
-// so bands do not all appear/fade in lockstep. uShockwaveAux packs
-// (irregularity, fadeStart, fadeSpan, unused) — irregularity is angular
-// radius wobble strength, fadeStart/fadeSpan describe the shared
-// normalized-time window over which the secondary structure softens back out.
+// Profile-gated scalar shockwave layering. Modes 1 and 2 retain the three
+// explicit subordinate-ring slots; the additional low-yield mode-2 contour
+// family is declared and evaluated only by the volume compositor.
 uniform float uShockwaveMode;
 uniform vec4 uShockwaveRingB;
 uniform vec4 uShockwaveRingC;
@@ -1088,8 +1109,9 @@ float profileShockwaveBand(vec2 uv, vec4 band, float angleSeed) {
   return shell * band.z * onset * clamp(fade, 0.0, 1.0);
 }
 
-// Sum of the secondary shell bands, zero (and byte-identical to before this
-// pass) for every preset except the Tsar historical reference.
+// Mode 0 collapses exactly to zero. Modes 1 and 2 retain the established
+// explicit scalar rings; mode 2 adds its dense family only in the volume
+// compositor so the approved low-yield simulation field remains unchanged.
 float profileShockwaveLayers(vec2 uv) {
   if (uShockwaveMode < 0.5) return 0.0;
   return profileShockwaveBand(uv, uShockwaveRingB, 1.7)
@@ -1726,8 +1748,10 @@ void main() {
     smoke += source * lowYieldCore * lateSmoke * uSourceScalar.y * uDt * 0.8;
 
     // The preserved branch predates profileShockwaveLayers(). Calling the
-    // shared helper here makes its two low-yield bands active behind the same
-    // uShockwaveMode gate used by Tsar; mode 0 still returns exact zero.
+    // shared helper here keeps the approved explicit low-yield rings
+    // byte-for-byte. Dense mode 2 adds no further scalar terms; its contour
+    // family is composited in the volume pass, where real accumulated
+    // transmittance hides rear/internal segments behind opaque smoke.
     float secondaryRings = profileShockwaveLayers(vUv);
     temperature += source * secondaryRings * uDt * 0.34;
     incandescent += source * secondaryRings * uDt * 0.12;
@@ -2155,6 +2179,18 @@ uniform vec4 uMaterialParams;
 // 0.0, 0.0) reduce every formula below to its original, pre-pass value.
 uniform float uCoreMode;
 uniform vec4 uCoreParams;
+// Low-yield dense shock contours. Mode 2 is bound only by the low-yield
+// profile; every other preset receives mode 0 or the unchanged explicit mode
+// 1 and exits before evaluating the contour family. Shape packs (source
+// radius, aspect X, aspect Y, source-ring scale); Aux packs (irregularity,
+// fade start, fade span, normalized time). Dense A/B/C match the compact
+// profile definition used by the source architecture.
+uniform float uShockwaveMode;
+uniform vec4 uShockwaveVolumeShape;
+uniform vec4 uShockwaveAux;
+uniform vec4 uShockwaveDenseA;
+uniform vec4 uShockwaveDenseB;
+uniform vec4 uShockwaveDenseC;
 // Domain-edge envelope research control (2026-07 Tsar dissipation-artifact
 // fix). uEdgeMode is 0 for every shipped preset (byte-identical rendering,
 // the original independent side/top smoothstep rectangle below) and 1 only
@@ -2341,6 +2377,133 @@ vec4 diagnosticColor(
   float field = clamp(scalar.g * 0.36 + scalar.b * 0.42 + scalar.a * 0.2, 0.0, 1.0);
   vec3 color = vec3(0.06, 0.16, 0.2) * field;
   return vec4(color, inside * max(field * 0.62, 0.08));
+}
+
+float denseShockwaveContour(vec2 uv, float plumeTransmittance) {
+  if (uShockwaveMode < 1.5) return 0.0;
+  vec2 delta = uv - uSourceCenter;
+  vec2 scaled = delta / max(
+    vec2(0.002),
+    uShockwaveVolumeShape.x * uShockwaveVolumeShape.yz
+  );
+  float radius = length(scaled);
+  float angle = atan(scaled.y, scaled.x);
+  float seedPhase = float(uSeed & 1023u) / 1023.0 * 6.28318530718;
+  float normalizedTime = uShockwaveAux.w;
+
+  // The leading contour expands from the source region across the visible
+  // bubble during the early event. Subordinate radii remain strictly inside
+  // it, so no generated band can detach outside the analytical primary shock.
+  float sourceRingScale = uShockwaveVolumeShape.w / 1.2;
+  float leadingRadius = sourceRingScale
+    * (1.35 + normalizedTime * 46.0);
+  float innerRadius = leadingRadius * uShockwaveDenseA.y;
+  float outerRadius = leadingRadius * uShockwaveDenseA.z;
+  float sharedBend = uShockwaveAux.x * (
+    sin(angle * 2.0 + seedPhase) * 0.48
+    + sin(angle * 5.0 - seedPhase * 1.3) * 0.32
+    + sin(angle * 9.0 + seedPhase * 0.7) * 0.2
+  );
+  float bentRadius = radius * (1.0 + sharedBend);
+  float radialPosition = (bentRadius - innerRadius)
+    / max(0.02, outerRadius - innerRadius);
+  float radialWindow = smoothstep(0.0, 0.035, radialPosition)
+    * (1.0 - smoothstep(0.965, 1.0, radialPosition));
+  radialPosition = clamp(radialPosition, 0.0, 1.0);
+
+  float bandCount = max(1.0, uShockwaveDenseA.x);
+  float spacingWarp = uShockwaveDenseA.w * (
+    sin(radialPosition * 10.7 + seedPhase * 1.6) * 0.62
+    + sin(radialPosition * 23.3 - seedPhase * 0.8) * 0.38
+  );
+  float contourCoordinate = pow(radialPosition, 1.28) * bandCount
+    - 0.5 + spacingWarp;
+  float contourIndex = floor(contourCoordinate + 0.5);
+  float bandHash = fract(sin(
+    contourIndex * 12.9898 + seedPhase * 23.117
+  ) * 43758.5453);
+  float angularWarp = uShockwaveAux.x * bandCount * 0.76 * (
+    sin(
+      angle * (2.0 + mod(contourIndex, 4.0))
+      + contourIndex * 1.37
+      + seedPhase
+    ) * 0.68
+    + sin(
+      angle * (6.0 + mod(contourIndex, 3.0))
+      - contourIndex * 0.83
+      - seedPhase * 1.4
+    ) * 0.32
+  );
+  float distanceFromBand = abs(
+    contourCoordinate + angularWarp - contourIndex
+  );
+  float width = mix(uShockwaveDenseB.x, uShockwaveDenseB.y, bandHash);
+  width = max(width, fwidth(contourCoordinate) * 0.72);
+  float line = exp(
+    -distanceFromBand * distanceFromBand
+    / max(0.0004, width * width)
+  );
+
+  float broadSegment = 0.5 + 0.5 * sin(
+    angle * (1.0 + mod(contourIndex, 3.0))
+    + contourIndex * 1.11
+    + seedPhase
+  );
+  float fineSegment = 0.5 + 0.5 * sin(
+    angle * (4.0 + mod(contourIndex, 2.0))
+    - contourIndex * 0.73
+    - seedPhase * 0.8
+  );
+  float segmentMask = smoothstep(
+    0.3,
+    0.74,
+    broadSegment * 0.72 + fineSegment * 0.28
+  );
+  float brokenSegment = mix(0.035, 1.0, segmentMask);
+  float continuity = mix(
+    1.0,
+    brokenSegment,
+    uShockwaveDenseC.x * mix(0.9, 1.0, bandHash)
+  );
+  float frontFacing = 0.5 + 0.5 * sin(
+    angle + seedPhase * 0.37 + radialPosition * 1.5
+  );
+  float depthVisibility = mix(
+    1.0,
+    mix(0.32, 1.0, frontFacing),
+    uShockwaveDenseC.y
+  );
+
+  float onsetDelay = 0.006 + uShockwaveDenseC.z
+    * (1.0 - radialPosition)
+    * mix(0.7, 1.18, bandHash);
+  float onset = smoothstep(onsetDelay, onsetDelay + 0.022, normalizedTime);
+  float fadeStart = uShockwaveAux.y
+    - (1.0 - radialPosition) * uShockwaveDenseC.w * mix(0.55, 1.0, bandHash);
+  float fadeEnd = uShockwaveAux.y + uShockwaveAux.z
+    + bandHash * uShockwaveDenseC.w * 0.35;
+  float fade = 1.0 - smoothstep(
+    max(0.0, fadeStart),
+    max(fadeStart + 0.01, fadeEnd),
+    normalizedTime
+  );
+  float strength = mix(
+    uShockwaveDenseB.z,
+    uShockwaveDenseB.w,
+    pow(radialPosition, 0.72)
+  ) * mix(0.5, 1.28, bandHash);
+
+  // Rear-facing segments use the accumulated volume transmittance and are
+  // strongly buried by opaque plume material. Front segments retain a little
+  // more contrast, but the square-root term still approaches zero as real
+  // plume opacity approaches one.
+  float occlusion = mix(
+    plumeTransmittance,
+    sqrt(plumeTransmittance),
+    frontFacing * 0.62
+  );
+  return line * strength * continuity * depthVisibility
+    * onset * clamp(fade, 0.0, 1.0) * radialWindow * occlusion;
 }
 
 void main() {
@@ -2594,6 +2757,12 @@ void main() {
   accumulated += bloom * 0.018 * uPhase.x * uVolumeProfile0.w * bloomGate
     * edgeExtinction(distortedUv, edgeProfile, boundaryWobble);
   accumulated += uPaletteBackground * uVolumeProfile2.z * (1.0 - transmittance) * 0.12;
+  float shockwaveContour = denseShockwaveContour(
+    distortedUv,
+    clamp(transmittance, 0.0, 1.0)
+  );
+  vec3 shockwaveColor = mix(uPaletteSmokeLight, uPaletteCore, 0.72);
+  accumulated += shockwaveColor * shockwaveContour * 0.88;
 
   // Density governs opacity across the fire-to-cloud handoff. Phase values
   // modulate illumination and late dissipation gently; they no longer suppress
@@ -2608,7 +2777,13 @@ void main() {
   // root — per-layer density and emission already carry the full mask), so
   // the volume rectangle can never appear against the environment behind it.
   float domainFade = sqrt(edgeExtinction(localUv, edgeProfile, boundaryWobble));
-  float alpha = clamp((1.0 - transmittance) * atmosphericFade * domainFade, 0.0, 0.98);
+  float densityOpacity = (1.0 - transmittance) * atmosphericFade;
+  float shockOpacity = shockwaveContour * 0.12 * atmosphericFade;
+  float alpha = clamp(
+    (densityOpacity + shockOpacity) * domainFade,
+    0.0,
+    0.98
+  );
   vec3 mapped = toneMap(accumulated * illuminationEnvelope);
   outputColor = vec4(mapped * alpha, alpha);
 }`;
@@ -3110,6 +3285,7 @@ export class ResearchFluidEngine {
         this._uniform1i(program, 'uRaySteps', raySteps);
         this._uniform1ui(program, 'uSeed', this.settings.seed);
         this._uniform4f(program, 'uLayerVisibility', ...layerVisibility);
+        this._bindVolumeShockwaveUniforms(program);
         this._bindVolumeProfileUniforms(program);
         this._bindPaletteUniforms(program);
       }, this.width, this.height);
@@ -3746,7 +3922,7 @@ export class ResearchFluidEngine {
       finite(dissipation.motionDamp, 0),
     );
     const shockwave = this.profile.shockwave || BASE_PROFILE.shockwave;
-    this._uniform1f(program, 'uShockwaveMode', shockwave.mode > 0 ? 1 : 0);
+    this._uniform1f(program, 'uShockwaveMode', clamp(finite(shockwave.mode, 0), 0, 2));
     const bindShockwaveRing = (name, ring) => {
       this._uniform4f(
         program,
@@ -3819,6 +3995,57 @@ export class ResearchFluidEngine {
     );
     const edge = this.profile.edge || { mode: 0 };
     this._uniform1f(program, 'uEdgeMode', edge.mode > 0 ? 1 : 0);
+  }
+
+  _bindVolumeShockwaveUniforms(program) {
+    const shockwave = this.profile.shockwave || BASE_PROFILE.shockwave;
+    const source = this.profile.source;
+    this._uniform1f(program, 'uShockwaveMode', clamp(finite(shockwave.mode, 0), 0, 2));
+    this._uniform4f(
+      program,
+      'uShockwaveVolumeShape',
+      finite(source.radius, 0.08),
+      finite(source.aspectX, 1),
+      finite(source.aspectY, 1),
+      finite(source.ringRadius, 0.08),
+    );
+    this._uniform4f(
+      program,
+      'uShockwaveAux',
+      finite(shockwave.denseIrregularity, 0),
+      finite(shockwave.denseFadeStart, 0),
+      finite(shockwave.denseFadeSpan, 0.001),
+      clamp(this.simulationTime / Math.max(0.001, this.settings.duration), 0, 1),
+    );
+    const denseBandCount = this.tier.id === 'high'
+      ? finite(shockwave.denseBandsHigh, 0)
+      : this.tier.id === 'mobile'
+        ? finite(shockwave.denseBandsMobile, 0)
+        : finite(shockwave.denseBandsBalanced, 0);
+    this._uniform4f(
+      program,
+      'uShockwaveDenseA',
+      denseBandCount,
+      finite(shockwave.denseInnerRadius, 0),
+      finite(shockwave.denseOuterRadius, 0),
+      finite(shockwave.denseSpacingVariation, 0),
+    );
+    this._uniform4f(
+      program,
+      'uShockwaveDenseB',
+      finite(shockwave.denseWidthMin, 0),
+      finite(shockwave.denseWidthMax, 0),
+      finite(shockwave.denseInnerStrength, 0),
+      finite(shockwave.denseOuterStrength, 0),
+    );
+    this._uniform4f(
+      program,
+      'uShockwaveDenseC',
+      finite(shockwave.denseSegmentVariation, 0),
+      finite(shockwave.denseDepthContrast, 0),
+      finite(shockwave.denseOnsetSpread, 0),
+      finite(shockwave.denseFadeVariation, 0),
+    );
   }
 
   _bindPaletteUniforms(program) {

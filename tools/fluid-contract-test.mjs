@@ -619,7 +619,14 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
       assert.ok(Number.isFinite(ring[key]), `${presetId}: shockwave.${ringKey}.${key} must be finite`);
     }
   }
-  for (const key of ["mode", "irregularity", "fadeStart", "fadeSpan"]) {
+  for (const key of [
+    "mode", "irregularity", "fadeStart", "fadeSpan",
+    "denseBandsHigh", "denseBandsBalanced", "denseBandsMobile",
+    "denseInnerRadius", "denseOuterRadius", "denseSpacingVariation",
+    "denseWidthMin", "denseWidthMax", "denseInnerStrength", "denseOuterStrength",
+    "denseSegmentVariation", "denseDepthContrast", "denseOnsetSpread", "denseFadeVariation",
+    "denseIrregularity", "denseFadeStart", "denseFadeSpan",
+  ]) {
     assert.ok(Number.isFinite(profile.shockwave[key]), `${presetId}: shockwave.${key} must be finite`);
   }
   for (const key of ["feedTaperStart", "feedTaperEnd", "lateralJitter", "turbulenceBlend"]) {
@@ -627,16 +634,39 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
   }
   if (presetId === LOW_YIELD_ID) {
     const s = profile.shockwave;
-    const tsarShock = RESEARCH_FLUID_PROFILES[TSAR_ID].shockwave;
-    assert.equal(s.mode, 1, "Low-yield must enable shockwave layering");
-    assert.ok(s.ringB.strength > 0 && s.ringC.strength > 0, "Low-yield needs two subordinate bands");
-    assert.equal(s.ringD.strength, 0, "Low-yield must not inherit Tsar's third subordinate band");
-    assert.notEqual(s.ringB.radiusOffset, s.ringC.radiusOffset);
-    assert.notEqual(s.ringB.widthScale, s.ringC.widthScale);
-    assert.notEqual(s.ringB.strength, s.ringC.strength);
-    assert.ok(s.ringB.strength < tsarShock.ringB.strength);
-    assert.ok(s.ringC.strength < tsarShock.ringC.strength);
-    assert.ok(s.fadeStart + s.fadeSpan < tsarShock.fadeStart + tsarShock.fadeSpan);
+    assert.equal(s.mode, 2, "Low-yield alone must enable the dense contour-family mode");
+    assert.deepEqual(
+      [s.denseBandsMobile, s.denseBandsBalanced, s.denseBandsHigh],
+      [7, 9, 10],
+      "Low-yield must retain dense layering in every quality tier",
+    );
+    assert.ok(s.denseInnerRadius > 0 && s.denseInnerRadius < s.denseOuterRadius);
+    assert.ok(s.denseOuterRadius < 1, "Dense echoes must stay inside the primary leading shock");
+    assert.ok(s.denseSpacingVariation > 0, "Dense echoes need nonuniform spacing");
+    assert.ok(s.denseWidthMin > 0 && s.denseWidthMin < s.denseWidthMax);
+    assert.ok(s.denseInnerStrength > 0 && s.denseInnerStrength < s.denseOuterStrength);
+    assert.ok(s.denseSegmentVariation > 0, "Dense echoes need partial angular visibility");
+    assert.ok(s.denseDepthContrast > 0, "Dense echoes need front/rear depth modulation");
+    assert.ok(s.denseOnsetSpread > 0, "Dense echoes must not appear in lockstep");
+    assert.ok(s.denseFadeVariation > 0, "Dense echoes must not fade in lockstep");
+    assert.deepEqual(
+      [s.ringB, s.ringC, s.ringD, s.irregularity, s.fadeStart, s.fadeSpan],
+      [
+        { radiusOffset: -0.22, widthScale: 1.15, strength: 0.24, phaseOffset: 0.01 },
+        { radiusOffset: 0.14, widthScale: 0.82, strength: 0.18, phaseOffset: 0.035 },
+        { radiusOffset: 0, widthScale: 1, strength: 0, phaseOffset: 0 },
+        0.035,
+        0.28,
+        0.12,
+      ],
+      "Low-yield scalar rings must retain every approved main value",
+    );
+    assert.ok(s.denseIrregularity > s.irregularity);
+    assert.ok(s.denseFadeStart > 0 && s.denseFadeStart < 0.2);
+    assert.ok(
+      s.denseFadeStart + s.denseFadeSpan < 0.3,
+      "Low-yield dense echoes must clear by the late plume",
+    );
 
     const p = profile.plume;
     const tsarPlume = RESEARCH_FLUID_PROFILES[TSAR_ID].plume;
@@ -662,6 +692,36 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(p.turbulenceBlend > 0 && p.turbulenceBlend < tsarPlume.turbulenceBlend);
   } else if (presetId === TSAR_ID) {
     const s = profile.shockwave;
+    assert.deepEqual(
+      s,
+      {
+        mode: 1,
+        ringB: { radiusOffset: -0.32, widthScale: 1.35, strength: 0.42, phaseOffset: 0.015 },
+        ringC: { radiusOffset: 0.22, widthScale: 0.75, strength: 0.34, phaseOffset: 0.05 },
+        ringD: { radiusOffset: -0.55, widthScale: 1.9, strength: 0.24, phaseOffset: 0.03 },
+        irregularity: 0.05,
+        fadeStart: 0.44,
+        fadeSpan: 0.14,
+        denseBandsHigh: 0,
+        denseBandsBalanced: 0,
+        denseBandsMobile: 0,
+        denseInnerRadius: 0,
+        denseOuterRadius: 0,
+        denseSpacingVariation: 0,
+        denseWidthMin: 0,
+        denseWidthMax: 0,
+        denseInnerStrength: 0,
+        denseOuterStrength: 0,
+        denseSegmentVariation: 0,
+        denseDepthContrast: 0,
+        denseOnsetSpread: 0,
+        denseFadeVariation: 0,
+        denseIrregularity: 0,
+        denseFadeStart: 0,
+        denseFadeSpan: 0,
+      },
+      "Tsar shockwave values must remain exactly unchanged",
+    );
     assert.equal(s.mode, 1, "Tsar must enable the shockwave shell-layering mode");
     for (const ringKey of ["ringB", "ringC", "ringD"]) {
       assert.ok(s[ringKey].strength > 0, `Tsar shockwave.${ringKey}.strength must be active`);
@@ -696,6 +756,15 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
       assert.equal(s[ringKey].widthScale, 1, `${presetId}: shockwave.${ringKey}.widthScale must stay neutral (1)`);
       assert.equal(s[ringKey].radiusOffset, 0, `${presetId}: shockwave.${ringKey}.radiusOffset must stay neutral (0)`);
     }
+    for (const key of [
+      "denseBandsHigh", "denseBandsBalanced", "denseBandsMobile",
+      "denseInnerRadius", "denseOuterRadius", "denseSpacingVariation",
+      "denseWidthMin", "denseWidthMax", "denseInnerStrength", "denseOuterStrength",
+      "denseSegmentVariation", "denseDepthContrast", "denseOnsetSpread", "denseFadeVariation",
+      "denseIrregularity", "denseFadeStart", "denseFadeSpan",
+    ]) {
+      assert.equal(s[key], 0, `${presetId}: shockwave.${key} must stay neutral (0)`);
+    }
     const p = profile.plume;
     assert.equal(p.feedTaperStart, 0.85, `${presetId}: plume.feedTaperStart must stay at the pre-pass default (0.85)`);
     assert.equal(p.feedTaperEnd, 1.05, `${presetId}: plume.feedTaperEnd must stay at the pre-pass default (1.05)`);
@@ -705,31 +774,38 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
 }
 // The scalar/velocity shaders must carry the new uniforms (declared once in
 // the shared SOURCE_PROFILE_UNIFORMS block).
-for (const uniform of ["uShockwaveMode", "uShockwaveRingB", "uShockwaveRingC", "uShockwaveRingD", "uShockwaveAux", "uPlumeStemParams"]) {
+for (const uniform of [
+  "uShockwaveMode", "uShockwaveRingB", "uShockwaveRingC", "uShockwaveRingD",
+  "uShockwaveAux", "uPlumeStemParams",
+]) {
   assert.match(
     `${RESEARCH_FLUID_SHADER_SOURCES.forceFragment}\n${RESEARCH_FLUID_SHADER_SOURCES.scalarFragment}`,
     new RegExp(`uniform[^;]*\\b${uniform}\\b`),
     `${uniform}: uniform missing from shaders`,
   );
 }
-// The three secondary bands must be reachable only through uShockwaveMode,
-// and must collapse to zero (not affecting the pre-existing single-ring
-// behavior) when it is 0.
+// Both subordinate paths must be reachable only through uShockwaveMode, and
+// mode 0 must collapse to zero without affecting the primary ring.
 assert.match(
   RESEARCH_FLUID_SHADER_SOURCES.scalarFragment,
   /if \(uShockwaveMode < 0\.5\) return 0\.0;/,
   "Shockwave layers not properly gated behind uShockwaveMode",
 );
-for (const gatedConsumer of [
+assert.doesNotMatch(
+  RESEARCH_FLUID_SHADER_SOURCES.scalarFragment,
+  /for\s*\([^)]*dense/i,
+  "Dense contour family must remain a constant-cost procedural formulation, not one branch per band",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.scalarFragment,
   /float secondaryRings = profileShockwaveLayers\(vUv\);/,
+  "Dense mode must preserve the approved low-yield scalar-ring injection",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.scalarFragment,
   /float ring = profileRingKernel\(vUv\) \+ profileShockwaveLayers\(vUv\);/,
-]) {
-  assert.match(
-    RESEARCH_FLUID_SHADER_SOURCES.scalarFragment,
-    gatedConsumer,
-    "Both the preserved low-yield branch and generic primitive branch must consume shockwave layers",
-  );
-}
+  "The generic primitive branch must retain the explicit subordinate-ring consumer",
+);
 // The force shader's velocity-shaping ring term must remain the single
 // primary ring only — the new bands are density-only shell structure and
 // must not become new pressure/velocity sources.
@@ -745,6 +821,50 @@ assert.doesNotMatch(
   RESEARCH_FLUID_SHADER_SOURCES.forceFragment,
   /=\s*profileShockwaveLayers\(|\+\s*profileShockwaveLayers\(/,
   "Shockwave shell bands must stay density-only and not feed the velocity/force pass",
+);
+for (const uniform of [
+  "uShockwaveMode", "uShockwaveVolumeShape", "uShockwaveAux",
+  "uShockwaveDenseA", "uShockwaveDenseB", "uShockwaveDenseC",
+]) {
+  assert.match(
+    RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+    new RegExp(`uniform[^;]*\\b${uniform}\\b`),
+    `${uniform}: dense volume-compositor uniform missing`,
+  );
+}
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /if \(uShockwaveMode < 1\.5\) return 0\.0;/,
+  "Volume contours must activate only in dense shockwave mode 2",
+);
+for (const requiredDenseTerm of [
+  /float spacingWarp = uShockwaveDenseA\.w/,
+  /float width = mix\(uShockwaveDenseB\.x, uShockwaveDenseB\.y, bandHash\);/,
+  /float continuity = mix\(/,
+  /float depthVisibility = mix\(/,
+  /float onsetDelay = 0\.006 \+ uShockwaveDenseC\.z/,
+  /float fadeStart = uShockwaveAux\.y/,
+]) {
+  assert.match(
+    RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+    requiredDenseTerm,
+    `Dense volume-contour variation missing: ${requiredDenseTerm}`,
+  );
+}
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /denseShockwaveContour\(\s*distortedUv,\s*clamp\(transmittance, 0\.0, 1\.0\)\s*\)/,
+  "Dense contours must consume real plume transmittance for occlusion",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /float shockOpacity = shockwaveContour \* 0\.12 \* atmosphericFade;/,
+  "Dense contours must contribute bounded composite alpha without changing volume density",
+);
+assert.doesNotMatch(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /low-yield-nuclear-airburst|uProfileKind\s*==\s*9/,
+  "Generic volume rendering must remain profile-driven with no low-yield preset-ID gate",
 );
 
 // --- Dense-phase raymarch performance optimization reverted (2026-07) -------
