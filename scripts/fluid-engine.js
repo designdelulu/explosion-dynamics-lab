@@ -220,8 +220,10 @@ const BASE_PROFILE = Object.freeze({
     emissionCurve: 1,
   }),
   quality: Object.freeze({ grid: 1, pressure: 1, rays: 1, tracers: 1, detail: 1 }),
-  // Broad-plume research controls. mode 0 keeps every shipped preset on its
-  // exact current behavior; only the Tsar historical reference opts in.
+  // Broad-plume research controls. mode 0 keeps a preset on its exact prior
+  // behavior; mode 1 is the existing historical-scale Tsar path, while mode 2
+  // gives low-yield its separate shaping path with the standard absorbing
+  // boundary.
   // feedTaperStart/feedTaperEnd/lateralJitter/turbulenceBlend are the central
   // -stem taper/breakup controls (2026-07 shockwave/stem/performance pass);
   // feedTaperStart/End default to the original hardcoded coreBand taper
@@ -232,8 +234,8 @@ const BASE_PROFILE = Object.freeze({
     feedTaperStart: 0.85, feedTaperEnd: 1.05, lateralJitter: 0, turbulenceBlend: 0,
   }),
   // Shockwave shell-layering research controls (2026-07 Tsar shockwave/stem/
-  // performance pass). mode 0 keeps every shipped preset byte-identical to
-  // before this pass — only the Tsar historical reference opts in. ringB/C/D
+  // performance pass). mode 0 keeps a preset byte-identical to before this
+  // mechanism — low-yield and Tsar use separate ring tuning. ringB/C/D
   // are (radiusOffset, widthScale, strength, phaseOffset) for three secondary
   // shell bands layered around the existing primary ring; irregularity is
   // angular wobble strength; fadeStart/fadeSpan describe when the secondary
@@ -248,8 +250,8 @@ const BASE_PROFILE = Object.freeze({
     fadeSpan: 0.001,
   }),
   // Smoke-material research controls (2026-07 Tsar smoke-material pass). mode 0
-  // keeps every shipped preset byte-identical to before this pass; only the
-  // Tsar historical reference opts in. sootAbsorption/dustAbsorption give soot
+  // keeps a preset byte-identical to before this mechanism; low-yield and Tsar
+  // opt in independently. sootAbsorption/dustAbsorption give soot
   // and lofted dust independent optical-depth coefficients instead of one
   // shared density-to-alpha curve; detailBoost adds an energy-weighted third
   // curl-detail octave; warmCoolContrast widens the lit/shadowed dynamic range.
@@ -279,8 +281,8 @@ const BASE_PROFILE = Object.freeze({
     motionDamp: 0,
   }),
   // Early-core research controls (2026-07 Tsar core/tracer polish). mode 0
-  // keeps every shipped preset byte-identical to before this pass; only the
-  // Tsar historical reference opts in. highlightThreshold/highlightSharpness
+  // keeps a preset byte-identical to before this mechanism; low-yield and Tsar
+  // opt in independently. highlightThreshold/highlightSharpness
   // reproduce the original white-hot highlight term exactly at their default
   // values (1.5, 2.0); structureBlend folds self-shadow and turbulence detail
   // into the highlight so it reads as irregular thermal pockets instead of a
@@ -288,8 +290,8 @@ const BASE_PROFILE = Object.freeze({
   // (flat) regions of the temperature field.
   core: Object.freeze({ mode: 0, highlightThreshold: 1.5, highlightSharpness: 2.0, structureBlend: 0, bloomGateScale: 0 }),
   // Tracer-material research controls (2026-07 Tsar core/tracer polish). mode
-  // 0 keeps every shipped preset byte-identical to before this pass; only the
-  // Tsar historical reference opts in. occlusionStrength adds a Beer-Lambert
+  // 0 keeps a preset byte-identical to before this mechanism; low-yield and
+  // Tsar opt in independently. occlusionStrength adds a Beer-Lambert
   // falloff on top of the existing density-weighted tracer visibility so
   // dense smoke buries tracers instead of merely dimming them a little;
   // sizeVariance/brightnessVariance give each tracer a stable per-particle
@@ -465,14 +467,52 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       tracerType: 'thermal',
       sourcePrimitives: ['radial-impulse', 'vertical-jet', 'paired-cap-vortices'],
       preserveResearchSource: true,
-      // 2026-07-23 visual pass: widen the rendered volume so the domain's
-      // pixel aspect stops stretching the fireball into an egg and the cap
-      // has lateral room; slow cooling so the hot history persists into the
-      // rising column. Cap circulation and umbrella roll are strengthened so
-      // the classic silhouette reads from the cap alone.
-      source: { capScale: 1.22, capRoll: 1.25 },
-      physics: { buoyancy: 0.88, cooling: 0.78, scalarRetention: 1 },
-      volume: { scaleX: 1.48, scaleY: 1.04, shadow: 1.18, exposure: 1.06 },
+      // 2026-07 low-yield POC: the preserved source branch now consumes these
+      // normalized profile weights relative to its original defaults. Radial
+      // motion leads vertical motion, the source is modestly wider, and curl
+      // coupling is stronger without becoming a scaled-down historical plume.
+      source: {
+        centerY: 0.255, radius: 0.068, aspectX: 1.06, aspectY: 0.86,
+        radial: 1.07, vertical: 0.92, turbulence: 1.05,
+        heat: 0.54, smoke: 1, incandescent: 1.12, dust: 0.34,
+        capScale: 1.24, capRoll: 1.27,
+      },
+      physics: {
+        buoyancy: 0.88, vorticity: 1.12, velocityRetention: 0.991,
+        cooling: 0.9, smokeConversion: 0.78, scalarRetention: 0.998,
+      },
+      volume: {
+        scaleX: 1.06, scaleY: 0.68, depth: 1.12, opacity: 0.76,
+        shadow: 1.45, bloom: 0.86, distortion: 1.08, erosion: 1.14,
+        noiseScale: 1.16, dustVisibility: 0.58, exposure: 0.92,
+        toneMap: 0.38, backgroundIllumination: 0.24, emissionCurve: 1,
+      },
+      plume: {
+        mode: 2, expansion: 0.012, vortex: 0.04, persistence: 0.015, widen: 0.018,
+        feedTaperStart: 0.08, feedTaperEnd: 0.24,
+        lateralJitter: 0.32, turbulenceBlend: 0.15,
+      },
+      material: {
+        mode: 1, sootAbsorption: 1.22, dustAbsorption: 0.72,
+        detailBoost: 0.35, warmCoolContrast: 0.45,
+      },
+      shockwave: {
+        mode: 1,
+        ringB: { radiusOffset: -0.22, widthScale: 1.15, strength: 0.24, phaseOffset: 0.01 },
+        ringC: { radiusOffset: 0.14, widthScale: 0.82, strength: 0.18, phaseOffset: 0.035 },
+        ringD: { radiusOffset: 0, widthScale: 1, strength: 0, phaseOffset: 0 },
+        irregularity: 0.035,
+        fadeStart: 0.28,
+        fadeSpan: 0.12,
+      },
+      core: {
+        mode: 1, highlightThreshold: 2.32, highlightSharpness: 3.08,
+        structureBlend: 0.79, bloomGateScale: 8.8,
+      },
+      tracerMaterial: {
+        mode: 1, occlusionStrength: 1.8, sizeVariance: 0.35,
+        brightnessVariance: 0.32, minSizeFloor: 1.45,
+      },
     },
   ),
   'nuclear-ground-burst': defineFluidProfile(
@@ -922,14 +962,14 @@ uniform vec4 uSeedOffsetsB;
 uniform vec4 uProfilePhysics;
 uniform vec4 uProfileDecay;
 uniform vec4 uProfileAux;
-// Tsar-scale broad-plume research controls. uPlumeMode is 0 for every shipped
-// preset except the Tsar historical reference, so this block is inert
-// (byte-identical behavior) for all other events. uPlumeParams packs
+// Profile-gated broad-plume research controls. uPlumeMode 0 is inert, mode 1
+// is the existing historical-scale variant, and mode 2 is the restrained
+// low-yield variant. uPlumeParams packs
 // (expansion, vortexStrength, persistence, columnWiden).
 uniform float uPlumeMode;
 uniform vec4 uPlumeParams;
-// Tsar-scale central-stem taper/breakup research controls, inert under the
-// same uPlumeMode gate as uPlumeParams above. Packs (feedTaperStart,
+// Central-stem taper/breakup controls, inert under the same uPlumeMode gate as
+// uPlumeParams above. Packs (feedTaperStart,
 // feedTaperEnd, lateralJitter, turbulenceBlend) — see the coreBand/
 // stemBreakup usage in FORCE_FRAGMENT for what each term does.
 uniform vec4 uPlumeStemParams;
@@ -1265,19 +1305,30 @@ void main() {
   float rollingEnvelope = smoothstep(0.0, 0.025, uNormalizedTime)
     * (1.0 - smoothstep(0.28, 0.62, uNormalizedTime));
   vec2 sourceDelta = vUv - uSourceCenter;
-  float sourceRadius = 0.045 + 0.038 * sqrt(uEnergy);
+  // The preserved low-yield branch historically used BASE_PROFILE.radius
+  // (0.065) implicitly. Dividing by that neutral value lets its immutable
+  // profile widen or narrow the source without changing the baseline formula
+  // when the profile leaves radius untouched.
+  float sourceRadius = (0.045 + 0.038 * sqrt(uEnergy))
+    * (uSourceShape.x / 0.065);
   float sourceKernel = exp(-dot(sourceDelta, sourceDelta) / max(0.0005, sourceRadius * sourceRadius));
 
   if (uProfileKind == 9) {
-    // Named regression path for Nuclear Airburst — Research Model. Keep its
-    // original centered impulse/updraft math intact while other profiles use
-    // composable, deterministically offset primitives below.
+    // Named profile path for Nuclear Airburst — Research Model. The original
+    // centered impulse/updraft formula is preserved at neutral profile values;
+    // source motion weights now let this one immutable profile rebalance
+    // radial lift, vertical feed, and curl coupling without an ID check or a
+    // global behavior change.
     vec2 radial = sourceDelta / max(length(sourceDelta), 0.006);
+    float sourceFeedTaper = uPlumeMode > 1.5
+      ? 1.0 - smoothstep(uPlumeStemParams.x, uPlumeStemParams.y, uNormalizedTime)
+      : 1.0;
     velocity += radial * sourceKernel * impulseEnvelope * (0.46 + 0.16 * uEnergy)
-      * motionScale * uDt * 60.0;
-    velocity.y += sourceKernel * rollingEnvelope * (0.20 + 0.13 * uEnergy) * motionScale * uDt;
+      * uSourceMotion.x * motionScale * uDt * 60.0;
+    velocity.y += sourceKernel * rollingEnvelope * (0.20 + 0.13 * uEnergy)
+      * uSourceMotion.y * sourceFeedTaper * motionScale * uDt;
     velocity += turbulence.xy * sourceKernel * (impulseEnvelope + rollingEnvelope * 0.42)
-      * 0.026 * motionScale * uDt * 60.0;
+      * 0.026 * (uSourceMotion.w / 0.65) * motionScale * uDt * 60.0;
   } else {
     vec2 primitiveCenter = profileSourceCenter();
     vec2 primitiveDelta = vUv - primitiveCenter;
@@ -1397,8 +1448,9 @@ void main() {
   velocity.y -= ceiling * smoothstep(0.09, 0.26, rimDistance)
     * (smoke + dust * 0.6) * 0.55 * uProfileAux.y * uDt;
 
-  // ---- Tsar-scale broad turbulent plume (research proof of concept) ----
-  // Inert unless uPlumeMode is set (Tsar historical reference only). Combines
+  // ---- Profile-gated broad turbulent plume (research mechanism) ----
+  // Inert unless uPlumeMode is set. Low-yield and Tsar opt in with separate
+  // modes and magnitudes. Combines
   // three paper-grounded mechanisms to break the narrow rising tube into a
   // broad, coherent, asymmetric mushroom body:
   //   1. Gas-expansion outward turning (Nguyen/Fedkiw/Jensen 2002, Fig 6-7):
@@ -1461,7 +1513,9 @@ void main() {
     // widthGrow relaxes the band from a narrow column into a broader, softer
     // one over the same window instead of holding one fixed width until it
     // simply cuts off.
-    float lateralOffset = turbulence.z * uPlumeStemParams.z * stemBreakup;
+    float corridorAsymmetry = uSeedOffsetsA.x * 0.24 * (0.4 + 0.6 * heightAbove);
+    float lateralOffset = (turbulence.z + corridorAsymmetry)
+      * uPlumeStemParams.z * stemBreakup;
     float coreLateral = lateral - lateralOffset;
     float widthGrow = mix(1.0, 2.4, stemBreakup);
     float coreBand = exp(
@@ -1567,9 +1621,9 @@ void main() {
   temperature = max(0.0,
     temperature * exp(-uCooling * uProfileDecay.y * uDt * (0.42 + smoke * 0.08)) - radiativeLoss
   );
-  // Tsar-scale persistence (uPlumeParams.z): the monumental cloud must retain
-  // visible mass across its mature phase, so smoke dissipation is nudged
-  // toward unity for the Tsar reference only (inert elsewhere). Deferred
+  // Profile persistence (uPlumeParams.z): an opted-in cloud may retain visible
+  // mass across its mature phase, so smoke dissipation is nudged toward unity
+  // by a preset-specific amount (inert elsewhere). Deferred
   // dissipation is a documented CG smoke technique (Fedkiw/Stam/Jensen 2001:
   // low numerical dissipation keeps large plumes alive). The persistence
   // TARGET itself eases from 1.0 down to a real per-step floor once the
@@ -1599,15 +1653,16 @@ void main() {
   // The top margin absorbs far more gently than the sides so a developed cap
   // resting near the stratification ceiling persists through the late
   // timeline instead of being silently destroyed.
-  // The broad Tsar cap spreads wider and higher than other events, so its
-  // side/top guard bands are narrowed for that profile only — otherwise the
-  // umbrella's outer edges would be absorbed before they finish rolling.
-  float sideMargin = uPlumeMode > 0.5 ? 0.075 : 0.12;
-  float topMargin = uPlumeMode > 0.5 ? 0.035 : 0.055;
+  // Mode 1 is the historical-scale variant. Its cap spreads wider and higher
+  // than other events, so its side/top guard bands are narrowed; mode 2
+  // (low-yield shaping) deliberately retains the normal absorbing boundary.
+  float historicalBoundary = step(0.5, uPlumeMode) * (1.0 - step(1.5, uPlumeMode));
+  float sideMargin = mix(0.12, 0.075, historicalBoundary);
+  float topMargin = mix(0.055, 0.035, historicalBoundary);
   float sideGuard = smoothstep(0.0, sideMargin, vUv.x)
     * smoothstep(0.0, sideMargin, 1.0 - vUv.x);
   float topGuard = smoothstep(0.0, topMargin, 1.0 - vUv.y);
-  float topRetain = uPlumeMode > 0.5 ? 0.985 : 0.965;
+  float topRetain = mix(0.965, 0.985, historicalBoundary);
   float guardRetention = mix(pow(0.8, uDt * 60.0), 1.0, sideGuard)
     * mix(pow(topRetain, uDt * 60.0), 1.0, topGuard);
   temperature *= guardRetention;
@@ -1622,7 +1677,11 @@ void main() {
   float smokeEnvelope = smoothstep(0.015, 0.08, uNormalizedTime)
     * (1.0 - smoothstep(0.42, 0.82, uNormalizedTime));
   vec2 delta = vUv - uSourceCenter;
-  float radius = 0.042 + 0.044 * sqrt(uEnergy);
+  // As in FORCE_FRAGMENT, 0.065 is the preserved branch's neutral source
+  // radius. The ratio is exactly 1 for the old profile and only changes when
+  // that profile explicitly supplies a new source width.
+  float radius = (0.042 + 0.044 * sqrt(uEnergy))
+    * (uSourceShape.x / 0.065);
   float core = exp(-dot(delta, delta) / max(0.0005, radius * radius));
   float shellDistance = abs(length(delta) - radius * (1.2 + uNormalizedTime * 2.2));
   float shell = exp(-shellDistance * shellDistance / max(0.0002, radius * radius * 0.18));
@@ -1635,21 +1694,50 @@ void main() {
   float source = max(0.0, uSourceStrength * spectral * motionScale);
 
   if (uProfileKind == 9) {
-    // Preserve the established Research Model scalar injection as the named
-    // regression branch; other event families use the primitive composition.
-    // 2026-07-23 visual pass: the early fireball is emission-dominated — smoke
-    // arrives after the incandescent phase instead of graying it out, and the
-    // hot channels run longer so the white-to-orange-to-smoke history reads.
+    // Preserve the established Research Model scalar branch, with its neutral
+    // values reducing exactly to the original injection. Profile scalar
+    // weights provide low-yield-only heat/material separation, while the
+    // existing shockwave block adds subordinate bands without entering
+    // generic shader logic by preset ID.
+    float corridorWander = uSeedOffsetsA.x * uPlumeStemParams.z
+      * smoothstep(0.06, 0.18, uNormalizedTime) * 0.1;
+    vec2 lowYieldDelta = delta - vec2(corridorWander, 0.0);
+    float lowYieldCore = exp(
+      -dot(lowYieldDelta, lowYieldDelta) / max(0.0005, radius * radius)
+    );
     float lateSmoke = smoothstep(0.05, 0.13, uNormalizedTime)
       * (1.0 - smoothstep(0.5, 0.92, uNormalizedTime));
-    temperature += source * core * (flashEnvelope * 2.2 + fireEnvelope * 0.42) * uDt * 8.0;
-    incandescent += source * core * (flashEnvelope * 1.5 + fireEnvelope * 0.7) * uDt * 3.4;
-    smoke += source * core * lateSmoke * uDt * 0.8;
+    // Reuse the source-detail sample as deterministic low-yield thermal
+    // pockets. The previous preserved source multiplied one smooth Gaussian
+    // by a narrow 0.46–1.10 spectral range every step, which diffused into a
+    // flat uniformly white orb. This wider, profile-weighted modulation
+    // leaves a white-hot center but opens orange and shadowed pockets without
+    // another texture read or any change to generic/Tsar source injection.
+    float thermalPockets = clamp(
+      0.68 + sourceDetail * 0.58 * (uSourceMotion.w / 0.65),
+      0.12,
+      1.35
+    );
+    float thermalStructure = thermalPockets * thermalPockets * thermalPockets;
+    temperature += source * lowYieldCore * thermalStructure * (flashEnvelope * 2.2 + fireEnvelope * 0.42)
+      * uSourceScalar.x * uDt * 8.0;
+    incandescent += source * lowYieldCore * thermalPockets * (flashEnvelope * 1.5 + fireEnvelope * 0.7)
+      * uSourceScalar.z * uDt * 3.4;
+    smoke += source * lowYieldCore * lateSmoke * uSourceScalar.y * uDt * 0.8;
+
+    // The preserved branch predates profileShockwaveLayers(). Calling the
+    // shared helper here makes its two low-yield bands active behind the same
+    // uShockwaveMode gate used by Tsar; mode 0 still returns exact zero.
+    float secondaryRings = profileShockwaveLayers(vUv);
+    temperature += source * secondaryRings * uDt * 0.34;
+    incandescent += source * secondaryRings * uDt * 0.12;
+    smoke += source * secondaryRings * uDt * 0.035;
 
     // The dust shell is a generic visual interaction cue. Airburst altitude keeps
     // it deliberately subordinate to the rising thermal/smoke volume.
     float lowerRegion = 1.0 - smoothstep(uSourceCenter.y + 0.12, uSourceCenter.y + 0.34, vUv.y);
-    dust += source * shell * lowerRegion * smokeEnvelope * uDt * 0.12;
+    dust += source * shell * lowerRegion * smokeEnvelope
+      * (uSourceScalar.w / 0.4) * uDt * 0.12;
   } else {
     float onset = profileOnsetEnvelope();
     float sustain = profileSustainEnvelope() * dissipationSourceTaper();
@@ -3619,7 +3707,7 @@ export class ResearchFluidEngine {
     this._uniform4f(program, 'uProfileDecay', ...state.decay);
     this._uniform4f(program, 'uProfileAux', ...state.profileAux);
     const plume = this.profile.plume || { mode: 0, expansion: 0, vortex: 0, persistence: 0, widen: 0 };
-    this._uniform1f(program, 'uPlumeMode', plume.mode > 0 ? 1 : 0);
+    this._uniform1f(program, 'uPlumeMode', clamp(finite(plume.mode, 0), 0, 2));
     this._uniform4f(
       program,
       'uPlumeParams',
@@ -4042,8 +4130,14 @@ export class ResearchFluidEngine {
 
   _sourceCenter() {
     if (this.profile.preserveResearchSource) {
-      // Preserve the flagship's established generic low-airburst placement.
-      return [0.5, clamp(0.27 + this.settings.altitude * 0.17, 0.2, 0.48)];
+      // Preserve the flagship's established generic low-airburst placement,
+      // while allowing its profile anchor to lower the source without moving
+      // the camera or affecting any other event. BASE_PROFILE.centerY is the
+      // exact neutral point, so the original source position is unchanged
+      // unless this isolated profile opts in.
+      const profileOffsetY = finite(this.profile.source.centerY, BASE_PROFILE.source.centerY)
+        - BASE_PROFILE.source.centerY;
+      return [0.5, clamp(0.27 + this.settings.altitude * 0.17 + profileOffsetY, 0.2, 0.48)];
     }
     // Other event families use normalized profile anchors. Altitude is only an
     // artistic offset inside the bounded field, never a real height or depth.

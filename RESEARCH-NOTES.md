@@ -369,6 +369,56 @@ non-Tsar rendering is byte-identical (asserted directly in
   dissipation-aware lifetime (already correct per t54 evidence) were
   touched, per the "do not increase global tracer budgets" constraint.
 
+## Low-yield Nuclear Airburst visual proof of concept (2026-07)
+
+The production-wide preset audit selected **Nuclear Airburst — Research
+Model** (`low-yield-nuclear-airburst`) as the next isolated rollout target.
+Deterministic browser evidence at seed `1842`, Cinematic mode, Balanced and
+High, and 1440 × 900 / 768 × 1024 / 1024 × 768 confirms five related defects:
+
+1. **Flat early core.** The preserved profile leaves `core.mode` at zero, so
+   the original highlight threshold (`1.5`), sharpness (`2.0`), unstructured
+   highlight multiplier, and ungated bloom saturate most of the early
+   temperature field into one white disk. Its volume profile also has no tone
+   mapping and only modest self-shadowing, while the preserved scalar source
+   injects a centered Gaussian core with no profile width/material weighting.
+2. **Straight blue-gray stem.** The preserved force branch supplies a centered
+   radial impulse and vertical rolling updraft. Its only resolved asymmetry is
+   a weak curl-detail perturbation (`BASE_PROFILE.source.turbulence: 0.65`);
+   `plume.mode` is off, so there is no early lateral expansion, widened
+   `coreBand`, feed taper, lateral jitter, or turbulence handoff. The unoccluded
+   fixed-size thermal tracers remain concentrated along the same central feed.
+3. **Narrow triangular middle cloud.** Paired cap vortices are active and were
+   previously widened, but inward column entrainment plus vertical-dominant
+   retained motion leaves too little broad body for those vortices to roll.
+   The cap rises out of the visible field while the surviving scalar mass
+   narrows back toward the center, producing the triangular t12–t15 silhouette.
+4. **Limited material depth.** `material.mode` is off, so soot and lofted dust
+   share the same optical-depth response, only two detail octaves are sampled,
+   and warm/cool contrast remains neutral. The result is a smooth blue-gray
+   mid-tone with weak front/middle/rear separation.
+5. **Sparse shock structure.** The analytical compositor retains its primary
+   early shell, but the low-yield fluid profile has no subordinate density
+   bands. The preserved `uProfileKind == 9` scalar-injection branch predates
+   `profileShockwaveLayers()` and bypasses the generic primitive branch where
+   Tsar consumes it, so enabling `shockwave.mode` alone would be inert.
+
+The implementation remains within the existing immutable profile architecture.
+The preserved low-yield source branch will consume normalized profile width,
+radial/vertical/turbulence, and scalar weights relative to its current neutral
+defaults; the shock-layer helper will be called from that existing branch
+behind `uShockwaveMode`. Low-yield will opt into separately tuned `plume`,
+`core`, `material`, `shockwave`, and `tracerMaterial` blocks. Tsar values are
+reference bounds only and are not copied. Because the baseline final frame is
+already clean and shows no rectangular field, `edge.mode` and
+`dissipation.mode` remain off unless the tuned evidence creates a new late
+artifact.
+
+Expected tracked changes are limited to `scripts/fluid-engine.js`,
+`tools/fluid-contract-test.mjs`, and this implementation map. Browser captures,
+performance logs, comparisons, and generated exports remain under ignored
+`scratch/low-yield-airburst-visual-poc/`.
+
 ## Browser numerical design
 
 The shared event-family simulation uses deterministic fixed steps and a WebGL2 field pipeline. Source injection is selected from bounded normalized primitives—radial and directional impulses, rings, ground sheets, vertical jets, offset kernels, pulsed columns, ejecta curtains, trails, sustained visual-combustion regions, and turbulent clusters—without introducing materials or engineering inputs:
