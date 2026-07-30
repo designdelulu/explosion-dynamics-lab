@@ -451,6 +451,61 @@ fireball or smoke still occludes every echo. Internal echoes begin in stages,
 soften from roughly t3.5, and are mostly cleared around t8; no smoke/plume
 dissipation value is changed.
 
+## Nuclear Ground Burst visual proof of concept (2026-07)
+
+The next isolated rollout target is **Nuclear Ground Burst**
+(`nuclear-ground-burst`). Deterministic seed-`1842` Cinematic evidence at
+1440 × 900 High/Balanced, 768 × 1024 Balanced, 1024 × 768 Balanced, and
+390 × 844 Mobile confirms six connected defects:
+
+1. **Rectangular white ground barrel.** The generic scalar branch merges the
+   broad `ground-sheet`, narrow `vertical-jet`, offset kernels, and base
+   Gaussian into one `stagedCombined` maximum, then gives that same smooth
+   field the full heat/incandescent envelope. Ground Burst's high heat,
+   incandescence, opacity, bloom, and low tone-map value saturate the merged
+   sheet/jet into a flat white strip that grows into a rectangular cylinder.
+2. **Weak ground spread.** The ground-sheet force is a symmetric signed-x
+   impulse driven only by the short onset envelope. Its fixed Gaussian width
+   has no source-height weighting, sustained ground-layer retention, phase
+   taper, or deterministic lobe variation, so the analytical reflected wave
+   reads more clearly than resolved radial dust motion.
+3. **Smooth centered column.** Ground Burst leaves `plume.mode` off. Its
+   strong vertical source therefore stays inside the narrow
+   `profileVerticalKernel()` corridor without feed taper, lateral drift,
+   widening, or a turbulence handoff. Generic inward entrainment reinforces
+   that centered corridor as it rises.
+4. **Weak material separation.** `material.mode`, `core.mode`, and
+   `tracerMaterial.mode` are all off. Dust and soot share one optical-depth
+   curve, the white-hot highlight has no structural modulation or bloom
+   gradient gate, and bright fixed-size tracers remain visible through dense
+   particulate material.
+5. **Boxed mature and late field.** `edge.mode` is off, so the volume uses the
+   independent side/top extinction product whose low-density isocontour is a
+   rounded rectangle. Ground Burst's large scale, high opacity, and retained
+   scalar field expose that computational envelope across desktop and mobile.
+6. **Static fade instead of organic dissipation.** `dissipation.mode` is off.
+   The source remains active deep into the timeline, dust and soot share the
+   default decay path, and resolved velocity receives no late curl, shear, or
+   ground-directed drift. The boxed field therefore thins in place and then
+   clears completely instead of separating into ground haze and elevated
+   wisps.
+
+The implementation remains profile-gated. Ground Burst receives a dedicated
+ground-coupling block that separates the low surface flash and dust sheet from
+the rising thermal feed, retains horizontal velocity close to the surface,
+adds seeded lobe asymmetry, and tapers radial forcing as the plume lifts. It
+also opts into separately tuned plume, material, core, shockwave, tracer,
+organic-edge, and late-motion controls. The existing Airburst and Tsar
+mechanisms are used only as architectural references: the dense Airburst
+contour family, its compact source branch, and Tsar's historical expansion,
+vortex, persistence, and late-tail values are not reused.
+
+Expected tracked changes are limited to `scripts/fluid-engine.js`,
+`scripts/data.js` only if Mobile evidence retains a Ground Burst portrait
+pullback, `tools/fluid-contract-test.mjs`, and this implementation map.
+Captures, comparisons, performance logs, and test exports remain under ignored
+`scratch/nuclear-ground-burst-visual-poc/`.
+
 ## Browser numerical design
 
 The shared event-family simulation uses deterministic fixed steps and a WebGL2 field pipeline. Source injection is selected from bounded normalized primitives—radial and directional impulses, rings, ground sheets, vertical jets, offset kernels, pulsed columns, ejecta curtains, trails, sustained visual-combustion regions, and turbulent clusters—without introducing materials or engineering inputs:
