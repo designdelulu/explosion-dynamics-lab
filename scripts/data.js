@@ -811,6 +811,11 @@ export const EVENT_PRESETS = deepFreeze([
       id: "nuclear-airburst-fluid-v1",
       engine: "webgl2-fluid-2.5d",
       fixedStep: 1 / 30,
+      // Portrait/mobile projection only: preserve the approved low-yield
+      // field while giving its mature cap enough top-frame headroom. The
+      // renderer consumes this generically from the research profile, so
+      // desktop/tablet framing and other presets remain unchanged.
+      mobilePortraitPullback: 1.1,
       normalizedFields: ["velocity", "temperature", "smoke", "incandescent", "dust"],
       diagnostics: ["velocity", "temperature", "smoke", "incandescent", "pressure", "divergence", "vorticity", "tracers"]
     },

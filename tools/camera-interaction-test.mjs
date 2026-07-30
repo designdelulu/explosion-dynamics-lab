@@ -118,6 +118,16 @@ assert.match(
 );
 assert.match(
   renderer,
+  /const mobilePortrait = this\.settings\.quality === 'mobile' && height > width;[\s\S]*?this\._preset\?\.researchModel\?\.mobilePortraitPullback/,
+  "Mobile portrait headroom must be profile-driven rather than a preset-ID renderer special case",
+);
+assert.match(
+  await read("scripts/data.js"),
+  /mobilePortraitPullback:\s*1\.1/,
+  "Low-yield must reserve the audited mobile-portrait headroom",
+);
+assert.match(
+  renderer,
   /angleOffset\s*=\s*\(this\.settings\.cameraAngle\s*\/\s*45\)\s*\*\s*width\s*\*\s*0\.056/,
   "Angle-to-parallax coefficient must be strengthened so drags produce visible perspective change"
 );
