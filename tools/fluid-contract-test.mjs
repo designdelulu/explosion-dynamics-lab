@@ -212,6 +212,7 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
   for (const key of [
     "mode", "lateStart", "finalStart", "sourceTaperEnd",
     "retentionFloorSmoke", "retentionFloorDust", "outwardBoost", "buoyancyFalloff", "motionDamp",
+    "lateVelocityRetention", "lateCurl", "lateShear",
   ]) {
     assert.ok(Number.isFinite(profile.dissipation[key]), `${presetId}: dissipation.${key} must be finite`);
   }
@@ -226,6 +227,10 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(d.outwardBoost > 0, "Tsar late outward dispersion must be active");
     assert.ok(d.buoyancyFalloff > 0, "Tsar late buoyancy falloff must be active");
     assert.ok(d.motionDamp > 0, "Tsar residual motion damp must be active");
+    assert.ok(d.lateVelocityRetention > profile.physics.velocityRetention && d.lateVelocityRetention < 1,
+      "Tsar late tail must retain a bounded amount of resolved velocity");
+    assert.ok(d.lateCurl > 0 && d.lateShear > 0,
+      "Tsar late tail must add deterministic curl and shear, not opacity-only dissipation");
   } else {
     const d = profile.dissipation;
     assert.equal(d.mode, 0, `${presetId}: late-dissipation mode must remain off for non-Tsar presets`);
@@ -236,11 +241,14 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.equal(d.outwardBoost, 0, `${presetId}: dissipation.outwardBoost must stay neutral (0)`);
     assert.equal(d.buoyancyFalloff, 0, `${presetId}: dissipation.buoyancyFalloff must stay neutral (0)`);
     assert.equal(d.motionDamp, 0, `${presetId}: dissipation.motionDamp must stay neutral (0)`);
+    assert.equal(d.lateVelocityRetention, 1, `${presetId}: dissipation.lateVelocityRetention must stay neutral (1)`);
+    assert.equal(d.lateCurl, 0, `${presetId}: dissipation.lateCurl must stay neutral (0)`);
+    assert.equal(d.lateShear, 0, `${presetId}: dissipation.lateShear must stay neutral (0)`);
   }
 }
 // The velocity/scalar/tracer shaders must all carry the dissipation uniforms
 // (declared once in the shared SOURCE_PROFILE_UNIFORMS block).
-for (const uniform of ["uDissipationMode", "uDissipationParams", "uDissipationParams2"]) {
+for (const uniform of ["uDissipationMode", "uDissipationParams", "uDissipationParams2", "uDissipationParams3"]) {
   assert.match(
     `${RESEARCH_FLUID_SHADER_SOURCES.forceFragment}\n${RESEARCH_FLUID_SHADER_SOURCES.scalarFragment}\n${RESEARCH_FLUID_SHADER_SOURCES.tracerAdvectFragment}`,
     new RegExp(`uniform[^;]*\\b${uniform}\\b`),
@@ -257,6 +265,9 @@ for (const gatedTerm of [
   /float sustain = profileSustainEnvelope\(\) \* dissipationSourceTaper\(\);/,
   /float buoyancyFalloff = uDissipationMode > 0\.5/,
   /if \(uDissipationMode > 0\.5\) \{\s*\n\s*float outwardProgress = dissipationProgress\(\);/,
+  /float dissipationVelocityRetention\(\) \{\s*\n\s*if \(uDissipationMode < 0\.5\) return uProfileDecay\.x;/,
+  /velocity \*= pow\(clamp\(dissipationVelocityRetention\(\), 0\.9, 1\.0\), uDt \* 60\.0\);/,
+  /velocity \+= broadCurl \* uDissipationParams3\.y/,
   /float tracerDissipation = uDissipationMode > 0\.5 \? mix\(1\.0, 0\.35, dissipationProgress\(\)\) : 1\.0;/,
 ]) {
   assert.match(
@@ -889,15 +900,15 @@ assert.doesNotMatch(
   assert.doesNotMatch(between, /\{\s*\n\s*\/\/ One midpoint probe/, "Shading math must not be wrapped in a conditional block");
 }
 
-// --- Domain-edge organic envelope (2026-07 Tsar dissipation-artifact fix) --
+// --- Profile-gated domain-edge organic envelopes (2026-07) ------------------
 // edgeExtinction()'s default path multiplies an independent horizontal
 // falloff by an independent vertical falloff — a rounded-rectangle
 // (Chebyshev) envelope. Invisible while density saturates the interior, but
 // the visible isocontour of a near-uniform low-density residue, which is
-// exactly Tsar's late-dissipation tail once the stem/shockwave passes leave
-// mass spread more evenly for longer. uEdgeMode gates a merged superellipse
-// envelope on for Tsar only; every other preset keeps the original
-// independent-axis product, byte-identical to before this pass.
+// exactly the low-yield responsive residue and Tsar's late-dissipation tail.
+// uEdgeMode gates a merged profile-supplied superellipse envelope; only these
+// two approved profiles opt in, while every other preset retains the original
+// independent-axis product byte-identically.
 assert.match(
   RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
   /uniform float uEdgeMode;/,
@@ -906,7 +917,7 @@ assert.match(
 assert.match(
   RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
   /if \(uEdgeMode > 0\.5\) \{[\s\S]*?ellipseDistance[\s\S]*?\n  \}/,
-  "Tsar-only organic superellipse envelope missing from edgeExtinction()",
+  "Profile-driven organic superellipse envelope missing from edgeExtinction()",
 );
 assert.match(
   RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
@@ -935,17 +946,42 @@ assert.match(
 );
 for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
   assert.ok(profile.edge && typeof profile.edge === "object", `${presetId}: edge config missing`);
-  assert.ok(Number.isFinite(profile.edge.mode), `${presetId}: edge.mode must be finite`);
-  if (presetId === "tsar-bomba-scale-reference") {
+  for (const key of [
+    "mode", "center", "centerAsymmetry", "leftRadius", "rightRadius", "topRadius",
+    "leftWobble", "rightWobble", "topWobble", "fadeStart", "fadeEnd",
+    "distanceWobble", "lowDensityStart", "lowDensityEnd", "lowDensityAttenuation",
+  ]) {
+    assert.ok(Number.isFinite(profile.edge[key]), `${presetId}: edge.${key} must be finite`);
+  }
+  if (presetId === LOW_YIELD_ID) {
+    const edge = profile.edge;
+    assert.equal(edge.mode, 2, "Low-yield alone must enable its responsive organic edge envelope");
+    assert.ok(edge.leftRadius !== edge.rightRadius, "Low-yield boundary must be asymmetric, not an oval mask");
+    assert.ok(edge.distanceWobble > 0 && edge.lowDensityAttenuation > 0,
+      "Low-yield must fade sparse boundary smoke more strongly than dense plume material");
+    assert.ok(edge.lowDensityStart < edge.lowDensityEnd, "Low-yield low-density response must be a smooth interval");
+  } else if (presetId === TSAR_ID) {
     assert.equal(profile.edge.mode, 1, "Tsar must enable the organic domain-edge envelope");
+    assert.equal(profile.edge.lowDensityAttenuation, 0, "Tsar approved edge response must remain unchanged");
   } else {
-    assert.equal(profile.edge.mode, 0, `${presetId}: edge mode must remain off for non-Tsar presets`);
+    assert.equal(profile.edge.mode, 0, `${presetId}: edge mode must remain off for non-target presets`);
+    assert.equal(profile.edge.lowDensityAttenuation, 0, `${presetId}: edge low-density attenuation must stay neutral`);
   }
 }
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /float lowDensityWeight = \(1\.0 - lowDensityResponse\) \* uEdgeProfile3\.y;[\s\S]*?layerFade \*= mix\(1\.0, layerFade, lowDensityWeight\);/,
+  "Low-density-selective boundary attenuation must affect smoke only",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /densityOpacity \* domainFade[\s\S]*?mix\(shockOpacity \* domainFade, shockOpacity, step\(1\.5, uShockwaveMode\)\)/,
+  "Dense analytical shock contours must remain outside smoke-edge extinction",
+);
 
 console.log("Explosion Dynamics Lab fluid contract test: PASS");
 console.log(`  ${tiers.length} bounded tiers × ${EVENT_PRESETS.length} preset profiles across seven event families`);
 console.log("  primitive diversity, profile budgets, palette-driven volume uniforms, fluid evolution, and GPU tracers verified");
 console.log("  non-WebGL runtime fails closed to the existing Canvas renderer");
 console.log("  low-yield mode 2 and historical-scale mode 1 remain profile-isolated");
-console.log("  dense-phase raymarch shading skip reverted; domain-edge envelope now organic and Tsar-gated");
+console.log("  dense-phase raymarch shading skip reverted; organic edge envelopes and late motion remain profile-gated");

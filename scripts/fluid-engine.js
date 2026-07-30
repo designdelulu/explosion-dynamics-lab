@@ -294,6 +294,12 @@ const BASE_PROFILE = Object.freeze({
     outwardBoost: 0,
     buoyancyFalloff: 0,
     motionDamp: 0,
+    // A late tail can retain a small amount of resolved velocity and add a
+    // very broad deterministic roll/shear after the source has shut off.
+    // Zero keeps the pre-tail behaviour exactly intact.
+    lateVelocityRetention: 1,
+    lateCurl: 0,
+    lateShear: 0,
   }),
   // Early-core research controls (2026-07 Tsar core/tracer polish). mode 0
   // keeps a preset byte-identical to before this mechanism; low-yield and Tsar
@@ -317,9 +323,25 @@ const BASE_PROFILE = Object.freeze({
   // Domain-edge envelope research control (2026-07 Tsar dissipation-artifact
   // fix). mode 0 keeps every shipped preset byte-identical to before this
   // pass (the original independent side/top rectangle envelope in
-  // edgeExtinction()); only the Tsar historical reference opts into the
-  // merged organic superellipse envelope.
-  edge: Object.freeze({ mode: 0 }),
+  // edgeExtinction()). Organic profiles supply their own warped envelope and
+  // low-density response; mode 0 remains byte-identical for neutral presets.
+  edge: Object.freeze({
+    mode: 0,
+    center: 0.5,
+    centerAsymmetry: 0,
+    leftRadius: 0.42,
+    rightRadius: 0.42,
+    topRadius: 0.46,
+    leftWobble: 0,
+    rightWobble: 0,
+    topWobble: 0,
+    fadeStart: 0.55,
+    fadeEnd: 1,
+    distanceWobble: 0,
+    lowDensityStart: 0,
+    lowDensityEnd: 1,
+    lowDensityAttenuation: 0,
+  }),
 });
 
 function defineFluidProfile(presetId, profileId, overrides = {}) {
@@ -545,6 +567,27 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
         mode: 1, occlusionStrength: 1.8, sizeVariance: 0.35,
         brightnessVariance: 0.32, minSizeFloor: 1.45,
       },
+      // This airburst reaches the responsive volume boundary while the dense
+      // shock contours are still visible. Unlike the broad historical cap,
+      // use a slightly tighter, asymmetric and more strongly warped envelope
+      // so only thin edge residue dissolves; the central plume remains intact.
+      edge: {
+        mode: 2,
+        center: 0.5,
+        centerAsymmetry: 1.24,
+        leftRadius: 0.43,
+        rightRadius: 0.39,
+        topRadius: 0.42,
+        leftWobble: 0.09,
+        rightWobble: -0.07,
+        topWobble: 0.1,
+        fadeStart: 0.5,
+        fadeEnd: 1.02,
+        distanceWobble: 0.34,
+        lowDensityStart: 0.028,
+        lowDensityEnd: 0.16,
+        lowDensityAttenuation: 0.78,
+      },
     },
   ),
   'nuclear-ground-burst': defineFluidProfile(
@@ -715,7 +758,14 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
         // instead of thinning gradually in place.
         outwardBoost: 0.1,
         buoyancyFalloff: 0.5,
-        motionDamp: 0.85,
+        motionDamp: 0.72,
+        // Keep the late cloud advecting while its scalar field thins. These
+        // are deliberately much weaker than formation-stage plume forces:
+        // they preserve cap coherence while introducing slow, deterministic
+        // lobe drift and edge shear rather than boiling noise.
+        lateVelocityRetention: 0.999,
+        lateCurl: 0.0035,
+        lateShear: 0.0028,
       },
       // 2026-07 core/tracer polish: tracers rendered above smoke regardless
       // of how buried they were and shared one fixed size/brightness, which
@@ -745,7 +795,22 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       // isocontour becomes the visible silhouette — a faint square/
       // rectangular cloud during and after late dissipation. mode 1 switches
       // Tsar only to the merged organic superellipse envelope.
-      edge: { mode: 1 },
+      edge: {
+        mode: 1,
+        // Explicitly preserve the approved historical envelope that was
+        // previously implicit in the mode-1 shader branch.
+        center: 0.5,
+        centerAsymmetry: 1.6,
+        leftRadius: 0.42,
+        rightRadius: 0.42,
+        topRadius: 0.46,
+        leftWobble: 0.05,
+        rightWobble: -0.04,
+        topWobble: 0.06,
+        fadeStart: 0.55,
+        fadeEnd: 1,
+        distanceWobble: 0.22,
+      },
     },
   ),
 });
@@ -1010,10 +1075,12 @@ uniform vec4 uPlumeStemParams;
 // inert (byte-identical behavior) for all other events. uDissipationParams
 // packs (lateStart, finalStart, retentionFloorSmoke, retentionFloorDust);
 // uDissipationParams2 packs (sourceTaperEnd, outwardBoost, buoyancyFalloff,
-// motionDamp) — all in normalized-time / unitless-blend terms.
+// motionDamp); uDissipationParams3 packs (lateVelocityRetention, lateCurl,
+// lateShear, unused) — all in normalized-time / unitless-blend terms.
 uniform float uDissipationMode;
 uniform vec4 uDissipationParams;
 uniform vec4 uDissipationParams2;
+uniform vec4 uDissipationParams3;
 // Profile-gated scalar shockwave layering. Modes 1 and 2 retain the three
 // explicit subordinate-ring slots; the additional low-yield mode-2 contour
 // family is declared and evaluated only by the volume compositor.
@@ -1203,6 +1270,12 @@ float dissipationSourceTaper() {
 float dissipationMotionDamp() {
   if (uDissipationMode < 0.5) return 1.0;
   return mix(1.0, 1.0 - clamp(uDissipationParams2.w, 0.0, 0.98), dissipationProgress());
+}
+
+float dissipationVelocityRetention() {
+  if (uDissipationMode < 0.5) return uProfileDecay.x;
+  float target = clamp(uDissipationParams3.x, uProfileDecay.x, 1.0);
+  return mix(uProfileDecay.x, target, dissipationProgress());
 }
 
 float profileCombinedKernelWithoutTrail(vec2 uv) {
@@ -1595,10 +1668,27 @@ void main() {
       vec2 fromCenter = vUv - uSourceCenter;
       vec2 outwardDir = fromCenter / max(length(fromCenter), 0.02);
       velocity += outwardDir * uDissipationParams2.y * outwardProgress * motionScale * uDt * 0.6;
+
+      // The scalar-loss tail must remain a real flow, not a frozen density
+      // field whose opacity is merely reduced. A broad seed-stable roll plus
+      // altitude-aware shear keeps existing late mass exchanging positions
+      // without sourcing new density or disturbing mature cap formation.
+      float lateMaterial = smoothstep(0.018, 0.14, smoke + dust * 0.45);
+      float slowPhase = uTime * 0.024 + uSeedOffsetsB.z * 6.28318530718;
+      vec2 broadCurl = vec2(
+        sin((vUv.y - uSourceCenter.y) * 5.4 + slowPhase),
+        -sin((vUv.x - uSourceCenter.x) * 4.8 - slowPhase * 0.73)
+      );
+      velocity += broadCurl * uDissipationParams3.y * lateMaterial
+        * outwardProgress * motionScale * uDt * 60.0;
+      float heightShear = clamp((vUv.y - uSourceCenter.y) / 0.58, 0.0, 1.0) - 0.42;
+      velocity.x += heightShear * (0.55 + 0.45 * sin(slowPhase + vUv.y * 3.1))
+        * uDissipationParams3.z * lateMaterial * outwardProgress
+        * motionScale * uDt * 60.0;
     }
   }
 
-  velocity *= pow(clamp(uProfileDecay.x, 0.9, 1.0), uDt * 60.0);
+  velocity *= pow(clamp(dissipationVelocityRetention(), 0.9, 1.0), uDt * 60.0);
   velocity *= boundaryMask(vUv);
   float speed = length(velocity);
   if (speed > 1.4) velocity *= 1.4 / speed;
@@ -2191,14 +2281,14 @@ uniform vec4 uShockwaveAux;
 uniform vec4 uShockwaveDenseA;
 uniform vec4 uShockwaveDenseB;
 uniform vec4 uShockwaveDenseC;
-// Domain-edge envelope research control (2026-07 Tsar dissipation-artifact
-// fix). uEdgeMode is 0 for every shipped preset (byte-identical rendering,
-// the original independent side/top smoothstep rectangle below) and 1 only
-// for the Tsar historical reference, which instead merges side/top into one
-// warped superellipse distance so low-density late-timeline residue erodes
-// into an irregular blob instead of tracing the rectangular simulation
-// domain. See edgeExtinction() below.
+// Profile-driven domain-edge extinction. Mode 0 retains the original
+// independent-axis guard; positive modes use a profile-supplied warped
+// superellipse so low-density smoke cannot reveal the simulation rectangle.
 uniform float uEdgeMode;
+uniform vec4 uEdgeProfile0;
+uniform vec4 uEdgeProfile1;
+uniform vec4 uEdgeProfile2;
+uniform vec4 uEdgeProfile3;
 uniform vec3 uPaletteBackground;
 uniform vec3 uPaletteEmber;
 uniform vec3 uPaletteFlame;
@@ -2250,10 +2340,10 @@ vec3 toneMap(vec3 color) {
 vec4 edgeExtinctionProfile(float wobble, float asymmetry) {
   if (uEdgeMode > 0.5) {
     return vec4(
-      0.5 + asymmetry * 1.6,
-      clamp(0.42 + wobble * 0.05, 0.3, 0.48),
-      clamp(0.42 - wobble * 0.04, 0.3, 0.48),
-      clamp(0.46 + wobble * 0.06, 0.32, 0.5)
+      uEdgeProfile0.x + asymmetry * uEdgeProfile0.y,
+      clamp(uEdgeProfile0.z + wobble * uEdgeProfile1.x, 0.3, 0.48),
+      clamp(uEdgeProfile0.w + wobble * uEdgeProfile1.y, 0.3, 0.48),
+      clamp(uEdgeProfile1.z + wobble * uEdgeProfile1.w, 0.32, 0.5)
     );
   }
   return vec4(
@@ -2276,13 +2366,9 @@ float approximatePow2p6(float value) {
 float edgeExtinction(vec2 uv, vec4 profile, float wobble) {
   float ground = smoothstep(0.0, 0.04, uv.y);
   if (uEdgeMode > 0.5) {
-    // Tsar-only organic envelope: side and top falloff are merged into one
-    // warped superellipse distance (rather than multiplied as independent
-    // axes), so the isocontour is a continuous irregular curve, never a
-    // straight vertical or flat horizontal edge. wobble (a spatially-varying,
-    // slowly time-animated curl-detail sample) perturbs the distance itself,
-    // not just each side's width, so the boundary erodes unevenly rather
-    // than reading as a clean oval.
+    // Side and top falloff are merged into one warped superellipse distance
+    // (rather than multiplied as independent axes), so the isocontour is a
+    // continuous irregular curve, never a straight vertical or flat edge.
     float dx = uv.x - profile.x;
     float sideRadius = dx < 0.0 ? profile.y : profile.z;
     vec2 normalized = vec2(dx / sideRadius, (1.0 - uv.y) / profile.w);
@@ -2293,8 +2379,8 @@ float edgeExtinction(vec2 uv, vec4 profile, float wobble) {
     float ellipseDistance = pow(abs(normalized.x), 2.6)
       + pow(abs(normalized.y), 2.6);
 #endif
-    ellipseDistance += wobble * 0.22;
-    float envelope = 1.0 - smoothstep(0.55, 1.0, ellipseDistance);
+    ellipseDistance += wobble * uEdgeProfile2.z;
+    float envelope = 1.0 - smoothstep(uEdgeProfile2.x, uEdgeProfile2.y, ellipseDistance);
     float mask = envelope * ground;
     return mask * mask * (3.0 - 2.0 * mask);
   }
@@ -2622,6 +2708,15 @@ void main() {
       scalar.a * 0.72 * uLayerVisibility.z * uVolumeProfile1.w
     );
     float smoke = smokeDensity + dustDensity;
+    // Only sparse boundary residue gets the additional profile-controlled
+    // attenuation. Dense central smoke stays on the regular organic envelope.
+    float lowDensityResponse = smoothstep(
+      uEdgeProfile2.w,
+      max(uEdgeProfile2.w + 0.0001, uEdgeProfile3.x),
+      smoke
+    );
+    float lowDensityWeight = (1.0 - lowDensityResponse) * uEdgeProfile3.y;
+    layerFade *= mix(1.0, layerFade, lowDensityWeight);
     float incandescent = max(0.0, scalar.b * uLayerVisibility.x);
     float temperature = max(0.0,
       scalar.r * max(uLayerVisibility.x, uLayerVisibility.w)
@@ -2780,7 +2875,10 @@ void main() {
   float densityOpacity = (1.0 - transmittance) * atmosphericFade;
   float shockOpacity = shockwaveContour * 0.12 * atmosphericFade;
   float alpha = clamp(
-    (densityOpacity + shockOpacity) * domainFade,
+    // Analytical dense shock contours remain independent of smoke-only edge
+    // extinction: the organic plume fade cannot crop an approved outer band.
+    densityOpacity * domainFade
+      + mix(shockOpacity * domainFade, shockOpacity, step(1.5, uShockwaveMode)),
     0.0,
     0.98
   );
@@ -3903,6 +4001,7 @@ export class ResearchFluidEngine {
     const dissipation = this.profile.dissipation || {
       mode: 0, lateStart: 1, finalStart: 1, sourceTaperEnd: 1,
       retentionFloorSmoke: 1, retentionFloorDust: 1, outwardBoost: 0, buoyancyFalloff: 0, motionDamp: 0,
+      lateVelocityRetention: 1, lateCurl: 0, lateShear: 0,
     };
     this._uniform1f(program, 'uDissipationMode', dissipation.mode > 0 ? 1 : 0);
     this._uniform4f(
@@ -3920,6 +4019,14 @@ export class ResearchFluidEngine {
       finite(dissipation.outwardBoost, 0),
       finite(dissipation.buoyancyFalloff, 0),
       finite(dissipation.motionDamp, 0),
+    );
+    this._uniform4f(
+      program,
+      'uDissipationParams3',
+      finite(dissipation.lateVelocityRetention, 1),
+      finite(dissipation.lateCurl, 0),
+      finite(dissipation.lateShear, 0),
+      0,
     );
     const shockwave = this.profile.shockwave || BASE_PROFILE.shockwave;
     this._uniform1f(program, 'uShockwaveMode', clamp(finite(shockwave.mode, 0), 0, 2));
@@ -3993,8 +4100,40 @@ export class ResearchFluidEngine {
       finite(core.structureBlend, 0),
       finite(core.bloomGateScale, 0),
     );
-    const edge = this.profile.edge || { mode: 0 };
+    const edge = this.profile.edge || BASE_PROFILE.edge;
     this._uniform1f(program, 'uEdgeMode', edge.mode > 0 ? 1 : 0);
+    this._uniform4f(
+      program,
+      'uEdgeProfile0',
+      finite(edge.center, 0.5),
+      finite(edge.centerAsymmetry, 0),
+      finite(edge.leftRadius, 0.42),
+      finite(edge.rightRadius, 0.42),
+    );
+    this._uniform4f(
+      program,
+      'uEdgeProfile1',
+      finite(edge.leftWobble, 0),
+      finite(edge.rightWobble, 0),
+      finite(edge.topRadius, 0.46),
+      finite(edge.topWobble, 0),
+    );
+    this._uniform4f(
+      program,
+      'uEdgeProfile2',
+      finite(edge.fadeStart, 0.55),
+      finite(edge.fadeEnd, 1),
+      finite(edge.distanceWobble, 0),
+      finite(edge.lowDensityStart, 0),
+    );
+    this._uniform4f(
+      program,
+      'uEdgeProfile3',
+      finite(edge.lowDensityEnd, 1),
+      finite(edge.lowDensityAttenuation, 0),
+      0,
+      0,
+    );
   }
 
   _bindVolumeShockwaveUniforms(program) {
