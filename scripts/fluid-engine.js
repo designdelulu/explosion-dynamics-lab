@@ -241,9 +241,10 @@ const BASE_PROFILE = Object.freeze({
     lateGroundDrift: 0,
   }),
   // Broad-plume research controls. mode 0 keeps a preset on its exact prior
-  // behavior; mode 1 is the existing historical-scale Tsar path, while mode 2
-  // gives low-yield its separate shaping path with the standard absorbing
-  // boundary.
+  // behavior; mode 1 is the existing historical-scale Tsar path, mode 2 gives
+  // low-yield its compact shaping path, and mode 3 identifies the separately
+  // balanced ground-coupled path. All enabled modes share the generic force
+  // mechanism but retain independent immutable values.
   // feedTaperStart/feedTaperEnd/lateralJitter/turbulenceBlend are the central
   // -stem taper/breakup controls (2026-07 shockwave/stem/performance pass);
   // feedTaperStart/End default to the original hardcoded coreBand taper
@@ -621,13 +622,13 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       sourcePrimitives: ['radial-impulse', 'ground-sheet', 'vertical-jet', 'ejecta-curtain', 'multiple-offset-kernels'],
       source: {
         centerY: 0.19, groundLevel: 0.18, radius: 0.074,
-        aspectX: 1.5, aspectY: 0.62, onsetEnd: 0.055, sustainEnd: 0.6,
+        aspectX: 1.5, aspectY: 0.62, onsetEnd: 0.055, sustainEnd: 0.52,
         radial: 1.18, vertical: 1.32, turbulence: 1.45,
-        heat: 0.64, smoke: 1.52, incandescent: 0.78, dust: 2.32,
-        ejecta: 1.28, clusterSpread: 1.62,
+        heat: 0.64, smoke: 0.88, incandescent: 0.78, dust: 1.8,
+        ejecta: 1.28, clusterSpread: 1.62, capScale: 1.18, capRoll: 1.12,
       },
-      physics: { buoyancy: 0.9, densityLoading: 1.48, windCoupling: 1.28, vorticity: 1.45, velocityRetention: 0.991, cooling: 0.96, smokeConversion: 1.25, scalarRetention: 0.999 },
-      volume: { scaleX: 1.35, scaleY: 1.42, depth: 1.28, opacity: 1.36, shadow: 1.75, bloom: 0.82, distortion: 1.18, erosion: 1.02, noiseScale: 1.25, dustVisibility: 1.9, exposure: 0.94, toneMap: 0.42, backgroundIllumination: 0.2, emissionCurve: 1 },
+      physics: { buoyancy: 0.88, densityLoading: 1.55, windCoupling: 1.18, vorticity: 1.58, velocityRetention: 0.993, cooling: 1.32, smokeConversion: 1.62, scalarRetention: 0.9992 },
+      volume: { scaleX: 1.2, scaleY: 1.24, depth: 1.4, opacity: 0.82, shadow: 1.9, bloom: 0.82, distortion: 1.18, erosion: 1.1, noiseScale: 1.28, dustVisibility: 1.38, exposure: 0.96, toneMap: 0.4, backgroundIllumination: 0.2, emissionCurve: 1 },
       quality: { grid: 1.04, pressure: 1.08, rays: 1.1, tracers: 1.32, detail: 1.12 },
       groundCoupling: {
         mode: 1,
@@ -647,6 +648,40 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       core: {
         mode: 1, highlightThreshold: 2.15, highlightSharpness: 2.85,
         structureBlend: 0.82, bloomGateScale: 8.2,
+      },
+      plume: {
+        mode: 3,
+        expansion: 0.028,
+        vortex: 0.14,
+        persistence: 0.08,
+        widen: 0.025,
+        feedTaperStart: 0.22,
+        feedTaperEnd: 0.48,
+        lateralJitter: 0.48,
+        turbulenceBlend: 0.22,
+      },
+      material: {
+        mode: 1,
+        sootAbsorption: 1.42,
+        dustAbsorption: 0.48,
+        detailBoost: 0.85,
+        warmCoolContrast: 0.72,
+      },
+      shockwave: {
+        mode: 1,
+        ringB: { radiusOffset: -0.26, widthScale: 1.45, strength: 0.2, phaseOffset: 0.012 },
+        ringC: { radiusOffset: 0.16, widthScale: 0.9, strength: 0.12, phaseOffset: 0.04 },
+        ringD: { radiusOffset: 0, widthScale: 1, strength: 0, phaseOffset: 0 },
+        irregularity: 0.075,
+        fadeStart: 0.3,
+        fadeSpan: 0.13,
+      },
+      tracerMaterial: {
+        mode: 1,
+        occlusionStrength: 2.25,
+        sizeVariance: 0.46,
+        brightnessVariance: 0.4,
+        minSizeFloor: 1.65,
       },
     },
   ),
@@ -1117,8 +1152,9 @@ uniform vec4 uGroundCouplingA;
 uniform vec4 uGroundCouplingB;
 uniform vec4 uGroundCouplingC;
 // Profile-gated broad-plume research controls. uPlumeMode 0 is inert, mode 1
-// is the existing historical-scale variant, and mode 2 is the restrained
-// low-yield variant. uPlumeParams packs
+// is the historical-scale variant, mode 2 is the compact low-yield variant,
+// and mode 3 is the independently balanced ground-coupled variant.
+// uPlumeParams packs
 // (expansion, vortexStrength, persistence, columnWiden).
 uniform float uPlumeMode;
 uniform vec4 uPlumeParams;
@@ -1718,15 +1754,28 @@ void main() {
     // one over the same window instead of holding one fixed width until it
     // simply cuts off.
     float corridorAsymmetry = uSeedOffsetsA.x * 0.24 * (0.4 + 0.6 * heightAbove);
+    float groundStemDrift = uGroundCouplingMode > 0.5
+      ? (uSeedOffsetsB.x * 0.055 + turbulence.x * 0.018)
+        * (1.0 - smoothstep(0.62, 1.1, heightAbove))
+      : 0.0;
     float lateralOffset = (turbulence.z + corridorAsymmetry)
       * uPlumeStemParams.z * stemBreakup;
-    float coreLateral = lateral - lateralOffset;
+    float coreLateral = lateral - lateralOffset - groundStemDrift;
     float widthGrow = mix(1.0, 2.4, stemBreakup);
+    if (uGroundCouplingMode > 0.5) {
+      // The ground column begins as a broad, heavy base and narrows only
+      // modestly as it hands material into the cap. This is distinct from the
+      // compact Airburst corridor and avoids a tornado-like stem.
+      widthGrow *= mix(1.6, 1.08, smoothstep(0.12, 0.82, heightAbove));
+    }
     float coreBand = exp(
       -coreLateral * coreLateral
       / max(0.004, uSourceShape.x * uSourceShape.x * 9.0 * widthGrow * widthGrow)
     );
-    velocity.y += coreBand * plumeActivity * uPlumeParams.w
+    float groundFeedWeight = uGroundCouplingMode > 0.5
+      ? mix(1.28, 0.86, smoothstep(0.08, 0.9, heightAbove))
+      : 1.0;
+    velocity.y += coreBand * plumeActivity * uPlumeParams.w * groundFeedWeight
       * (0.4 + 0.6 * (1.0 - heightAbove)) * feedPhase * motionScale * uDt * 30.0 * motionDamp;
     // Medium-scale turbulence reaching into the central corridor specifically
     // (rather than only the generic vortex-ring/cluster terms elsewhere) so
@@ -2045,7 +2094,7 @@ void main() {
       float structuredCore = clamp(
         profileBaseKernel(vUv)
           + multi * 0.35
-          + profileVerticalKernel(vUv) * 0.1,
+          + profileVerticalKernel(vUv) * 0.04,
         0.0,
         1.5
       );
@@ -4191,7 +4240,7 @@ export class ResearchFluidEngine {
       finite(groundCoupling.lateGroundDrift, 0),
     );
     const plume = this.profile.plume || { mode: 0, expansion: 0, vortex: 0, persistence: 0, widen: 0 };
-    this._uniform1f(program, 'uPlumeMode', clamp(finite(plume.mode, 0), 0, 2));
+    this._uniform1f(program, 'uPlumeMode', clamp(finite(plume.mode, 0), 0, 3));
     this._uniform4f(
       program,
       'uPlumeParams',
