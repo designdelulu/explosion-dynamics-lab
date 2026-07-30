@@ -212,7 +212,7 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
   for (const key of [
     "mode", "lateStart", "finalStart", "sourceTaperEnd",
     "retentionFloorSmoke", "retentionFloorDust", "outwardBoost", "buoyancyFalloff", "motionDamp",
-    "lateVelocityRetention", "lateCurl", "lateShear",
+    "lateVelocityRetention", "lateCurl", "lateShear", "latePhaseRate",
   ]) {
     assert.ok(Number.isFinite(profile.dissipation[key]), `${presetId}: dissipation.${key} must be finite`);
   }
@@ -229,7 +229,7 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(d.motionDamp > 0, "Tsar residual motion damp must be active");
     assert.ok(d.lateVelocityRetention > profile.physics.velocityRetention && d.lateVelocityRetention < 1,
       "Tsar late tail must retain a bounded amount of resolved velocity");
-    assert.ok(d.lateCurl > 0 && d.lateShear > 0,
+    assert.ok(d.lateCurl > 0 && d.lateShear > 0 && d.latePhaseRate > 0,
       "Tsar late tail must add deterministic curl and shear, not opacity-only dissipation");
   } else {
     const d = profile.dissipation;
@@ -244,6 +244,7 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.equal(d.lateVelocityRetention, 1, `${presetId}: dissipation.lateVelocityRetention must stay neutral (1)`);
     assert.equal(d.lateCurl, 0, `${presetId}: dissipation.lateCurl must stay neutral (0)`);
     assert.equal(d.lateShear, 0, `${presetId}: dissipation.lateShear must stay neutral (0)`);
+    assert.equal(d.latePhaseRate, 0, `${presetId}: dissipation.latePhaseRate must stay neutral (0)`);
   }
 }
 // The velocity/scalar/tracer shaders must all carry the dissipation uniforms

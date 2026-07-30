@@ -1444,7 +1444,16 @@ export class ExplosionRenderer {
     // is unchanged.
     const aspectPullback = clamp(0.62 + 0.38 * (width / Math.max(1, height)), 0.75, 1);
     const tunedPullback = clamp(finite(this.settings.tuning?.cameraPullback, 1), 0.6, 1.4);
-    const scale = energyScale * this._behavior.scale * cameraScale * aspectPullback / tunedPullback;
+    // A research profile may reserve a little extra headroom only for the
+    // compact/mobile portrait projection. It is a composition pullback, not
+    // a source or volume adjustment, so the field, dense shock counts, and
+    // all desktop/tablet framing remain intact.
+    const mobilePortrait = this.settings.quality === 'mobile' && height > width;
+    const profilePortraitPullback = mobilePortrait
+      ? clamp(finite(this._preset?.researchModel?.mobilePortraitPullback, 1), 1, 1.2)
+      : 1;
+    const scale = energyScale * this._behavior.scale * cameraScale * aspectPullback
+      / (tunedPullback * profilePortraitPullback);
     // Coefficients strengthened ~1.6x (camera-sensitivity pass) so a given
     // drag produces noticeably more visible parallax; at cameraAngle === 0
     // (the default/reset state) both terms are still exactly zero, so idle

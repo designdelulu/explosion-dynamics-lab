@@ -300,6 +300,7 @@ const BASE_PROFILE = Object.freeze({
     lateVelocityRetention: 1,
     lateCurl: 0,
     lateShear: 0,
+    latePhaseRate: 0,
   }),
   // Early-core research controls (2026-07 Tsar core/tracer polish). mode 0
   // keeps a preset byte-identical to before this mechanism; low-yield and Tsar
@@ -764,8 +765,9 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
         // they preserve cap coherence while introducing slow, deterministic
         // lobe drift and edge shear rather than boiling noise.
         lateVelocityRetention: 0.999,
-        lateCurl: 0.0035,
-        lateShear: 0.0028,
+        lateCurl: 0.0065,
+        lateShear: 0.0045,
+        latePhaseRate: 0.052,
       },
       // 2026-07 core/tracer polish: tracers rendered above smoke regardless
       // of how buried they were and shared one fixed size/brightness, which
@@ -1076,7 +1078,7 @@ uniform vec4 uPlumeStemParams;
 // packs (lateStart, finalStart, retentionFloorSmoke, retentionFloorDust);
 // uDissipationParams2 packs (sourceTaperEnd, outwardBoost, buoyancyFalloff,
 // motionDamp); uDissipationParams3 packs (lateVelocityRetention, lateCurl,
-// lateShear, unused) — all in normalized-time / unitless-blend terms.
+// lateShear, latePhaseRate) — all in normalized-time / unitless-blend terms.
 uniform float uDissipationMode;
 uniform vec4 uDissipationParams;
 uniform vec4 uDissipationParams2;
@@ -1674,7 +1676,7 @@ void main() {
       // altitude-aware shear keeps existing late mass exchanging positions
       // without sourcing new density or disturbing mature cap formation.
       float lateMaterial = smoothstep(0.018, 0.14, smoke + dust * 0.45);
-      float slowPhase = uTime * 0.024 + uSeedOffsetsB.z * 6.28318530718;
+      float slowPhase = uTime * uDissipationParams3.w + uSeedOffsetsB.z * 6.28318530718;
       vec2 broadCurl = vec2(
         sin((vUv.y - uSourceCenter.y) * 5.4 + slowPhase),
         -sin((vUv.x - uSourceCenter.x) * 4.8 - slowPhase * 0.73)
@@ -4001,7 +4003,7 @@ export class ResearchFluidEngine {
     const dissipation = this.profile.dissipation || {
       mode: 0, lateStart: 1, finalStart: 1, sourceTaperEnd: 1,
       retentionFloorSmoke: 1, retentionFloorDust: 1, outwardBoost: 0, buoyancyFalloff: 0, motionDamp: 0,
-      lateVelocityRetention: 1, lateCurl: 0, lateShear: 0,
+      lateVelocityRetention: 1, lateCurl: 0, lateShear: 0, latePhaseRate: 0,
     };
     this._uniform1f(program, 'uDissipationMode', dissipation.mode > 0 ? 1 : 0);
     this._uniform4f(
@@ -4026,7 +4028,7 @@ export class ResearchFluidEngine {
       finite(dissipation.lateVelocityRetention, 1),
       finite(dissipation.lateCurl, 0),
       finite(dissipation.lateShear, 0),
-      0,
+      finite(dissipation.latePhaseRate, 0),
     );
     const shockwave = this.profile.shockwave || BASE_PROFILE.shockwave;
     this._uniform1f(program, 'uShockwaveMode', clamp(finite(shockwave.mode, 0), 0, 2));
