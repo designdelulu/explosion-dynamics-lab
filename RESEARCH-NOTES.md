@@ -16,6 +16,41 @@ The papers were text-extracted and rendered for visual inspection. The implement
 
 ## Paper-to-browser mapping
 
+## Volume-domain boundary audit (2026-07)
+
+The Cinematic renderer uses a bounded two-dimensional scalar/velocity field
+and reconstructs a layered 2.5D volume from it. That is appropriate for a
+browser experiment, but a bounded numerical field must not become a visible
+geometric container. The Ground Burst proof-of-concept exposed four distinct
+boundaries that had been conflated:
+
+1. **Solver boundary.** The scalar and velocity textures end at `[0, 1]`.
+   The pressure solve and advection use finite edge samples; that is a
+   computational constraint, not a cloud shape.
+2. **Volume reconstruction boundary.** The ray marcher maps field coordinates
+   to the current event transform. A depth/curl offset can leave the field even
+   when the undistorted pixel is inside it. Sampling that offset with a clamped
+   texture lookup repeats an edge texel into a flat wall.
+3. **Extinction envelope.** The profile edge modes are an optical treatment for
+   sparse residue. They can soften an unavoidable limit, but cannot safely
+   carry medium- or high-density material without becoming a visible oval or
+   capsule.
+4. **Camera and analytical-overlay boundary.** The Canvas pressure front is
+   analytical and can naturally continue past the visible smoke. The viewport
+   may crop either layer; neither fact licenses a smaller unrelated smoke box.
+
+The reusable contract is therefore: retain an inactive padded margin in the
+fixed solver field, map the active region through a matching render transform,
+discard out-of-field ray samples rather than clamp them, and use organic
+extinction only for low-density residue. The camera may crop naturally, while
+the developer diagnostics report active-density bounds, solver-edge risk, the
+visible field extent, and viewport clearance. The analytical shock remains in
+event space rather than being clipped to smoke.
+
+This is a visual-containment technique for normalized fields only. It does not
+represent physical pressure, yield, atmospheric extent, or real-world smoke
+transport.
+
 ### 1. *Animating Explosions*
 
 Relevant concepts:
