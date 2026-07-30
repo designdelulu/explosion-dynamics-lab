@@ -627,7 +627,7 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
         heat: 0.64, smoke: 0.88, incandescent: 0.78, dust: 1.8,
         ejecta: 1.28, clusterSpread: 1.62, capScale: 1.18, capRoll: 1.12,
       },
-      physics: { buoyancy: 0.88, densityLoading: 1.55, windCoupling: 1.18, vorticity: 1.58, velocityRetention: 0.993, cooling: 1.32, smokeConversion: 1.62, scalarRetention: 0.9992 },
+      physics: { buoyancy: 0.88, densityLoading: 1.55, windCoupling: 1.18, vorticity: 1.58, velocityRetention: 0.993, cooling: 1.32, smokeConversion: 1.62, scalarRetention: 0.9995 },
       volume: { scaleX: 1.2, scaleY: 1.24, depth: 1.4, opacity: 0.82, shadow: 1.9, bloom: 0.82, distortion: 1.18, erosion: 1.1, noiseScale: 1.28, dustVisibility: 1.38, exposure: 0.96, toneMap: 0.4, backgroundIllumination: 0.2, emissionCurve: 1 },
       quality: { grid: 1.04, pressure: 1.08, rays: 1.1, tracers: 1.32, detail: 1.12 },
       groundCoupling: {
@@ -643,7 +643,7 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
         surfaceHeat: 0.75,
         baseDust: 1.28,
         transitionLift: 0.18,
-        lateGroundDrift: 0,
+        lateGroundDrift: 0.085,
       },
       core: {
         mode: 1, highlightThreshold: 2.15, highlightSharpness: 2.85,
@@ -653,7 +653,7 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
         mode: 3,
         expansion: 0.028,
         vortex: 0.14,
-        persistence: 0.08,
+        persistence: 0.52,
         widen: 0.025,
         feedTaperStart: 0.22,
         feedTaperEnd: 0.48,
@@ -682,6 +682,38 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
         sizeVariance: 0.46,
         brightnessVariance: 0.4,
         minSizeFloor: 1.65,
+      },
+      dissipation: {
+        mode: 2,
+        lateStart: 0.7,
+        finalStart: 1,
+        sourceTaperEnd: 0.9,
+        retentionFloorSmoke: 1,
+        retentionFloorDust: 0.9994,
+        outwardBoost: 0.035,
+        buoyancyFalloff: 0.38,
+        motionDamp: 0.56,
+        lateVelocityRetention: 0.9993,
+        lateCurl: 0.0075,
+        lateShear: 0.006,
+        latePhaseRate: 0.06,
+      },
+      edge: {
+        mode: 3,
+        center: 0.5,
+        centerAsymmetry: 1.4,
+        leftRadius: 0.46,
+        rightRadius: 0.41,
+        topRadius: 0.44,
+        leftWobble: 0.12,
+        rightWobble: -0.09,
+        topWobble: 0.11,
+        fadeStart: 0.42,
+        fadeEnd: 0.94,
+        distanceWobble: 0.28,
+        lowDensityStart: 0.035,
+        lowDensityEnd: 0.19,
+        lowDensityAttenuation: 0.18,
       },
     },
   ),
@@ -1827,6 +1859,20 @@ void main() {
       vec2 outwardDir = fromCenter / max(length(fromCenter), 0.02);
       velocity += outwardDir * uDissipationParams2.y * outwardProgress * motionScale * uDt * 0.6;
 
+      if (uGroundCouplingMode > 0.5) {
+        // Ground dust keeps a weak horizontal tail after the main radial
+        // impulse has ended. Height weighting prevents this from pushing the
+        // elevated cap outward or manufacturing new late smoke.
+        float lateGroundHeight = exp(
+          -pow(max(0.0, vUv.y - uSourceShape.w)
+            / max(0.012, uSourceShape.x * uGroundCouplingA.y * 1.35), 2.0)
+        );
+        velocity.x += sign(fromCenter.x + uSeedOffsetsB.w * 0.012)
+          * lateGroundHeight * uGroundCouplingC.w * outwardProgress
+          * (0.5 + dust * 0.5) * motionScale * uDt;
+        velocity.y *= mix(1.0, 0.82, lateGroundHeight * outwardProgress);
+      }
+
       // The scalar-loss tail must remain a real flow, not a frozen density
       // field whose opacity is merely reduced. A broad seed-stable roll plus
       // altitude-aware shear keeps existing late mass exchanging positions
@@ -2598,6 +2644,37 @@ float approximatePow2p6(float value) {
 
 float edgeExtinction(vec2 uv, vec4 profile, float wobble) {
   float ground = smoothstep(0.0, 0.04, uv.y);
+  if (uEdgeMode > 2.5) {
+    // Ground-coupled organic envelope. Unlike the airburst/historical
+    // superellipse below, its vertical distance starts only in the upper
+    // domain. The dense base therefore reaches the surface intact while
+    // asymmetric warped sides and the cap dissolve before the computational
+    // wall. A slightly wider low-altitude radius avoids replacing the box
+    // with an oval or pinching the ground footprint into a vignette.
+    float dx = uv.x - profile.x;
+    float sideRadius = dx < 0.0 ? profile.y : profile.z;
+    float lowerWiden = mix(1.1, 0.86, smoothstep(0.18, 0.48, uv.y));
+    float capRollout = mix(1.0, 1.2, smoothstep(0.56, 0.84, uv.y));
+    float normalizedX = dx / max(0.2, sideRadius * lowerWiden * capRollout);
+    float topStart = 1.0 - profile.w;
+    float normalizedY = max(0.0, uv.y - topStart) / max(0.2, profile.w);
+#ifdef BALANCED_EDGE_FAST_POWER
+    float organicDistance = approximatePow2p6(abs(normalizedX))
+      + approximatePow2p6(abs(normalizedY));
+#else
+    float organicDistance = pow(abs(normalizedX), 2.6)
+      + pow(abs(normalizedY), 2.6);
+#endif
+    organicDistance += wobble * uEdgeProfile2.z
+      * mix(0.45, 1.0, smoothstep(0.2, 0.72, uv.y));
+    float envelope = 1.0 - smoothstep(
+      uEdgeProfile2.x,
+      uEdgeProfile2.y,
+      organicDistance
+    );
+    float mask = envelope * ground;
+    return mask * mask * (3.0 - 2.0 * mask);
+  }
   if (uEdgeMode > 0.5) {
     // Side and top falloff are merged into one warped superellipse distance
     // (rather than multiplied as independent axes), so the isocontour is a
@@ -4360,7 +4437,7 @@ export class ResearchFluidEngine {
       finite(core.bloomGateScale, 0),
     );
     const edge = this.profile.edge || BASE_PROFILE.edge;
-    this._uniform1f(program, 'uEdgeMode', edge.mode > 0 ? 1 : 0);
+    this._uniform1f(program, 'uEdgeMode', clamp(finite(edge.mode, 0), 0, 3));
     this._uniform4f(
       program,
       'uEdgeProfile0',
