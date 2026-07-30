@@ -220,6 +220,26 @@ const BASE_PROFILE = Object.freeze({
     emissionCurve: 1,
   }),
   quality: Object.freeze({ grid: 1, pressure: 1, rays: 1, tracers: 1, detail: 1 }),
+  // Ground-coupling research controls. mode 0 is exactly inert. An opted-in
+  // profile can keep the surface sheet horizontal for longer, taper it before
+  // the plume lifts, vary its radial lobes deterministically, and separate
+  // surface heat/dust from the rising thermal feed. These are normalized
+  // visual controls, not blast-pressure or damage quantities.
+  groundCoupling: Object.freeze({
+    mode: 0,
+    radialImpulse: 0,
+    heightFalloff: 1,
+    horizontalRetention: 1,
+    verticalDamping: 1,
+    spreadStart: 0,
+    spreadEnd: 0,
+    angularVariation: 0,
+    asymmetry: 0,
+    surfaceHeat: 0,
+    baseDust: 0,
+    transitionLift: 0,
+    lateGroundDrift: 0,
+  }),
   // Broad-plume research controls. mode 0 keeps a preset on its exact prior
   // behavior; mode 1 is the existing historical-scale Tsar path, while mode 2
   // gives low-yield its separate shaping path with the standard absorbing
@@ -357,6 +377,7 @@ function defineFluidProfile(presetId, profileId, overrides = {}) {
     physics: { ...BASE_PROFILE.physics, ...(overrides.physics || {}) },
     volume: { ...BASE_PROFILE.volume, ...(overrides.volume || {}) },
     quality: { ...BASE_PROFILE.quality, ...(overrides.quality || {}) },
+    groundCoupling: { ...BASE_PROFILE.groundCoupling, ...(overrides.groundCoupling || {}) },
     plume: { ...BASE_PROFILE.plume, ...(overrides.plume || {}) },
     shockwave: {
       ...BASE_PROFILE.shockwave,
@@ -598,10 +619,35 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       eventFamilyId: 'nuclear-scale', physicalFamilyId: 'ground-coupled', eventFamily: 'Nuclear scale · ground-coupled', profileKind: 10,
       tracerType: 'particulate',
       sourcePrimitives: ['radial-impulse', 'ground-sheet', 'vertical-jet', 'ejecta-curtain', 'multiple-offset-kernels'],
-      source: { centerY: 0.18, groundLevel: 0.18, radius: 0.078, aspectX: 1.28, aspectY: 0.82, onsetEnd: 0.065, sustainEnd: 0.62, radial: 1.3, vertical: 1.5, turbulence: 1.3, heat: 1.28, smoke: 1.38, incandescent: 1.18, dust: 2.15, ejecta: 1.2, clusterSpread: 1.35 },
+      source: {
+        centerY: 0.19, groundLevel: 0.18, radius: 0.074,
+        aspectX: 1.5, aspectY: 0.62, onsetEnd: 0.055, sustainEnd: 0.6,
+        radial: 1.18, vertical: 1.32, turbulence: 1.45,
+        heat: 0.64, smoke: 1.52, incandescent: 0.78, dust: 2.32,
+        ejecta: 1.28, clusterSpread: 1.62,
+      },
       physics: { buoyancy: 0.9, densityLoading: 1.48, windCoupling: 1.28, vorticity: 1.45, velocityRetention: 0.991, cooling: 0.96, smokeConversion: 1.25, scalarRetention: 0.999 },
-      volume: { scaleX: 1.35, scaleY: 1.42, depth: 1.28, opacity: 1.52, shadow: 1.62, bloom: 1.12, distortion: 1.18, erosion: 1.02, noiseScale: 1.25, dustVisibility: 1.9, exposure: 1.02, toneMap: 0.12, backgroundIllumination: 0.25, emissionCurve: 0.86 },
+      volume: { scaleX: 1.35, scaleY: 1.42, depth: 1.28, opacity: 1.36, shadow: 1.75, bloom: 0.82, distortion: 1.18, erosion: 1.02, noiseScale: 1.25, dustVisibility: 1.9, exposure: 0.94, toneMap: 0.42, backgroundIllumination: 0.2, emissionCurve: 1 },
       quality: { grid: 1.04, pressure: 1.08, rays: 1.1, tracers: 1.32, detail: 1.12 },
+      groundCoupling: {
+        mode: 1,
+        radialImpulse: 1.22,
+        heightFalloff: 1.35,
+        horizontalRetention: 0.9985,
+        verticalDamping: 0.58,
+        spreadStart: 0.006,
+        spreadEnd: 0.34,
+        angularVariation: 0.28,
+        asymmetry: 0.2,
+        surfaceHeat: 0.75,
+        baseDust: 1.28,
+        transitionLift: 0.18,
+        lateGroundDrift: 0,
+      },
+      core: {
+        mode: 1, highlightThreshold: 2.15, highlightSharpness: 2.85,
+        structureBlend: 0.82, bloomGateScale: 8.2,
+      },
     },
   ),
   'extreme-historical-scale': defineFluidProfile(
@@ -1061,6 +1107,15 @@ uniform vec4 uSeedOffsetsB;
 uniform vec4 uProfilePhysics;
 uniform vec4 uProfileDecay;
 uniform vec4 uProfileAux;
+// Ground Burst-specific surface coupling, inert unless uGroundCouplingMode is
+// enabled by the immutable profile. A packs radial impulse, source-height
+// falloff, horizontal retention, and near-ground vertical damping. B packs
+// radial phase start/end, deterministic lobe variation, and left/right
+// asymmetry. C packs surface heat, base dust, transition lift, and late drift.
+uniform float uGroundCouplingMode;
+uniform vec4 uGroundCouplingA;
+uniform vec4 uGroundCouplingB;
+uniform vec4 uGroundCouplingC;
 // Profile-gated broad-plume research controls. uPlumeMode 0 is inert, mode 1
 // is the existing historical-scale variant, and mode 2 is the restrained
 // low-yield variant. uPlumeParams packs
@@ -1457,9 +1512,10 @@ void main() {
     velocity.y += verticalKernel * sustain * pulse * stagedImpact * uSourceMotion.y
       * 0.18 * motionScale * uDt
       * (sourceEnabled(SOURCE_VERTICAL) || sourceEnabled(SOURCE_PULSED) ? 1.0 : 0.0);
+    float legacyGroundCoupling = uGroundCouplingMode > 0.5 ? 0.0 : 1.0;
     velocity.x += sign(primitiveDelta.x + uSeedOffsetsA.x * 0.04) * groundKernel
       * onset * stagedImpact * uSourceMotion.x * 0.18 * motionScale * uDt * 60.0
-      * (sourceEnabled(SOURCE_GROUND) ? 1.0 : 0.0);
+      * (sourceEnabled(SOURCE_GROUND) ? legacyGroundCoupling : 0.0);
     vec2 ejectaDirection = safeDirection(vec2(
       primitiveDelta.x * 1.25 + uSeedOffsetsB.x * 0.03,
       abs(primitiveDelta.y) + 0.12
@@ -1474,6 +1530,57 @@ void main() {
     );
     velocity += turbulence.xy * (activeKernel * 0.5 + clusterKernel)
       * clusterActivity * uSourceMotion.w * 0.025 * motionScale * uDt * 60.0;
+
+    if (uGroundCouplingMode > 0.5 && sourceEnabled(SOURCE_GROUND)) {
+      // A sustained, height-weighted surface outflow replaces the one-frame
+      // symmetric sheet for the opted-in ground profile. Multiple seeded
+      // frequencies vary the left/right lobes without drawing a permanent
+      // ring, while the phase taper hands motion to the rising plume.
+      float heightAboveGround = max(0.0, vUv.y - uSourceShape.w);
+      float heightScale = max(0.012, uSourceShape.x * uGroundCouplingA.y);
+      float groundHeightWeight = exp(
+        -heightAboveGround * heightAboveGround / (heightScale * heightScale)
+      );
+      float spreadPhase = smoothstep(
+        uGroundCouplingB.x,
+        uGroundCouplingB.x + 0.025,
+        uNormalizedTime
+      ) * (1.0 - smoothstep(
+        uGroundCouplingB.y,
+        uGroundCouplingB.y + 0.14,
+        uNormalizedTime
+      ));
+      float groundDistance = abs(primitiveDelta.x) / max(0.01, uSourceShape.x);
+      float seededLobes = 1.0 + uGroundCouplingB.z * (
+        sin(groundDistance * 4.7 + uSeedOffsetsA.z * 4.1) * 0.58
+        + sin(groundDistance * 9.3 - uSeedOffsetsB.y * 3.7) * 0.42
+      );
+      float sideBias = 1.0 + sign(primitiveDelta.x + 0.0001)
+        * uGroundCouplingB.w * uSeedOffsetsA.x;
+      float coupledGround = groundKernel * groundHeightWeight
+        * (onset + sustain * 0.48) * spreadPhase;
+      velocity.x += sign(primitiveDelta.x + uSeedOffsetsB.x * 0.018)
+        * coupledGround * seededLobes * sideBias
+        * uGroundCouplingA.x * uSourceMotion.x
+        * 0.22 * motionScale * uDt * 60.0;
+      // Suppress the vertical component only inside the surface layer. The
+      // same field transitions into a modest off-center lift above it, so the
+      // stem emerges from the base rather than detaching or forming a seam.
+      velocity.y *= mix(1.0, uGroundCouplingA.w, groundHeightWeight * spreadPhase);
+      float transitionBand = smoothstep(
+        uSourceShape.w + uSourceShape.x * 0.3,
+        uSourceShape.w + uSourceShape.x * 1.9,
+        vUv.y
+      ) * (1.0 - smoothstep(
+        uSourceShape.w + uSourceShape.x * 4.0,
+        uSourceShape.w + uSourceShape.x * 6.2,
+        vUv.y
+      ));
+      velocity.y += activeKernel * transitionBand * sustain
+        * uGroundCouplingC.z * motionScale * uDt;
+      velocity += turbulence.xy * coupledGround * uGroundCouplingB.z
+        * 0.01 * motionScale * uDt * 60.0;
+    }
   }
 
   // A paired vortex ring in the vertical slice supplies the cap's toroidal
@@ -1690,7 +1797,22 @@ void main() {
     }
   }
 
-  velocity *= pow(clamp(dissipationVelocityRetention(), 0.9, 1.0), uDt * 60.0);
+  float retainedVelocity = dissipationVelocityRetention();
+  if (uGroundCouplingMode > 0.5) {
+    float nearGround = exp(
+      -pow(max(0.0, vUv.y - uSourceShape.w)
+        / max(0.012, uSourceShape.x * uGroundCouplingA.y), 2.0)
+    );
+    float horizontalRetention = mix(
+      retainedVelocity,
+      max(retainedVelocity, uGroundCouplingA.z),
+      nearGround
+    );
+    velocity.x *= pow(clamp(horizontalRetention, 0.9, 1.0), uDt * 60.0);
+    velocity.y *= pow(clamp(retainedVelocity, 0.9, 1.0), uDt * 60.0);
+  } else {
+    velocity *= pow(clamp(retainedVelocity, 0.9, 1.0), uDt * 60.0);
+  }
   velocity *= boundaryMask(vUv);
   float speed = length(velocity);
   if (speed > 1.4) velocity *= 1.4 / speed;
@@ -1866,7 +1988,8 @@ void main() {
     float ground = profileGroundKernel(vUv);
     float ejecta = profileEjectaKernel(vUv);
     float trail = profileTrailKernel(vUv);
-    float ring = profileRingKernel(vUv) + profileShockwaveLayers(vUv);
+    float sourceRing = profileRingKernel(vUv);
+    float shockwaveLayers = profileShockwaveLayers(vUv);
     float combustion = sourceEnabled(SOURCE_SUSTAINED) ? sustain : fireEnvelope;
     float hotEnvelope = onset * 1.45 + combustion * pulse * 0.72;
     float matterEnvelope = sustain * (0.35 + pulse * 0.65);
@@ -1881,7 +2004,8 @@ void main() {
       : combined;
     float thermalKernel = clamp(
       stagedCombined
-        + ring * (sourceEnabled(SOURCE_RING) ? 0.5 : 0.0)
+        + sourceRing * (sourceEnabled(SOURCE_RING) ? 0.5 : 0.0)
+        + shockwaveLayers * 0.5
         + stagedTrail * 0.72,
       0.0,
       2.4
@@ -1897,10 +2021,68 @@ void main() {
       0.0,
       2.8
     );
-    temperature += source * thermalKernel * hotEnvelope * uSourceScalar.x * uDt * 3.2;
-    incandescent += source * thermalKernel * hotEnvelope * uSourceScalar.z * uDt * 2.4;
-    smoke += source * stagedCombined * matterEnvelope * uSourceScalar.y * uDt * 0.92;
-    dust += source * particulateKernel * matterEnvelope * uSourceScalar.w * uDt * 0.72;
+    if (uGroundCouplingMode > 0.5) {
+      // Keep the surface flash broad but short-lived and irregular; do not
+      // feed the whole ground sheet through the same high-temperature kernel
+      // as the vertical plume. The base/offset kernels supply the hot core,
+      // while the ground and ejecta kernels primarily supply particulate
+      // material. This is the white-barrel fix and is inert for all other
+      // profiles.
+      float seededThermalPockets = clamp(
+        0.62 + sourceDetail * 0.64
+          + sin((vUv.x - uSourceCenter.x) * 31.0 + uSeedOffsetsA.w * 5.2) * 0.18,
+        0.12,
+        1.38
+      );
+      float groundRipple = uSourceShape.x * (
+        sourceDetail * 0.24
+          + sin((vUv.x - uSourceCenter.x) * 38.0 + uSeedOffsetsB.z * 4.8) * 0.12
+      );
+      float irregularGround = max(
+        ground * 0.28,
+        profileGroundKernel(vUv + vec2(0.0, groundRipple))
+      );
+      float structuredCore = clamp(
+        profileBaseKernel(vUv)
+          + multi * 0.35
+          + profileVerticalKernel(vUv) * 0.1,
+        0.0,
+        1.5
+      );
+      float groundFlashEnvelope = exp(
+        -uNormalizedTime / 0.022
+      ) * step(0.000001, uTime);
+      float surfaceFlash = irregularGround * groundFlashEnvelope * uGroundCouplingC.x
+        * seededThermalPockets;
+      float groundHotEnvelope = onset * 1.2
+        + combustion * pulse * 0.32
+          * (1.0 - smoothstep(0.12, 0.32, uNormalizedTime));
+      float risingHeat = structuredCore * groundHotEnvelope
+        * seededThermalPockets;
+      temperature += source * (risingHeat + surfaceFlash * 2.3)
+        * uSourceScalar.x * uDt * 1.65;
+      incandescent += source * (
+        risingHeat * 0.72 + surfaceFlash * 1.15
+      ) * uSourceScalar.z * uDt * 1.2;
+      smoke += source * clamp(
+        structuredCore * 0.72 + multi * 0.38 + irregularGround * 0.16,
+        0.0,
+        2.0
+      ) * matterEnvelope * uSourceScalar.y * uDt * 0.88;
+      dust += source * clamp(
+        irregularGround * uGroundCouplingC.y
+          + ejecta * uSourceAux.y
+          + multi * 0.46
+          + structuredCore * 0.22,
+        0.0,
+        3.0
+      ) * matterEnvelope * uSourceScalar.w * uDt * 0.7;
+    } else {
+      temperature += source * thermalKernel * hotEnvelope * uSourceScalar.x * uDt * 3.2;
+      incandescent += source * thermalKernel * hotEnvelope * uSourceScalar.z * uDt * 2.4;
+      smoke += source * stagedCombined * matterEnvelope * uSourceScalar.y * uDt * 0.92;
+      dust += source * particulateKernel * matterEnvelope * uSourceScalar.w * uDt * 0.72;
+    }
   }
 
   outputValue = clamp(vec4(temperature, smoke, incandescent, dust), 0.0, 4.0);
@@ -3982,6 +4164,32 @@ export class ResearchFluidEngine {
     this._uniform4f(program, 'uProfilePhysics', ...state.physics);
     this._uniform4f(program, 'uProfileDecay', ...state.decay);
     this._uniform4f(program, 'uProfileAux', ...state.profileAux);
+    const groundCoupling = this.profile.groundCoupling || BASE_PROFILE.groundCoupling;
+    this._uniform1f(program, 'uGroundCouplingMode', groundCoupling.mode > 0 ? 1 : 0);
+    this._uniform4f(
+      program,
+      'uGroundCouplingA',
+      finite(groundCoupling.radialImpulse, 0),
+      finite(groundCoupling.heightFalloff, 1),
+      finite(groundCoupling.horizontalRetention, 1),
+      finite(groundCoupling.verticalDamping, 1),
+    );
+    this._uniform4f(
+      program,
+      'uGroundCouplingB',
+      finite(groundCoupling.spreadStart, 0),
+      finite(groundCoupling.spreadEnd, 0),
+      finite(groundCoupling.angularVariation, 0),
+      finite(groundCoupling.asymmetry, 0),
+    );
+    this._uniform4f(
+      program,
+      'uGroundCouplingC',
+      finite(groundCoupling.surfaceHeat, 0),
+      finite(groundCoupling.baseDust, 0),
+      finite(groundCoupling.transitionLift, 0),
+      finite(groundCoupling.lateGroundDrift, 0),
+    );
     const plume = this.profile.plume || { mode: 0, expansion: 0, vortex: 0, persistence: 0, widen: 0 };
     this._uniform1f(program, 'uPlumeMode', clamp(finite(plume.mode, 0), 0, 2));
     this._uniform4f(
