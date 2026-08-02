@@ -843,6 +843,8 @@ export class ExplosionRenderer {
       fluidSimulationSteps: fluid?.simulationSteps ?? 0,
       fluidSessionCount: Number(Boolean(this._fluidLive)) + Number(Boolean(this._fluidExport)),
       fieldMetrics: fluid?.metrics || fluid?.fieldMetrics || null,
+      renderDomain: fluid?.renderDomain || null,
+      shockSmokeAlignment: this._stats.shockSmokeAlignment || null,
       maxVelocity: fluid?.velocityMagnitude ?? null,
       maxTemperature: fluid?.maximumTemperature ?? null,
       maxSmoke: fluid?.smokeDensity ?? null,
@@ -1090,8 +1092,9 @@ export class ExplosionRenderer {
 
   _renderResearchFluid(engine, time, width, height, dpr, layout, phase) {
     if (!engine) return false;
-    const outputWidth = Math.max(1, Math.round(width * dpr));
-    const outputHeight = Math.max(1, Math.round(height * dpr));
+    const outputScale = clamp(finite(engine.getRenderResolutionScale?.(), 1), 0.55, 1);
+    const outputWidth = Math.max(1, Math.round(width * dpr * outputScale));
+    const outputHeight = Math.max(1, Math.round(height * dpr * outputScale));
     const scaleX = outputWidth / Math.max(1, width);
     const scaleY = outputHeight / Math.max(1, height);
     const meta = engine === this._fluidLive ? this._fluidLiveMeta : this._fluidExportMeta;
@@ -1255,6 +1258,29 @@ export class ExplosionRenderer {
         fluidEngine
         && this._renderResearchFluid(fluidEngine, safeTime, width, height, dpr, layout, phase),
       );
+      const renderDomain = fluidEngine?.getStats?.().renderDomain;
+      if (renderDomain?.volumeScale && renderDomain?.sourceCenter) {
+        const [sourceX, sourceY] = renderDomain.sourceCenter;
+        const [scaleX, scaleY] = renderDomain.volumeScale;
+        const shock = this._shockGroundFront(layout, phase);
+        const shockRadius = shock.radius * dpr;
+        const renderRadiusX = Math.min(sourceX, 1 - sourceX) * scaleX * pixelWidth;
+        const renderRadiusY = Math.min(sourceY, 1 - sourceY) * scaleY * pixelHeight;
+        this._stats.shockSmokeAlignment = {
+          shockRadius,
+          renderRadiusX,
+          renderRadiusY,
+          // Ground-coupled pressure travels primarily along the surface, so
+          // compare its event-space radius with the horizontal render extent.
+          // Keep the vertical ratio visible for diagnostics without treating
+          // the physically lower smoke column as a clipped shock mismatch.
+          shockToRenderRadius: shockRadius / Math.max(1, renderRadiusX),
+          shockToVerticalRadius: shockRadius / Math.max(1, renderRadiusY),
+          viewportCropsNaturally: shockRadius > Math.max(pixelWidth, pixelHeight),
+        };
+      } else {
+        this._stats.shockSmokeAlignment = null;
+      }
       const fluidExportRequired = !isLive
         && options.exporting === true
         && requestsFluidRenderer(this._preset, this.settings.viewMode);
