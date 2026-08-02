@@ -51,6 +51,27 @@ This is a visual-containment technique for normalized fields only. It does not
 represent physical pressure, yield, atmospheric extent, or real-world smoke
 transport.
 
+## Nuclear Ground Burst artistic tuning (2026-08)
+
+The post-containment baseline keeps the approved padded-domain transform intact
+(`padding=0.10`, active scale `0.80`, effective overscan `1.30`, render extent
+`1.65 × 1.50`, and validity-aware ray sampling). The remaining defect is in the
+profile's visual material and motion balance rather than in the computational
+boundary.
+
+At t1–t9 the scalar smoke channel forms a broad, high-opacity horizontal layer
+while the incandescent channel has already decayed. The volume therefore reads
+as pale and uniform even though the field is spatially valid. The main causes
+are the Ground profile's strong density loading (`1.55`), rapid smoke conversion
+(`1.62`), modest buoyancy (`0.88`), and a material transfer that uses little
+low-frequency variation when the third detail octave is disabled. The cap feed
+also remains visually subordinate to the dense ground sheet.
+
+The tuning pass is restricted to the Ground profile's source/physics, material,
+volume, core, plume, and dissipation values. It must keep `detailOctaveMode=0`,
+the approved boundary architecture, the restrained Ground shockwave, and all
+non-target profiles byte-neutral.
+
 ### 1. *Animating Explosions*
 
 Relevant concepts:
