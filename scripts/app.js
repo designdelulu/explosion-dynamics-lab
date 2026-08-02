@@ -120,6 +120,10 @@ const elements = {
   debugTemperature: $("#debugTemperature"),
   debugSmoke: $("#debugSmoke"),
   debugVorticity: $("#debugVorticity"),
+  debugDensityBounds: $("#debugDensityBounds"),
+  debugBoundaryRisk: $("#debugBoundaryRisk"),
+  debugRenderExtent: $("#debugRenderExtent"),
+  debugShockAlignment: $("#debugShockAlignment"),
   debugPreset: $("#debugPreset"),
   debugEventFamily: $("#debugEventFamily"),
   debugFluidProfile: $("#debugFluidProfile"),
@@ -1039,6 +1043,23 @@ function updateFluidDebugOverlay(stats) {
   elements.debugVorticity.textContent = normalizedMetric(
     metrics.maxVorticity ?? metrics.vorticityMagnitude ?? stats.maxVorticity
   );
+  const bounds = metrics.activeDensityBounds;
+  elements.debugDensityBounds.textContent = bounds
+    ? `x ${bounds.minX.toFixed(2)}–${bounds.maxX.toFixed(2)} · y ${bounds.minY.toFixed(2)}–${bounds.maxY.toFixed(2)}`
+    : "inactive";
+  const risk = metrics.boundaryRisk;
+  const maxEdgeDensity = risk ? Math.max(...Object.values(risk.maxDensityAtEdge || { value: 0 })) : 0;
+  elements.debugBoundaryRisk.textContent = risk
+    ? `${(risk.riskPercent * 100).toFixed(1)}% in margin · edge ${maxEdgeDensity.toFixed(3)}`
+    : "not sampled";
+  const renderDomain = stats.renderDomain;
+  elements.debugRenderExtent.textContent = renderDomain
+    ? `${renderDomain.mode ? "padded" : "legacy"} · ${renderDomain.volumeScale.map((value) => value.toFixed(2)).join(" × ")} · ${Math.round(renderDomain.padding * 100)}% margin`
+    : "—";
+  const alignment = stats.shockSmokeAlignment;
+  elements.debugShockAlignment.textContent = alignment
+    ? `${alignment.shockToRenderRadius.toFixed(2)}× horiz · ${alignment.viewportCropsNaturally ? "offscreen continuation" : "in-frame"}`
+    : "—";
   elements.debugPreset.textContent = stats.activePreset || currentPreset().name;
   elements.debugEventFamily.textContent = stats.eventFamily || currentPreset().eventFamily || "Unclassified";
   elements.debugFluidProfile.textContent = stats.fluidProfile || currentPreset().researchModel?.id || "—";
