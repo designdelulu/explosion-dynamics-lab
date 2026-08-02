@@ -136,6 +136,69 @@ assert.equal(RESEARCH_FLUID_DIAGNOSTICS.tracers, 8);
 assert.equal(RESEARCH_FLUID_DEFAULTS.presetId, "low-yield-nuclear-airburst");
 assert.equal(RESEARCH_FLUID_DEFAULTS.tier, "balanced");
 
+// --- Reusable padded-domain contract (2026-07) ------------------------------
+for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
+  assert.ok(profile.domain && typeof profile.domain === "object", `${presetId}: domain config missing`);
+  for (const key of ["mode", "padding", "renderOverscan", "riskMargin", "densityThreshold"]) {
+    assert.ok(Number.isFinite(profile.domain[key]), `${presetId}: domain.${key} must be finite`);
+  }
+  assert.ok(profile.domain.renderScale !== undefined, `${presetId}: domain.renderScale missing`);
+  if (presetId === GROUND_BURST_ID) {
+    assert.equal(profile.domain.mode, 1, "Ground Burst must activate the reusable padded-domain path");
+    assert.ok(profile.domain.padding > 0 && profile.domain.padding < 0.3);
+    assert.ok(profile.domain.renderOverscan > 1);
+    assert.deepEqual(profile.domain.renderScale, { mobile: 1, balanced: 0.62, high: 0.88 });
+    assert.ok(profile.domain.renderExtent?.x >= 1.5 && profile.domain.renderExtent?.x <= 1.65);
+    assert.ok(profile.domain.renderExtent?.y >= 1.2 && profile.domain.renderExtent?.y <= 1.5);
+    assert.ok(profile.domain.riskMargin > 0 && profile.domain.densityThreshold > 0);
+  } else {
+    assert.equal(profile.domain.mode, 0, `${presetId}: domain path must remain neutral pending its own audit`);
+    assert.equal(profile.domain.padding, 0, `${presetId}: domain padding must remain neutral`);
+    assert.equal(profile.domain.renderOverscan, 1, `${presetId}: render overscan must remain neutral`);
+    assert.equal(profile.domain.renderScale, 1, `${presetId}: render resolution scale must remain neutral`);
+    assert.equal(profile.domain.renderExtent, null, `${presetId}: render extent must remain neutral`);
+  }
+}
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /float fieldSampleValidity\(vec2 uv\)[\s\S]*?sampleField\(uScalar, layerUv\) \* sampleValidity/,
+  "Volume reconstruction must reject out-of-field distorted samples instead of extending clamped boundary texels",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.forceFragment,
+  /uniform float uDomainActiveScale;/,
+  "Padded-domain source/force transform uniform missing",
+);
+assert.doesNotMatch(
+  `${RESEARCH_FLUID_SHADER_SOURCES.forceFragment}\n${RESEARCH_FLUID_SHADER_SOURCES.volumeFragment}`,
+  /nuclear-ground-burst/,
+  "Generic padded-domain shader logic must not branch on preset IDs",
+);
+assert.match(
+  readFileSync(new URL("../scripts/fluid-engine.js", import.meta.url), "utf8"),
+  /activeDensityBounds|boundaryRisk|riskCells/,
+  "Occupancy-aware boundary diagnostics must expose active bounds and risk cells",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /float sampleValidity = fieldSampleValidity\(layerUv\);[\s\S]*?sampleField\(uScalar, layerUv\) \* sampleValidity/,
+  "Medium/high-density clipping diagnostics must sample only valid field coordinates",
+);
+assert.match(
+  readFileSync(new URL("../scripts/renderer.js", import.meta.url), "utf8"),
+  /shockToRenderRadius:[\s\S]*?shockToVerticalRadius:/,
+  "Shock/smoke alignment must expose horizontal and vertical event-space ratios",
+);
+const rendererBoundarySource = readFileSync(new URL("../scripts/renderer.js", import.meta.url), "utf8");
+assert.match(rendererBoundarySource, /getRenderResolutionScale\?\.\(\)/, "Profile render-resolution scale is not consumed by the renderer");
+assert.match(rendererBoundarySource, /outputWidth = Math\.max\(1, Math\.round\(width \* dpr \* outputScale\)\)/, "Fluid output scale must be tier/profile aware");
+assert.match(rendererBoundarySource, /renderDomain\?\.volumeScale[\s\S]*?renderDomain\?\.sourceCenter/, "Developer stats must retain render-domain geometry for alignment diagnostics");
+const engineBoundarySource = readFileSync(new URL("../scripts/fluid-engine.js", import.meta.url), "utf8");
+assert.match(engineBoundarySource, /activeDensityBounds = activeCells > 0/, "Occupancy bounds must be computed from active scalar cells");
+assert.match(engineBoundarySource, /maxDensityAtEdge:[\s\S]*?touchesMediumDensity:/, "Boundary diagnostics must distinguish edge density from camera cropping");
+assert.match(engineBoundarySource, /getRenderResolutionScale\(\)/, "Fluid engine must expose the profile render scale without preset-ID logic");
+assert.match(engineBoundarySource, /renderExtent: domain\.renderExtent ?/, "Render extent must be reported as part of the reusable domain contract");
+
 // --- Ground Burst-only source/ground coupling (2026-07) ---------------------
 for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
   assert.ok(profile.groundCoupling && typeof profile.groundCoupling === "object",
@@ -242,7 +305,7 @@ for (const uniform of ["uPlumeMode", "uPlumeParams"]) {
 // --- Profile-gated smoke-material controls (2026-07) -------------------------
 for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
   assert.ok(profile.material && typeof profile.material === "object", `${presetId}: material config missing`);
-  for (const key of ["mode", "sootAbsorption", "dustAbsorption", "detailBoost", "warmCoolContrast"]) {
+  for (const key of ["mode", "sootAbsorption", "dustAbsorption", "detailBoost", "warmCoolContrast", "detailOctaveMode"]) {
     assert.ok(Number.isFinite(profile.material[key]), `${presetId}: material.${key} must be finite`);
   }
   if (presetId === LOW_YIELD_ID) {
@@ -250,6 +313,7 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(profile.material.sootAbsorption > profile.material.dustAbsorption);
     assert.ok(profile.material.detailBoost > 0 && profile.material.detailBoost < RESEARCH_FLUID_PROFILES[TSAR_ID].material.detailBoost);
     assert.ok(profile.material.warmCoolContrast > 0 && profile.material.warmCoolContrast < RESEARCH_FLUID_PROFILES[TSAR_ID].material.warmCoolContrast);
+    assert.equal(profile.material.detailOctaveMode, 1, "Low-yield's approved detail octave must remain explicit");
   } else if (presetId === GROUND_BURST_ID) {
     assert.equal(profile.material.mode, 1, "Ground Burst must enable independent dust/soot material");
     assert.ok(profile.material.sootAbsorption > profile.material.dustAbsorption);
@@ -257,15 +321,18 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
       "Ground Burst dust must retain translucent outer layers");
     assert.ok(profile.material.detailBoost > 0 && profile.material.detailBoost < RESEARCH_FLUID_PROFILES[TSAR_ID].material.detailBoost);
     assert.ok(profile.material.warmCoolContrast > 0 && profile.material.warmCoolContrast < RESEARCH_FLUID_PROFILES[TSAR_ID].material.warmCoolContrast);
+    assert.equal(profile.material.detailOctaveMode, 0, "Ground Burst material separation must not buy the third detail octave");
   } else if (presetId === TSAR_ID) {
     assert.equal(profile.material.mode, 1, "Tsar must enable the smoke-material mode");
     assert.ok(profile.material.sootAbsorption > profile.material.dustAbsorption, "Tsar soot must absorb more strongly than lofted dust");
     assert.ok(profile.material.detailBoost > 0, "Tsar energy-weighted detail octave must be active");
     assert.ok(profile.material.warmCoolContrast > 0, "Tsar lit/shadowed contrast widening must be active");
+    assert.equal(profile.material.detailOctaveMode, 1, "Tsar approved detail octave must remain explicit");
   } else {
     assert.equal(profile.material.mode, 0, `${presetId}: smoke-material mode must remain neutral`);
     assert.equal(profile.material.sootAbsorption, 1, `${presetId}: default soot absorption must stay neutral`);
     assert.equal(profile.material.dustAbsorption, 1, `${presetId}: default dust absorption must stay neutral`);
+    assert.equal(profile.material.detailOctaveMode, 0, `${presetId}: detail octave must stay neutral`);
   }
 }
 // The volume shader and engine bindings must carry the material uniforms.
@@ -279,15 +346,24 @@ assert.match(
   /uniform\s+vec4\s+uMaterialParams\b/,
   "uMaterialParams: material uniform missing from the volume shader",
 );
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /uniform\s+float\s+uDetailOctaveMode\b/,
+  "uDetailOctaveMode: independent detail uniform missing from the volume shader",
+);
 // Every new material term must be reachable only through the uMaterialMode
 // gate, and must algebraically collapse to the prior expression when it is 0.
 for (const gatedTerm of [
   /uMaterialMode > 0\.5\s*\?\s*smokeDensity \* uMaterialParams\.x \+ dustDensity \* uMaterialParams\.y\s*:\s*smoke/,
-  /int detailOctaves = uMaterialMode > 0\.5 \? 3 : 2;/,
   /float contrastBoost = uMaterialMode > 0\.5 \? uMaterialParams\.w : 0\.0;/,
 ]) {
   assert.match(RESEARCH_FLUID_SHADER_SOURCES.volumeFragment, gatedTerm, `Material technique not properly gated behind uMaterialMode: ${gatedTerm}`);
 }
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /int detailOctaves = uDetailOctaveMode > 0\.5 \? 3 : 2;/,
+  "The expensive third detail octave must be independently profile-gated",
+);
 
 // --- Profile-gated late dissipation (2026-07) --------------------------------
 // Tsar retains mode 1 and Ground Burst independently uses mode 2. Every other
@@ -617,7 +693,7 @@ assert.doesNotMatch(shaders.volumeFragment, /phaseVisibility[\s\S]*phaseVisibili
 assert.match(shaders.volumeFragment, /\(1\.0\s*-\s*transmittance\)\s*\*\s*atmosphericFade/, "density must govern final opacity");
 assert.match(shaders.metricsFragment, /length\(velocity\)\s*\/\s*1\.4/, "velocity metric encoding missing");
 assert.match(shaders.metricsFragment, /scalar\.r\s*\/\s*4\.0/, "temperature metric encoding missing");
-assert.match(shaders.metricsFragment, /scalar\.g\s*\/\s*4\.0/, "smoke metric encoding missing");
+assert.match(shaders.metricsFragment, /scalar\.g\s*\*\s*0\.9\s*\+\s*scalar\.a\s*\*\s*0\.72/, "combined smoke/dust occupancy metric encoding missing");
 assert.match(shaders.metricsFragment, /abs\(sampleField\(uCurl/, "vorticity metric encoding missing");
 
 const stepSource = engineSource.slice(
