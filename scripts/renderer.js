@@ -2950,6 +2950,129 @@ export class ExplosionRenderer {
   }
 
   /**
+   * Profile-gated late wind/shear strands. The flow overlay used to draw a
+   * large set of contiguous streamlines from nearby shock seeds; during the
+   * mature Ground Burst those paths converged and read as one painted ribbon.
+   * This cheaper analytical path keeps the same canvas layer and natural GPU
+   * smoke occlusion, but gives the profile a small deterministic family of
+   * broken, depth-weighted strands instead of a merged band.
+   */
+  _drawWindStreakOverlay(glow, layout, phase, quality, profile, activity, structural) {
+    const qualityId = ['mobile', 'balanced', 'high'].includes(this.settings.quality)
+      ? this.settings.quality
+      : 'balanced';
+    const tier = profile?.[qualityId] || profile?.balanced;
+    if (!tier) return;
+    const normalized = phase.normalized;
+    const onset = smoothstep(finite(profile.onset, 0.32), finite(profile.peak, 0.58), normalized);
+    const fade = 1 - smoothstep(finite(profile.fadeStart, 0.78), finite(profile.fadeEnd, 1), normalized);
+    const timing = onset * fade;
+    if (timing <= 0.006) return;
+
+    const count = Math.max(5, Math.round(finite(tier.count, 8)));
+    const segments = Math.max(6, Math.min(18, Math.round(finite(tier.segments, 10))));
+    const windX = layout.windX || (this.settings.windDirection <= 180 ? 0.001 : -0.001);
+    const windY = (layout.windY || 0) * 0.42;
+    const windMagnitude = Math.hypot(windX, windY) || 1;
+    const alongX = windX / windMagnitude;
+    const alongY = windY / windMagnitude;
+    const normalX = -alongY;
+    const normalY = alongX;
+    const rise = layout.min * 0.2 * this._behavior.column * layout.scale * phase.rise;
+    const capY = layout.eventY - rise;
+    const capX = layout.originX + layout.windX * layout.min * 0.16 * phase.rise * phase.rise;
+    const spanMin = finite(tier.spanMin, 0.3);
+    const spanMax = Math.max(spanMin, finite(tier.spanMax, 0.6));
+    const widthMin = Math.max(0.35, finite(tier.widthMin, 0.6));
+    const widthMax = Math.max(widthMin, finite(tier.widthMax, 1.2));
+    const opacityMin = Math.max(0.01, finite(tier.opacityMin, 0.05));
+    const opacityMax = Math.max(opacityMin, finite(tier.opacityMax, 0.15));
+    const curvature = finite(tier.curvature, 0.12);
+    const amplitude = finite(tier.amplitude, 0.05);
+    const dropout = clamp(finite(tier.dropout, 0.3), 0.08, 0.7);
+    const fadeJitter = clamp(finite(tier.fadeJitter, 0.1), 0, 0.3);
+    const baseActivity = timing * activity * structural;
+
+    glow.save();
+    glow.lineCap = 'round';
+    glow.lineJoin = 'round';
+    for (let strand = 0; strand < count; strand += 1) {
+      const hash = (label) => hashString(`${this.settings.seed}:wind-strand:${strand}:${label}`) % 1000 / 1000;
+      const span = layout.min * lerp(spanMin, spanMax, hash('span'));
+      const depth = hash('depth');
+      const baseOffset = (hash('offset') - 0.5) * layout.min * 0.17;
+      const phaseOffset = hash('phase') * TAU;
+      const strandFadeStart = clamp(
+        finite(profile.fadeStart, 0.78) + hash('fade') * fadeJitter,
+        0,
+        finite(profile.fadeEnd, 1) - 0.04,
+      );
+      const strandFade = 1 - smoothstep(
+        strandFadeStart,
+        Math.max(strandFadeStart + 0.04, finite(profile.fadeEnd, 1)),
+        normalized,
+      );
+      const curveScale = (0.66 + hash('curve') * 0.62) * curvature;
+      const strandAmplitude = layout.min * amplitude * (0.62 + hash('amplitude') * 0.72);
+      const lineWidth = lerp(widthMin, widthMax, hash('width')) * (0.84 + depth * 0.2);
+      const strandAlpha = baseActivity
+        * strandFade
+        * lerp(opacityMin, opacityMax, 0.28 + depth * 0.72)
+        * (1 - depth * 0.36);
+      if (strandAlpha <= 0.004) continue;
+      const color = depth > 0.58 ? this._palette.smokeLight : this._palette.ember;
+      glow.strokeStyle = colorWithAlpha(color, strandAlpha);
+      glow.lineWidth = lineWidth;
+
+      let pathOpen = false;
+      let runLength = 0;
+      const flush = () => {
+        if (pathOpen && runLength >= 2) glow.stroke();
+        pathOpen = false;
+        runLength = 0;
+      };
+
+      for (let segment = 0; segment <= segments; segment += 1) {
+        const progress = segment / segments;
+        const along = (progress - 0.48) * span;
+        const wave = Math.sin(
+          progress * TAU * (0.52 + hash('wave') * 0.6)
+            + phase.time * (0.12 + hash('speed') * 0.1)
+            + phaseOffset,
+        );
+        const fineWave = Math.sin(
+          progress * TAU * (1.1 + hash('fine') * 0.7)
+            - phase.time * 0.07
+            - phaseOffset * 0.68,
+        );
+        const localOffset = baseOffset
+          + (wave * 0.72 + fineWave * 0.28) * strandAmplitude
+          + (progress - 0.5) * span * curveScale * 0.18;
+        const x = capX + alongX * along + normalX * localOffset;
+        const y = capY + alongY * along + normalY * localOffset;
+        const segmentHash = hashString(`${this.settings.seed}:wind-segment:${strand}:${segment}`) % 1000 / 1000;
+        const keep = segment === 0 || segment === segments
+          || segmentHash > dropout * (0.72 + hash('break') * 0.46);
+        if (!keep) {
+          flush();
+          continue;
+        }
+        if (!pathOpen) {
+          glow.beginPath();
+          glow.moveTo(x, y);
+          pathOpen = true;
+          runLength = 1;
+        } else {
+          glow.lineTo(x, y);
+          runLength += 1;
+        }
+      }
+      flush();
+    }
+    glow.restore();
+  }
+
+  /**
    * Optional flow overlays. 'flow' adds restrained streamlines that follow the
    * analytic field above; 'field' adds pressure contours and shock-normal
    * markers in a scientific-visualization register. Qualitative, no units.
@@ -2970,60 +3093,66 @@ export class ExplosionRenderer {
     glow.save();
     glow.globalCompositeOperation = 'screen';
 
-    // Streamlines seeded deterministically around the event.
-    const lineBudget = Math.round(
-      (isField ? 30 : 20) * clamp(tuning.flowDensity, 0, 2.5) * Math.max(0.45, quality),
-    );
-    const steps = Math.round(15 * clamp(tuning.flowLifetime, 0.4, 2.2));
-    const stepSize = Math.max(3, layout.min * 0.009);
-    for (let line = 0; line < lineBudget; line += 1) {
-      const angle = this._particleAngle[line];
-      const radiusFraction = 0.15 + this._particleDepth[line] * 0.85;
-      const maxRadius = layout.min * (0.58 + this._behavior.shock * 0.16) * layout.energyScale;
-      const startRadius = maxRadius * phase.shockProgress * radiusFraction
-        + this._particleSize[line] * layout.min * 0.02;
-      let x = layout.originX + Math.cos(angle) * startRadius;
-      let y = layout.eventY + Math.sin(angle) * startRadius * 0.66
-        - this._particleRise[line] * layout.min * 0.05 * phase.rise;
-      if (y > layout.surfaceY + 6) y = layout.surfaceY - this._particleDepth[line] * layout.min * 0.02;
-      let previousX = x;
-      let previousY = y;
-      let drawn = 0;
-      glow.beginPath();
-      glow.moveTo(x, y);
-      let speedSum = 0;
-      let upSum = 0;
-      for (let step = 0; step < steps; step += 1) {
-        this._flowVelocity(x, y, layout, phase, scratch);
-        const speed = Math.hypot(scratch.vx, scratch.vy);
-        if (speed < 1.4) break;
-        x += (scratch.vx / speed) * stepSize;
-        y += (scratch.vy / speed) * stepSize;
-        if (x < -20 || x > layout.width + 20 || y < -20 || y > layout.surfaceY + layout.min * 0.05) break;
-        glow.lineTo(x, y);
-        speedSum += speed;
-        upSum += -scratch.vy;
-        previousX = x;
-        previousY = y;
-        drawn += 1;
-      }
-      if (drawn < 3) continue;
-      const meanSpeed = speedSum / drawn;
-      const buoyant = upSum > 0;
-      const lineAlpha = saturate(activity * (0.1 + Math.min(0.32, meanSpeed / 220)))
-        * structural * (isField ? 1 : 0.75);
-      glow.strokeStyle = colorWithAlpha(
-        buoyant ? this._palette.ember : this._palette.shock,
-        lineAlpha,
+    const windStreakProfile = this._preset?.researchModel?.windStreaks;
+    if (windStreakProfile?.mode > 0) {
+      this._drawWindStreakOverlay(glow, layout, phase, quality, windStreakProfile, activity, structural);
+    } else {
+      // Existing analytic streamlines remain unchanged for every profile that
+      // does not opt into the dedicated wind/shear strand treatment.
+      const lineBudget = Math.round(
+        (isField ? 30 : 20) * clamp(tuning.flowDensity, 0, 2.5) * Math.max(0.45, quality),
       );
-      glow.lineWidth = 0.7 + this._particleSize[line] * 0.45;
-      glow.stroke();
-      // Direction cue: a small head dot at the streamline tip.
-      if (isField && drawn > 5) {
-        glow.fillStyle = colorWithAlpha(this._palette.text, lineAlpha * 1.4);
+      const steps = Math.round(15 * clamp(tuning.flowLifetime, 0.4, 2.2));
+      const stepSize = Math.max(3, layout.min * 0.009);
+      for (let line = 0; line < lineBudget; line += 1) {
+        const angle = this._particleAngle[line];
+        const radiusFraction = 0.15 + this._particleDepth[line] * 0.85;
+        const maxRadius = layout.min * (0.58 + this._behavior.shock * 0.16) * layout.energyScale;
+        const startRadius = maxRadius * phase.shockProgress * radiusFraction
+          + this._particleSize[line] * layout.min * 0.02;
+        let x = layout.originX + Math.cos(angle) * startRadius;
+        let y = layout.eventY + Math.sin(angle) * startRadius * 0.66
+          - this._particleRise[line] * layout.min * 0.05 * phase.rise;
+        if (y > layout.surfaceY + 6) y = layout.surfaceY - this._particleDepth[line] * layout.min * 0.02;
+        let previousX = x;
+        let previousY = y;
+        let drawn = 0;
         glow.beginPath();
-        glow.arc(previousX, previousY, 1.1, 0, TAU);
-        glow.fill();
+        glow.moveTo(x, y);
+        let speedSum = 0;
+        let upSum = 0;
+        for (let step = 0; step < steps; step += 1) {
+          this._flowVelocity(x, y, layout, phase, scratch);
+          const speed = Math.hypot(scratch.vx, scratch.vy);
+          if (speed < 1.4) break;
+          x += (scratch.vx / speed) * stepSize;
+          y += (scratch.vy / speed) * stepSize;
+          if (x < -20 || x > layout.width + 20 || y < -20 || y > layout.surfaceY + layout.min * 0.05) break;
+          glow.lineTo(x, y);
+          speedSum += speed;
+          upSum += -scratch.vy;
+          previousX = x;
+          previousY = y;
+          drawn += 1;
+        }
+        if (drawn < 3) continue;
+        const meanSpeed = speedSum / drawn;
+        const buoyant = upSum > 0;
+        const lineAlpha = saturate(activity * (0.1 + Math.min(0.32, meanSpeed / 220)))
+          * structural * (isField ? 1 : 0.75);
+        glow.strokeStyle = colorWithAlpha(
+          buoyant ? this._palette.ember : this._palette.shock,
+          lineAlpha,
+        );
+        glow.lineWidth = 0.7 + this._particleSize[line] * 0.45;
+        glow.stroke();
+        // Direction cue: a small head dot at the streamline tip.
+        if (isField && drawn > 5) {
+          glow.fillStyle = colorWithAlpha(this._palette.text, lineAlpha * 1.4);
+          glow.beginPath();
+          glow.arc(previousX, previousY, 1.1, 0, TAU);
+          glow.fill();
+        }
       }
     }
 

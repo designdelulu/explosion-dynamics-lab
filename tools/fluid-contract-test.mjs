@@ -410,6 +410,41 @@ assert.match(
   "Ground material depth must add only bounded layer weighting, not another sample path",
 );
 
+// --- Ground Burst wind/shear streaks (2026-08) -----------------------------
+// The late flow overlay is intentionally opt-in and profile-owned. Its strand
+// family must remain deterministic, visibly multi-line at every tier, and
+// independent from the shockwave/raymarch budgets.
+const windStreaks = groundBurstPreset?.researchModel?.windStreaks;
+assert.ok(windStreaks && typeof windStreaks === "object", "Ground Burst wind-streak profile missing");
+assert.equal(windStreaks.mode, 1, "Ground Burst must opt into the wind-streak overlay");
+assert.ok(windStreaks.onset < windStreaks.peak && windStreaks.peak < windStreaks.fadeStart);
+assert.ok(windStreaks.fadeStart < windStreaks.fadeEnd && windStreaks.fadeEnd <= 1,
+  "Wind streaks must fully fade by the end of the normalized timeline");
+for (const [tierId, tier] of Object.entries(windStreaks).filter(([key]) => ["high", "balanced", "mobile"].includes(key))) {
+  assert.ok(Number.isInteger(tier.count) && tier.count >= 5 && tier.count <= 12,
+    `${tierId}: wind streak count must remain in the 5–12 visual range`);
+  assert.ok(tier.spanMin > 0 && tier.spanMin < tier.spanMax);
+  assert.ok(tier.widthMin > 0 && tier.widthMin < tier.widthMax);
+  assert.ok(tier.opacityMin > 0 && tier.opacityMin < tier.opacityMax && tier.opacityMax <= 0.25);
+  assert.ok(tier.curvature > 0 && tier.amplitude > 0);
+  assert.ok(Number.isInteger(tier.segments) && tier.segments >= 6 && tier.segments <= 18);
+  assert.ok(tier.dropout > 0 && tier.dropout < 0.7);
+  assert.ok(tier.fadeJitter >= 0 && tier.fadeJitter <= 0.3);
+}
+assert.equal(windStreaks.high.count, 11);
+assert.equal(windStreaks.balanced.count, 8);
+assert.equal(windStreaks.mobile.count, 6);
+assert.match(rendererBoundarySource, /_drawWindStreakOverlay\(/, "Profile-gated wind-streak renderer path missing");
+assert.match(rendererBoundarySource, /wind-strand:\$\{strand\}/, "Wind-strand variation must be seed-deterministic");
+assert.match(rendererBoundarySource, /wind-segment:\$\{strand\}:\$\{segment\}/, "Wind-strand segmentation must be seed-deterministic");
+assert.match(rendererBoundarySource, /fadeJitter|strandFadeStart/, "Wind strands must have deterministic per-strand fade variation");
+assert.match(rendererBoundarySource, /windStreakProfile\?\.mode > 0/, "Wind streaks must remain profile-gated");
+assert.doesNotMatch(rendererBoundarySource, /nuclear-ground-burst/, "Generic renderer must not hard-code the Ground Burst preset ID");
+for (const preset of EVENT_PRESETS.filter(({ id }) => id !== GROUND_BURST_ID)) {
+  assert.equal(preset.researchModel?.windStreaks, undefined,
+    `${preset.id}: wind-streak profile must remain neutral`);
+}
+
 // --- Profile-gated late dissipation (2026-07) --------------------------------
 // Tsar retains mode 1 and Ground Burst independently uses mode 2. Every other
 // profile keeps the neutral envelope.
