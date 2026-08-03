@@ -391,6 +391,10 @@ function resolveBehavior(preset, id) {
   result.roll = numericOverride(sources, ['roll', 'rollingFire', 'turbulence'], base.roll);
   result.windResponse = numericOverride(sources, ['windResponse'], 0.7);
   result.atmosphericLight = numericOverride(sources, ['atmosphericLight'], result.flash);
+  // Full-frame flash wash is independently profile-configurable. A neutral
+  // default keeps every established preset byte-identical; Ground Burst alone
+  // opts down so the local surface flash is not buried by a viewport-wide tint.
+  result.atmosphericWash = numericOverride(sources, ['atmosphericWash'], 1);
   result.heatDistortion = numericOverride(sources, ['heatDistortion'], 0.6);
   result.shake = numericOverride(sources, ['shake', 'cameraShake'], base.shake);
   result.particles = Math.round(numericOverride(
@@ -2442,20 +2446,29 @@ export class ExplosionRenderer {
     glow.restore();
 
     matter.save();
-    matter.strokeStyle = colorWithAlpha(this._palette.dust, visibility * 0.58);
-    matter.lineWidth = Math.max(1, radius * 0.025);
-    const jets = Math.max(4, Math.round(8 * quality));
-    for (let index = 0; index < jets; index += 1) {
-      const amount = jets === 1 ? 0.5 : index / (jets - 1);
-      const angle = lerp(Math.PI * 1.12, Math.PI * 1.88, amount);
-      const length = radius * (0.55 + this._particleDepth[index] * 0.8);
-      matter.beginPath();
-      matter.moveTo(layout.originX, layout.surfaceY);
-      matter.lineTo(
-        layout.originX + Math.cos(angle) * length,
-        layout.surfaceY + Math.sin(angle) * length * 0.58,
-      );
-      matter.stroke();
+    // Ground Burst keeps debris close to the surface. The old full-length
+    // spokes read as a dark wireframe over the early flash, while the same
+    // helper remains unchanged for other ground-coupled events.
+    const nuclearGround = this._behavior.key === 'nuclearGround';
+    matter.strokeStyle = colorWithAlpha(
+      this._palette.dust,
+      visibility * (nuclearGround ? 0.12 : 0.58),
+    );
+    matter.lineWidth = Math.max(1, radius * (nuclearGround ? 0.018 : 0.025));
+    if (!nuclearGround) {
+      const jets = Math.max(4, Math.round(8 * quality));
+      for (let index = 0; index < jets; index += 1) {
+        const amount = jets === 1 ? 0.5 : index / (jets - 1);
+        const angle = lerp(Math.PI * 1.12, Math.PI * 1.88, amount);
+        const length = radius * (0.55 + this._particleDepth[index] * 0.8);
+        matter.beginPath();
+        matter.moveTo(layout.originX, layout.surfaceY);
+        matter.lineTo(
+          layout.originX + Math.cos(angle) * length,
+          layout.surfaceY + Math.sin(angle) * length * 0.58,
+        );
+        matter.stroke();
+      }
     }
     matter.restore();
   }
@@ -2723,6 +2736,13 @@ export class ExplosionRenderer {
     const thermalContribution = this.settings.layers.thermal
       ? phase.fireAlpha * phase.fireGrowth * 0.11
       : 0;
+    // A profile may keep a strong local flash while reducing the broad
+    // full-frame atmospheric wash. Profiles that do not override
+    // atmosphericLight resolve it to their flash value, so their established
+    // behavior remains unchanged. Ground Burst uses the control to keep the
+    // surface core legible through the surrounding dust instead of painting
+    // the entire viewport pale during the first second.
+    const atmosphericWash = clamp(this._behavior.atmosphericWash, 0.2, 1);
     const intensity = saturate(
       (flashContribution * 0.64 + thermalContribution)
       * Math.max(0.2, this._behavior.atmosphericLight)
@@ -2745,7 +2765,13 @@ export class ExplosionRenderer {
     context.fillRect(0, 0, layout.width, layout.height);
 
     if (this.settings.layers.flash && flashContribution > 0.02) {
-      context.fillStyle = colorWithAlpha(this._palette.core, Math.min(this.reducedMotion ? 0.12 : 0.58, phase.flash * 0.34));
+      context.fillStyle = colorWithAlpha(
+        this._palette.core,
+        Math.min(
+          this.reducedMotion ? 0.12 : 0.58,
+          phase.flash * 0.34 * atmosphericWash,
+        ),
+      );
       context.fillRect(0, 0, layout.width, layout.height);
     }
   }

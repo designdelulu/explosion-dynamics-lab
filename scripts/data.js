@@ -861,7 +861,7 @@ export const EVENT_PRESETS = deepFreeze([
     defaultPaletteId: "white-hot",
     defaultAltitude: 0,
     particleBudget: { low: 1600, balanced: 3520, high: 6600 },
-    render: { flash: 1.8, fireballRadius: 1.32, fireballGrowth: 1.28, shockRadius: 1.58, shockThickness: 0.66, surfaceInteraction: 1.54, debris: 1.28, dust: 1.68, smoke: 1.46, columnRise: 1.56, cloudSpread: 1.5, turbulence: 1.4, windResponse: 1.22, atmosphericLight: 1.82, heatDistortion: 1.42, cameraShake: 1.44 },
+    render: { flash: 1.8, fireballRadius: 1.32, fireballGrowth: 1.28, shockRadius: 1.58, shockThickness: 0.66, surfaceInteraction: 1.54, debris: 1.28, dust: 1.68, smoke: 1.46, columnRise: 1.56, cloudSpread: 1.5, turbulence: 1.4, windResponse: 1.22, atmosphericLight: 0.32, atmosphericWash: 0.22, heatDistortion: 1.42, cameraShake: 1.44 },
     overview: { luminous: 1, innerWave: 1.3, outerWave: 1.62, particulate: 1.48 },
     phases: phaseList([
       ["detonation", 0, 0.2, 1, "outExpo"],

@@ -242,6 +242,7 @@ const BASE_PROFILE = Object.freeze({
   groundCoupling: Object.freeze({
     mode: 0,
     radialImpulse: 0,
+    spreadWidth: 1,
     heightFalloff: 1,
     horizontalRetention: 1,
     verticalDamping: 1,
@@ -314,6 +315,7 @@ const BASE_PROFILE = Object.freeze({
     // Material absorption and color separation must not implicitly purchase
     // the expensive third curl-detail octave. Profiles opt into it explicitly.
     detailOctaveMode: 0,
+    interiorDepth: 0,
   }),
   // Late-stage dissipation research controls (2026-07 Tsar dissipation pass).
   // mode 0 keeps every shipped preset byte-identical to before this pass; only
@@ -645,20 +647,23 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       tracerType: 'particulate',
       sourcePrimitives: ['radial-impulse', 'ground-sheet', 'vertical-jet', 'ejecta-curtain', 'multiple-offset-kernels'],
       source: {
-        centerY: 0.19, groundLevel: 0.18, radius: 0.074,
-        aspectX: 1.5, aspectY: 0.62, onsetEnd: 0.055, sustainEnd: 0.52,
-        radial: 1.18, vertical: 1.32, turbulence: 1.45,
-        heat: 0.64, smoke: 0.88, incandescent: 0.78, dust: 1.8,
-        ejecta: 1.28, clusterSpread: 1.62, capScale: 1.18, capRoll: 1.12,
+        centerY: 0.19, groundLevel: 0.18, radius: 0.058,
+        aspectX: 1.18, aspectY: 0.76, onsetEnd: 0.055, sustainEnd: 0.36,
+        radial: 0.22, vertical: 2.02, turbulence: 2.05,
+        heat: 1.0, smoke: 0.46, incandescent: 1.35, dust: 1.85,
+        ejecta: 1.65, clusterSpread: 1.8, capScale: 1.9, capRoll: 1.72,
       },
-      physics: { buoyancy: 0.88, densityLoading: 1.55, windCoupling: 1.18, vorticity: 1.58, velocityRetention: 0.993, cooling: 1.32, smokeConversion: 1.62, scalarRetention: 0.9995 },
-      volume: { scaleX: 1.2, scaleY: 1.24, depth: 1.4, opacity: 0.82, shadow: 1.9, bloom: 0.82, distortion: 1.18, erosion: 1.1, noiseScale: 1.28, dustVisibility: 1.38, exposure: 0.96, toneMap: 0.4, backgroundIllumination: 0.2, emissionCurve: 1 },
+      physics: { buoyancy: 1.42, densityLoading: 0.68, windCoupling: 1.18, vorticity: 2.0, velocityRetention: 0.968, cooling: 1.0, smokeConversion: 0.58, scalarRetention: 0.9995 },
+      volume: { scaleX: 1.16, scaleY: 1.2, depth: 1.18, opacity: 0.43, shadow: 2.5, bloom: 0.78, distortion: 1.18, erosion: 1.38, noiseScale: 1.56, dustVisibility: 1.1, exposure: 1.03, toneMap: 0.36, backgroundIllumination: 0.12, emissionCurve: 1 },
       // The ground profile keeps its higher solver/detail budgets, but the
       // padded render extent does not require the historical 29-step raymarch
       // on Balanced. The profile-local 0.82 ray factor keeps the two-octave
       // material path readable without lowering any shared tier or other
       // preset's quality.
-      quality: { grid: 1.04, pressure: 1.08, rays: 0.82, tracers: 1.32, detail: 1.12 },
+      // High-quality Ground Burst remains visually full through the existing
+      // two-octave material path, while the profile-local ray factor avoids
+      // the shared renderer's 30+ step spike on this heavy volume.
+      quality: { grid: 1.04, pressure: 1.08, rays: 0.64, tracers: 1.32, detail: 1.12 },
       domain: {
         mode: 1,
         // A ten-percent solver margin keeps the ground-coupled plume away
@@ -670,7 +675,11 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
         // padded field at a modest offscreen resolution and lets the CSS
         // canvas upscale it; High keeps more native pixels and Mobile remains
         // native so portrait composition is not softened.
-        renderScale: { mobile: 1, balanced: 0.62, high: 0.88 },
+        // Ground Burst's high tier retains the larger solver and tracer
+        // budgets, but the expensive padded volume is rendered at a modest
+        // profile-local scale so a 31-step native raymarch cannot monopolize
+        // the GPU. Shared tiers and other presets remain unchanged.
+        renderScale: { mobile: 1, balanced: 0.62, high: 0.72 },
         // The smoke/shock event space is wider than the portrait viewport.
         // This is a render extent only: it does not enlarge the solver grid
         // or change source energy. Keeping the horizontal radius at the
@@ -682,41 +691,47 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       },
       groundCoupling: {
         mode: 1,
-        radialImpulse: 1.22,
-        heightFalloff: 1.35,
-        horizontalRetention: 0.9985,
-        verticalDamping: 0.58,
+        radialImpulse: 0.58,
+        // Keep the physical surface front broad, but stop the source kernel
+        // from loading an almost viewport-wide horizontal sheet before the
+        // rising column has time to form. This is a Ground-only width control;
+        // the default remains neutral for every other source profile.
+        spreadWidth: 0.43,
+        heightFalloff: 1.7,
+        horizontalRetention: 0.972,
+        verticalDamping: 0.68,
         spreadStart: 0.006,
-        spreadEnd: 0.34,
-        angularVariation: 0.28,
-        asymmetry: 0.2,
-        surfaceHeat: 0.75,
-        baseDust: 1.28,
-        transitionLift: 0.18,
+        spreadEnd: 0.14,
+        angularVariation: 0.42,
+        asymmetry: 0.32,
+        surfaceHeat: 1.05,
+        baseDust: 1.5,
+        transitionLift: 0.45,
         lateGroundDrift: 0.085,
       },
       core: {
-        mode: 1, highlightThreshold: 2.15, highlightSharpness: 2.85,
-        structureBlend: 0.82, bloomGateScale: 8.2,
+        mode: 1, highlightThreshold: 0.32, highlightSharpness: 1.9,
+        structureBlend: 1.08, bloomGateScale: 7.5,
       },
       plume: {
         mode: 3,
         expansion: 0.028,
-        vortex: 0.14,
-        persistence: 0.52,
-        widen: 0.025,
-        feedTaperStart: 0.22,
-        feedTaperEnd: 0.48,
-        lateralJitter: 0.48,
-        turbulenceBlend: 0.22,
+        vortex: 0.78,
+        persistence: 0.62,
+        widen: 0.055,
+        feedTaperStart: 0.2,
+        feedTaperEnd: 0.46,
+        lateralJitter: 0.98,
+        turbulenceBlend: 0.64,
       },
       material: {
         mode: 1,
-        sootAbsorption: 1.42,
-        dustAbsorption: 0.48,
-        detailBoost: 0.85,
-        warmCoolContrast: 0.72,
+        sootAbsorption: 2.35,
+        dustAbsorption: 0.5,
+        detailBoost: 0.95,
+        warmCoolContrast: 1.02,
         detailOctaveMode: 0,
+        interiorDepth: 1.0,
       },
       shockwave: {
         mode: 1,
@@ -736,17 +751,20 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       },
       dissipation: {
         mode: 2,
-        lateStart: 0.7,
+        // Begin the ground-tail handoff just after the cap rollout. The
+        // previous 0.70 gate left a bright, straight residual stem through
+        // t20 even though its feed had already tapered off.
+        lateStart: 0.5,
         finalStart: 1,
-        sourceTaperEnd: 0.9,
+        sourceTaperEnd: 0.82,
         retentionFloorSmoke: 1,
         retentionFloorDust: 0.9994,
-        outwardBoost: 0.035,
-        buoyancyFalloff: 0.38,
-        motionDamp: 0.56,
+        outwardBoost: 0.05,
+        buoyancyFalloff: 0.42,
+        motionDamp: 0.58,
         lateVelocityRetention: 0.9993,
-        lateCurl: 0.0075,
-        lateShear: 0.006,
+        lateCurl: 0.0085,
+        lateShear: 0.0065,
         latePhaseRate: 0.06,
       },
       edge: {
@@ -1235,6 +1253,7 @@ uniform float uDomainActiveScale;
 // radial phase start/end, deterministic lobe variation, and left/right
 // asymmetry. C packs surface heat, base dust, transition lift, and late drift.
 uniform float uGroundCouplingMode;
+uniform float uGroundSpreadWidth;
 uniform vec4 uGroundCouplingA;
 uniform vec4 uGroundCouplingB;
 uniform vec4 uGroundCouplingC;
@@ -1368,7 +1387,10 @@ float profileShockwaveLayers(vec2 uv) {
 
 float profileGroundKernel(vec2 uv) {
   float vertical = (uv.y - uSourceShape.w) / max(0.006, uSourceShape.x * 0.28);
-  float horizontal = (uv.x - profileSourceCenter().x) / max(0.02, uSourceShape.x * 4.8);
+  float widthScale = uGroundCouplingMode > 0.5
+    ? clamp(uGroundSpreadWidth, 0.42, 1.2)
+    : 1.0;
+  float horizontal = (uv.x - profileSourceCenter().x) / max(0.02, uSourceShape.x * 4.8 * widthScale);
   return exp(-vertical * vertical - horizontal * horizontal);
 }
 
@@ -1659,6 +1681,16 @@ void main() {
       // symmetric sheet for the opted-in ground profile. Multiple seeded
       // frequencies vary the left/right lobes without drawing a permanent
       // ring, while the phase taper hands motion to the rising plume.
+      // Smoke and dust share one resolved velocity field, so the lateral
+      // surface impulse is weighted by the local particulate mix: dust keeps
+      // the full ground-directed spread, while soot retains a narrower lift
+      // corridor instead of becoming a wall-wide horizontal slab.
+      float groundMaterialBias = clamp(
+        dust / max(0.0001, dust + smoke),
+        0.0,
+        1.0
+      );
+      float groundFlowScale = mix(0.52, 1.0, groundMaterialBias);
       float heightAboveGround = max(0.0, vUv.y - uSourceShape.w);
       float heightScale = max(0.012, uSourceShape.x * uGroundCouplingA.y);
       float groundHeightWeight = exp(
@@ -1685,7 +1717,7 @@ void main() {
       velocity.x += sign(primitiveDelta.x + uSeedOffsetsB.x * 0.018)
         * coupledGround * seededLobes * sideBias
         * uGroundCouplingA.x * uSourceMotion.x
-        * 0.22 * motionScale * uDt * 60.0;
+        * 0.22 * groundFlowScale * motionScale * uDt * 60.0;
       // Suppress the vertical component only inside the surface layer. The
       // same field transitions into a modest off-center lift above it, so the
       // stem emerges from the base rather than detaching or forming a seam.
@@ -1702,7 +1734,7 @@ void main() {
       velocity.y += activeKernel * transitionBand * sustain
         * uGroundCouplingC.z * motionScale * uDt;
       velocity += turbulence.xy * coupledGround * uGroundCouplingB.z
-        * 0.01 * motionScale * uDt * 60.0;
+        * 0.01 * groundFlowScale * motionScale * uDt * 60.0;
     }
   }
 
@@ -2604,6 +2636,10 @@ uniform float uDomainDensityThreshold;
 uniform float uMaterialMode;
 uniform vec4 uMaterialParams;
 uniform float uDetailOctaveMode;
+// Ground Burst may use the already-sampled view-ray depth to separate front,
+// middle, and rear particulate layers without purchasing another detail
+// octave. Zero keeps every other profile's material path unchanged.
+uniform float uMaterialInteriorDepth;
 // Early-core research controls (2026-07 Tsar core/tracer polish). uCoreMode
 // is 0 for every shipped preset (byte-identical rendering) and 1 only for
 // the Tsar historical reference. uCoreParams packs (highlightThreshold,
@@ -3189,7 +3225,18 @@ void main() {
       0.0,
       1.0
     );
-    vec3 smokeColor = mix(darkParticulate, litParticulate, litWeight)
+    vec3 baseSmokeColor = mix(darkParticulate, litParticulate, litWeight);
+    float depthShadow = smoothstep(
+      0.06,
+      0.86,
+      shadowColumn * uVolumeProfile0.z
+    );
+    float interiorBlend = clamp(
+      depthShadow * uMaterialInteriorDepth * 0.72,
+      0.0,
+      0.72
+    );
+    vec3 smokeColor = mix(baseSmokeColor, darkParticulate, interiorBlend)
       * (0.4 - contrastBoost * 0.12
         + (0.42 + contrastBoost * 0.1) * skyOcclusion
         + (0.24 + contrastBoost * 0.1) * selfShadow);
@@ -4561,6 +4608,7 @@ export class ResearchFluidEngine {
     this._uniform1f(program, 'uDomainActiveScale', this._domainState().activeScale);
     const groundCoupling = this.profile.groundCoupling || BASE_PROFILE.groundCoupling;
     this._uniform1f(program, 'uGroundCouplingMode', groundCoupling.mode > 0 ? 1 : 0);
+    this._uniform1f(program, 'uGroundSpreadWidth', finite(groundCoupling.spreadWidth, 1));
     this._uniform4f(
       program,
       'uGroundCouplingA',
@@ -4685,9 +4733,10 @@ export class ResearchFluidEngine {
       volume.emissionCurve,
     );
     this._uniform1f(program, 'uDomainDensityThreshold', this._domainState().densityThreshold);
-    const material = this.profile.material || { mode: 0, sootAbsorption: 1, dustAbsorption: 1, detailBoost: 0, warmCoolContrast: 0, detailOctaveMode: 0 };
+    const material = this.profile.material || { mode: 0, sootAbsorption: 1, dustAbsorption: 1, detailBoost: 0, warmCoolContrast: 0, detailOctaveMode: 0, interiorDepth: 0 };
     this._uniform1f(program, 'uMaterialMode', material.mode > 0 ? 1 : 0);
     this._uniform1f(program, 'uDetailOctaveMode', material.detailOctaveMode > 0 ? 1 : 0);
+    this._uniform1f(program, 'uMaterialInteriorDepth', finite(material.interiorDepth, 0));
     this._uniform4f(
       program,
       'uMaterialParams',
