@@ -112,6 +112,12 @@ assert.equal(flagshipPreset?.researchModel?.mobilePortraitPullback, 1.1,
   "Low-yield audited mobile-portrait headroom must remain unchanged");
 assert.equal(groundBurstPreset?.researchModel?.mobilePortraitPullback, undefined,
   "Ground Burst must retain neutral global mobile framing after the portrait fit audit");
+assert.equal(groundBurstPreset?.render?.atmosphericWash, 0.22,
+  "Ground Burst must use an explicit local flash wash without changing other presets");
+for (const preset of EVENT_PRESETS.filter(({ id }) => id !== GROUND_BURST_ID)) {
+  assert.equal(preset.render?.atmosphericWash, undefined,
+    `${preset.id}: atmospheric wash override must remain neutral`);
+}
 assert.equal(tsarPreset?.researchModel?.mobilePortraitPullback, undefined,
   "Tsar mobile framing must remain unchanged");
 assert.equal(
@@ -147,7 +153,11 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.equal(profile.domain.mode, 1, "Ground Burst must activate the reusable padded-domain path");
     assert.ok(profile.domain.padding > 0 && profile.domain.padding < 0.3);
     assert.ok(profile.domain.renderOverscan > 1);
-    assert.deepEqual(profile.domain.renderScale, { mobile: 1, balanced: 0.62, high: 0.88 });
+    assert.deepEqual(profile.domain.renderScale, { mobile: 1, balanced: 0.62, high: 0.72 });
+    assert.equal(profile.domain.padding, 0.10, "Ground Burst boundary padding is locked at ten percent");
+    assert.equal(profile.domain.renderExtent?.x, 1.65, "Ground Burst horizontal render extent is locked");
+    assert.equal(profile.domain.renderExtent?.y, 1.5, "Ground Burst vertical render extent is locked");
+    assert.equal(profile.quality.rays, 0.64, "Ground Burst High ray simplification must remain profile-local");
     assert.ok(profile.domain.renderExtent?.x >= 1.5 && profile.domain.renderExtent?.x <= 1.65);
     assert.ok(profile.domain.renderExtent?.y >= 1.2 && profile.domain.renderExtent?.y <= 1.5);
     assert.ok(profile.domain.riskMargin > 0 && profile.domain.densityThreshold > 0);
@@ -204,7 +214,7 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
   assert.ok(profile.groundCoupling && typeof profile.groundCoupling === "object",
     `${presetId}: groundCoupling config missing`);
   for (const key of [
-    "mode", "radialImpulse", "heightFalloff", "horizontalRetention",
+    "mode", "radialImpulse", "spreadWidth", "heightFalloff", "horizontalRetention",
     "verticalDamping", "spreadStart", "spreadEnd", "angularVariation",
     "asymmetry", "surfaceHeat", "baseDust", "transitionLift",
     "lateGroundDrift",
@@ -216,6 +226,8 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
   if (presetId === GROUND_BURST_ID) {
     assert.equal(ground.mode, 1, "Ground Burst alone must activate ground coupling");
     assert.ok(ground.radialImpulse > 0);
+    assert.ok(ground.spreadWidth >= 0.42 && ground.spreadWidth < 1,
+      "Ground Burst surface kernel must retain a bounded, profile-local width");
     assert.ok(ground.heightFalloff > 1);
     assert.ok(ground.horizontalRetention > profile.physics.velocityRetention && ground.horizontalRetention < 1);
     assert.ok(ground.verticalDamping > 0 && ground.verticalDamping < 1);
@@ -234,7 +246,7 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
   }
 }
 for (const uniform of [
-  "uGroundCouplingMode", "uGroundCouplingA", "uGroundCouplingB", "uGroundCouplingC",
+  "uGroundCouplingMode", "uGroundSpreadWidth", "uGroundCouplingA", "uGroundCouplingB", "uGroundCouplingC",
 ]) {
   assert.match(
     `${RESEARCH_FLUID_SHADER_SOURCES.forceFragment}\n${RESEARCH_FLUID_SHADER_SOURCES.scalarFragment}`,
@@ -281,6 +293,10 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(profile.plume.persistence > 0 && profile.plume.persistence < RESEARCH_FLUID_PROFILES[TSAR_ID].plume.persistence);
     assert.ok(profile.plume.widen > 0 && profile.plume.widen < RESEARCH_FLUID_PROFILES[TSAR_ID].plume.widen);
     assert.ok(profile.source.vertical > profile.source.radial, "Ground Burst must retain stronger upward lift than radial source injection");
+    assert.equal(profile.source.radial, 0.22, "Ground Burst radial source remains narrowed and profile-local");
+    assert.equal(profile.source.vertical, 2.02, "Ground Burst vertical feed remains explicitly strong");
+    assert.equal(profile.plume.vortex, 0.78, "Ground Burst cap vortex rollout remains distinct from Airburst/Tsar");
+    assert.equal(profile.plume.feedTaperEnd, 0.46, "Ground Burst stem feed hands off after cap formation");
   } else if (presetId === TSAR_ID) {
     assert.equal(profile.plume.mode, 1, "Tsar must retain its existing historical-scale plume mode 1");
     assert.ok(profile.plume.expansion > 0, "Tsar expansion must be active");
@@ -305,7 +321,7 @@ for (const uniform of ["uPlumeMode", "uPlumeParams"]) {
 // --- Profile-gated smoke-material controls (2026-07) -------------------------
 for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
   assert.ok(profile.material && typeof profile.material === "object", `${presetId}: material config missing`);
-  for (const key of ["mode", "sootAbsorption", "dustAbsorption", "detailBoost", "warmCoolContrast", "detailOctaveMode"]) {
+  for (const key of ["mode", "sootAbsorption", "dustAbsorption", "detailBoost", "warmCoolContrast", "detailOctaveMode", "interiorDepth"]) {
     assert.ok(Number.isFinite(profile.material[key]), `${presetId}: material.${key} must be finite`);
   }
   if (presetId === LOW_YIELD_ID) {
@@ -313,6 +329,7 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(profile.material.sootAbsorption > profile.material.dustAbsorption);
     assert.ok(profile.material.detailBoost > 0 && profile.material.detailBoost < RESEARCH_FLUID_PROFILES[TSAR_ID].material.detailBoost);
     assert.ok(profile.material.warmCoolContrast > 0 && profile.material.warmCoolContrast < RESEARCH_FLUID_PROFILES[TSAR_ID].material.warmCoolContrast);
+    assert.equal(profile.material.interiorDepth, 0, "Low-yield must not inherit Ground Burst interior-depth shading");
     assert.equal(profile.material.detailOctaveMode, 1, "Low-yield's approved detail octave must remain explicit");
   } else if (presetId === GROUND_BURST_ID) {
     assert.equal(profile.material.mode, 1, "Ground Burst must enable independent dust/soot material");
@@ -320,19 +337,25 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(profile.material.dustAbsorption > 0 && profile.material.dustAbsorption < 1,
       "Ground Burst dust must retain translucent outer layers");
     assert.ok(profile.material.detailBoost > 0 && profile.material.detailBoost < RESEARCH_FLUID_PROFILES[TSAR_ID].material.detailBoost);
-    assert.ok(profile.material.warmCoolContrast > 0 && profile.material.warmCoolContrast < RESEARCH_FLUID_PROFILES[TSAR_ID].material.warmCoolContrast);
+    assert.ok(profile.material.warmCoolContrast > 0 && profile.material.warmCoolContrast <= 1.2);
     assert.equal(profile.material.detailOctaveMode, 0, "Ground Burst material separation must not buy the third detail octave");
+    assert.ok(profile.material.interiorDepth > 0 && profile.material.interiorDepth <= 1,
+      "Ground Burst must use the existing view-ray depth sample for material separation");
+    assert.equal(profile.material.interiorDepth, 1.0, "Ground Burst depth separation remains on the existing two-octave path");
+    assert.equal(profile.material.detailOctaveMode, 0, "Ground Burst must not reactivate the third detail octave");
   } else if (presetId === TSAR_ID) {
     assert.equal(profile.material.mode, 1, "Tsar must enable the smoke-material mode");
     assert.ok(profile.material.sootAbsorption > profile.material.dustAbsorption, "Tsar soot must absorb more strongly than lofted dust");
     assert.ok(profile.material.detailBoost > 0, "Tsar energy-weighted detail octave must be active");
     assert.ok(profile.material.warmCoolContrast > 0, "Tsar lit/shadowed contrast widening must be active");
     assert.equal(profile.material.detailOctaveMode, 1, "Tsar approved detail octave must remain explicit");
+    assert.equal(profile.material.interiorDepth, 0, "Tsar must retain its established material path");
   } else {
     assert.equal(profile.material.mode, 0, `${presetId}: smoke-material mode must remain neutral`);
     assert.equal(profile.material.sootAbsorption, 1, `${presetId}: default soot absorption must stay neutral`);
     assert.equal(profile.material.dustAbsorption, 1, `${presetId}: default dust absorption must stay neutral`);
     assert.equal(profile.material.detailOctaveMode, 0, `${presetId}: detail octave must stay neutral`);
+    assert.equal(profile.material.interiorDepth, 0, `${presetId}: interior depth must stay neutral`);
   }
 }
 // The volume shader and engine bindings must carry the material uniforms.
@@ -351,6 +374,11 @@ assert.match(
   /uniform\s+float\s+uDetailOctaveMode\b/,
   "uDetailOctaveMode: independent detail uniform missing from the volume shader",
 );
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /uniform\s+float\s+uMaterialInteriorDepth\b/,
+  "uMaterialInteriorDepth: Ground-only depth separation uniform missing from the volume shader",
+);
 // Every new material term must be reachable only through the uMaterialMode
 // gate, and must algebraically collapse to the prior expression when it is 0.
 for (const gatedTerm of [
@@ -363,6 +391,11 @@ assert.match(
   RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
   /int detailOctaves = uDetailOctaveMode > 0\.5 \? 3 : 2;/,
   "The expensive third detail octave must be independently profile-gated",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /float interiorBlend = clamp\([\s\S]*?uMaterialInteriorDepth[\s\S]*?\);/,
+  "Ground material depth must reuse the sampled view-ray shadow instead of a third detail octave",
 );
 
 // --- Profile-gated late dissipation (2026-07) --------------------------------
@@ -395,7 +428,8 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
   } else if (presetId === GROUND_BURST_ID) {
     const d = profile.dissipation;
     assert.equal(d.mode, 2, "Ground Burst alone must enable its ground-tail dissipation mode");
-    assert.ok(d.lateStart > 0.65 && d.lateStart < d.sourceTaperEnd);
+    assert.ok(d.lateStart > 0.45 && d.lateStart < d.sourceTaperEnd,
+      "Ground Burst late motion must begin after cap rollout, before a residual stem freezes");
     assert.ok(d.sourceTaperEnd < d.finalStart && d.finalStart === 1);
     assert.equal(d.retentionFloorSmoke, 1, "Ground Burst soot tail must retain faint elevated wisps");
     assert.ok(d.retentionFloorDust < d.retentionFloorSmoke, "Ground Burst dust must thin faster than soot");
@@ -482,9 +516,11 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
   } else if (presetId === GROUND_BURST_ID) {
     const c = profile.core;
     assert.equal(c.mode, 1, "Ground Burst must enable structured-core mode");
-    assert.ok(c.highlightThreshold > 1.5 && c.highlightThreshold < RESEARCH_FLUID_PROFILES[TSAR_ID].core.highlightThreshold);
-    assert.ok(c.highlightSharpness > 2 && c.highlightSharpness < RESEARCH_FLUID_PROFILES[TSAR_ID].core.highlightSharpness);
-    assert.ok(c.structureBlend > 0 && c.structureBlend <= 1);
+    assert.ok(c.highlightThreshold >= 0.2 && c.highlightThreshold <= 0.8,
+      "Ground Burst highlight must engage at the measured surface-flash range");
+    assert.ok(c.highlightSharpness >= 1.5 && c.highlightSharpness < 2.5,
+      "Ground Burst highlight roll-off must retain thermal pockets without a plateau");
+    assert.ok(c.structureBlend > 0 && c.structureBlend <= 1.2);
     assert.ok(c.bloomGateScale > 0 && c.bloomGateScale < RESEARCH_FLUID_PROFILES[TSAR_ID].core.bloomGateScale);
   } else if (presetId === TSAR_ID) {
     const c = profile.core;
