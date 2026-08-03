@@ -295,8 +295,10 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(profile.source.vertical > profile.source.radial, "Ground Burst must retain stronger upward lift than radial source injection");
     assert.equal(profile.source.radial, 0.22, "Ground Burst radial source remains narrowed and profile-local");
     assert.equal(profile.source.vertical, 2.02, "Ground Burst vertical feed remains explicitly strong");
-    assert.equal(profile.plume.vortex, 0.78, "Ground Burst cap vortex rollout remains distinct from Airburst/Tsar");
-    assert.equal(profile.plume.feedTaperEnd, 0.46, "Ground Burst stem feed hands off after cap formation");
+    assert.equal(profile.source.capScale, 1.48, "Ground Burst cap scale remains modest and profile-local");
+    assert.equal(profile.source.capRoll, 2.75, "Ground Burst cap underside roll remains profile-local");
+    assert.equal(profile.plume.vortex, 0.98, "Ground Burst cap vortex rollout remains profile-local");
+    assert.equal(profile.plume.feedTaperEnd, 0.42, "Ground Burst stem feed hands off before the mature cap flattens");
   } else if (presetId === TSAR_ID) {
     assert.equal(profile.plume.mode, 1, "Tsar must retain its existing historical-scale plume mode 1");
     assert.ok(profile.plume.expansion > 0, "Tsar expansion must be active");
@@ -339,9 +341,9 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(profile.material.detailBoost > 0 && profile.material.detailBoost < RESEARCH_FLUID_PROFILES[TSAR_ID].material.detailBoost);
     assert.ok(profile.material.warmCoolContrast > 0 && profile.material.warmCoolContrast <= 1.2);
     assert.equal(profile.material.detailOctaveMode, 0, "Ground Burst material separation must not buy the third detail octave");
-    assert.ok(profile.material.interiorDepth > 0 && profile.material.interiorDepth <= 1,
+    assert.ok(profile.material.interiorDepth > 0 && profile.material.interiorDepth <= 1.5,
       "Ground Burst must use the existing view-ray depth sample for material separation");
-    assert.equal(profile.material.interiorDepth, 1.0, "Ground Burst depth separation remains on the existing two-octave path");
+    assert.equal(profile.material.interiorDepth, 1.2, "Ground Burst depth separation remains on the existing two-octave path");
     assert.equal(profile.material.detailOctaveMode, 0, "Ground Burst must not reactivate the third detail octave");
   } else if (presetId === TSAR_ID) {
     assert.equal(profile.material.mode, 1, "Tsar must enable the smoke-material mode");
@@ -396,6 +398,16 @@ assert.match(
   RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
   /float interiorBlend = clamp\([\s\S]*?uMaterialInteriorDepth[\s\S]*?\);/,
   "Ground material depth must reuse the sampled view-ray shadow instead of a third detail octave",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /float frontLayer = 1\.0 - smoothstep\([\s\S]*?float rearLayer = smoothstep\([\s\S]*?float middleLayer = clamp\([\s\S]*?uMaterialInteriorDepth/,
+  "Ground material depth must separate front, middle, and rear layers on the existing ray",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /density \*= 1\.0 \+ depthContrast \* \([\s\S]*?middleLayer[\s\S]*?frontLayer[\s\S]*?rearLayer/,
+  "Ground material depth must add only bounded layer weighting, not another sample path",
 );
 
 // --- Profile-gated late dissipation (2026-07) --------------------------------
