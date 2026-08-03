@@ -657,7 +657,7 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       volume: { scaleX: 1.16, scaleY: 1.2, depth: 1.18, opacity: 0.43, shadow: 2.5, bloom: 0.78, distortion: 1.18, erosion: 1.38, noiseScale: 1.56, dustVisibility: 1.1, exposure: 1.03, toneMap: 0.36, backgroundIllumination: 0.12, emissionCurve: 1 },
       // The ground profile keeps its higher solver/detail budgets, but the
       // padded render extent does not require the historical 29-step raymarch
-      // on Balanced. The profile-local 0.82 ray factor keeps the two-octave
+      // on Balanced. The profile-local 0.64 ray factor keeps the two-octave
       // material path readable without lowering any shared tier or other
       // preset's quality.
       // High-quality Ground Burst remains visually full through the existing
