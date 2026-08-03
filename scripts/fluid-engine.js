@@ -651,10 +651,10 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
         aspectX: 1.18, aspectY: 0.76, onsetEnd: 0.055, sustainEnd: 0.36,
         radial: 0.22, vertical: 2.02, turbulence: 2.05,
         heat: 1.0, smoke: 0.46, incandescent: 1.35, dust: 1.85,
-        ejecta: 1.65, clusterSpread: 1.8, capScale: 1.9, capRoll: 1.72,
+        ejecta: 1.65, clusterSpread: 1.8, capScale: 1.48, capRoll: 2.75,
       },
       physics: { buoyancy: 1.42, densityLoading: 0.68, windCoupling: 1.18, vorticity: 2.0, velocityRetention: 0.968, cooling: 1.0, smokeConversion: 0.58, scalarRetention: 0.9995 },
-      volume: { scaleX: 1.16, scaleY: 1.2, depth: 1.18, opacity: 0.43, shadow: 2.5, bloom: 0.78, distortion: 1.18, erosion: 1.38, noiseScale: 1.56, dustVisibility: 1.1, exposure: 1.03, toneMap: 0.36, backgroundIllumination: 0.12, emissionCurve: 1 },
+      volume: { scaleX: 1.16, scaleY: 1.2, depth: 1.18, opacity: 0.43, shadow: 2.85, bloom: 0.78, distortion: 1.18, erosion: 1.38, noiseScale: 1.56, dustVisibility: 1.1, exposure: 1.03, toneMap: 0.36, backgroundIllumination: 0.12, emissionCurve: 1 },
       // The ground profile keeps its higher solver/detail budgets, but the
       // padded render extent does not require the historical 29-step raymarch
       // on Balanced. The profile-local 0.64 ray factor keeps the two-octave
@@ -716,11 +716,11 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       plume: {
         mode: 3,
         expansion: 0.028,
-        vortex: 0.78,
+        vortex: 0.98,
         persistence: 0.62,
         widen: 0.055,
         feedTaperStart: 0.2,
-        feedTaperEnd: 0.46,
+        feedTaperEnd: 0.42,
         lateralJitter: 0.98,
         turbulenceBlend: 0.64,
       },
@@ -731,7 +731,7 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
         detailBoost: 0.95,
         warmCoolContrast: 1.02,
         detailOctaveMode: 0,
-        interiorDepth: 1.0,
+        interiorDepth: 1.2,
       },
       shockwave: {
         mode: 1,
@@ -3180,7 +3180,21 @@ void main() {
     float opticalWeightedSmoke = uMaterialMode > 0.5
       ? smokeDensity * uMaterialParams.x + dustDensity * uMaterialParams.y
       : smoke;
+    // Ground Burst depth separation: reuse the existing ray position rather
+    // than purchasing another texture read or detail octave. The front layer
+    // stays a little clearer/warmer, the middle carries the strongest body,
+    // and the rear layer falls back into cooler particulate. The uniform is
+    // zero for every other preset, so their material path is unchanged.
+    float frontLayer = 1.0 - smoothstep(-0.92, -0.08, depth);
+    float rearLayer = smoothstep(0.08, 0.92, depth);
+    float middleLayer = clamp(1.0 - max(frontLayer, rearLayer), 0.0, 1.0);
+    float depthContrast = clamp(uMaterialInteriorDepth * 0.28, 0.0, 0.38);
     float density = (opticalWeightedSmoke + incandescent * 0.22) * radialWeight * detailModulation * layerFade;
+    density *= 1.0 + depthContrast * (
+      middleLayer * 0.25
+      - frontLayer * 0.15
+      - rearLayer * 0.2
+    );
     float erosion = smoothstep(-0.62 / max(0.4, uVolumeProfile1.y), 0.38, densityDetail);
     density = max(0.0,
       density - (1.0 - erosion) * radialWeight * 0.026 * uVolumeProfile1.y
@@ -3225,6 +3239,13 @@ void main() {
       0.0,
       1.0
     );
+    litWeight = clamp(
+      litWeight
+        + frontLayer * depthContrast * 0.2
+        - rearLayer * depthContrast * 0.14,
+      0.0,
+      1.0
+    );
     vec3 baseSmokeColor = mix(darkParticulate, litParticulate, litWeight);
     float depthShadow = smoothstep(
       0.06,
@@ -3240,6 +3261,16 @@ void main() {
       * (0.4 - contrastBoost * 0.12
         + (0.42 + contrastBoost * 0.1) * skyOcclusion
         + (0.24 + contrastBoost * 0.1) * selfShadow);
+    smokeColor = mix(
+      smokeColor,
+      litParticulate,
+      frontLayer * depthContrast * 0.12
+    );
+    smokeColor = mix(
+      smokeColor,
+      darkParticulate,
+      rearLayer * depthContrast * 0.18
+    );
     vec3 emission = heatRamp(temperature + incandescent * 0.75)
       * (1.0 - exp(-incandescent * 1.1)) * (0.62 + selfShadow * 0.3)
       * (0.72 + 0.28 * detailModulation);
