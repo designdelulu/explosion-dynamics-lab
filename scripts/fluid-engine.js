@@ -192,6 +192,7 @@ const BASE_PROFILE = Object.freeze({
     clusterSpread: 1,
     capScale: 1,
     capRoll: 1,
+    capVertical: 0.43,
   }),
   physics: Object.freeze({
     buoyancy: 1,
@@ -220,10 +221,46 @@ const BASE_PROFILE = Object.freeze({
     emissionCurve: 1,
   }),
   quality: Object.freeze({ grid: 1, pressure: 1, rays: 1, tracers: 1, detail: 1 }),
+  // A padded active region decouples the visible event from the fixed solver
+  // texture. mode 0 preserves the existing field coordinates exactly. mode 1
+  // compresses source coordinates into the central active region and expands
+  // the matching render transform, leaving an absorbing computational margin
+  // outside the visible plume instead of relying on a silhouette mask.
+  domain: Object.freeze({
+    mode: 0,
+    padding: 0,
+    renderOverscan: 1,
+    renderScale: 1,
+    renderExtent: null,
+    riskMargin: 0.06,
+    densityThreshold: 0.14,
+  }),
+  // Ground-coupling research controls. mode 0 is exactly inert. An opted-in
+  // profile can keep the surface sheet horizontal for longer, taper it before
+  // the plume lifts, vary its radial lobes deterministically, and separate
+  // surface heat/dust from the rising thermal feed. These are normalized
+  // visual controls, not blast-pressure or damage quantities.
+  groundCoupling: Object.freeze({
+    mode: 0,
+    radialImpulse: 0,
+    spreadWidth: 1,
+    heightFalloff: 1,
+    horizontalRetention: 1,
+    verticalDamping: 1,
+    spreadStart: 0,
+    spreadEnd: 0,
+    angularVariation: 0,
+    asymmetry: 0,
+    surfaceHeat: 0,
+    baseDust: 0,
+    transitionLift: 0,
+    lateGroundDrift: 0,
+  }),
   // Broad-plume research controls. mode 0 keeps a preset on its exact prior
-  // behavior; mode 1 is the existing historical-scale Tsar path, while mode 2
-  // gives low-yield its separate shaping path with the standard absorbing
-  // boundary.
+  // behavior; mode 1 is the existing historical-scale Tsar path, mode 2 gives
+  // low-yield its compact shaping path, and mode 3 identifies the separately
+  // balanced ground-coupled path. All enabled modes share the generic force
+  // mechanism but retain independent immutable values.
   // feedTaperStart/feedTaperEnd/lateralJitter/turbulenceBlend are the central
   // -stem taper/breakup controls (2026-07 shockwave/stem/performance pass);
   // feedTaperStart/End default to the original hardcoded coreBand taper
@@ -270,7 +307,17 @@ const BASE_PROFILE = Object.freeze({
   // and lofted dust independent optical-depth coefficients instead of one
   // shared density-to-alpha curve; detailBoost adds an energy-weighted third
   // curl-detail octave; warmCoolContrast widens the lit/shadowed dynamic range.
-  material: Object.freeze({ mode: 0, sootAbsorption: 1, dustAbsorption: 1, detailBoost: 0, warmCoolContrast: 0 }),
+  material: Object.freeze({
+    mode: 0,
+    sootAbsorption: 1,
+    dustAbsorption: 1,
+    detailBoost: 0,
+    warmCoolContrast: 0,
+    // Material absorption and color separation must not implicitly purchase
+    // the expensive third curl-detail octave. Profiles opt into it explicitly.
+    detailOctaveMode: 0,
+    interiorDepth: 0,
+  }),
   // Late-stage dissipation research controls (2026-07 Tsar dissipation pass).
   // mode 0 keeps every shipped preset byte-identical to before this pass; only
   // the Tsar historical reference opts in. lateStart/finalStart are fractions
@@ -357,6 +404,8 @@ function defineFluidProfile(presetId, profileId, overrides = {}) {
     physics: { ...BASE_PROFILE.physics, ...(overrides.physics || {}) },
     volume: { ...BASE_PROFILE.volume, ...(overrides.volume || {}) },
     quality: { ...BASE_PROFILE.quality, ...(overrides.quality || {}) },
+    domain: { ...BASE_PROFILE.domain, ...(overrides.domain || {}) },
+    groundCoupling: { ...BASE_PROFILE.groundCoupling, ...(overrides.groundCoupling || {}) },
     plume: { ...BASE_PROFILE.plume, ...(overrides.plume || {}) },
     shockwave: {
       ...BASE_PROFILE.shockwave,
@@ -532,7 +581,7 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       },
       material: {
         mode: 1, sootAbsorption: 1.22, dustAbsorption: 0.72,
-        detailBoost: 0.35, warmCoolContrast: 0.45,
+        detailBoost: 0.35, warmCoolContrast: 0.45, detailOctaveMode: 1,
       },
       shockwave: {
         mode: 2,
@@ -597,11 +646,145 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
     {
       eventFamilyId: 'nuclear-scale', physicalFamilyId: 'ground-coupled', eventFamily: 'Nuclear scale · ground-coupled', profileKind: 10,
       tracerType: 'particulate',
-      sourcePrimitives: ['radial-impulse', 'ground-sheet', 'vertical-jet', 'ejecta-curtain', 'multiple-offset-kernels'],
-      source: { centerY: 0.18, groundLevel: 0.18, radius: 0.078, aspectX: 1.28, aspectY: 0.82, onsetEnd: 0.065, sustainEnd: 0.62, radial: 1.3, vertical: 1.5, turbulence: 1.3, heat: 1.28, smoke: 1.38, incandescent: 1.18, dust: 2.15, ejecta: 1.2, clusterSpread: 1.35 },
-      physics: { buoyancy: 0.9, densityLoading: 1.48, windCoupling: 1.28, vorticity: 1.45, velocityRetention: 0.991, cooling: 0.96, smokeConversion: 1.25, scalarRetention: 0.999 },
-      volume: { scaleX: 1.35, scaleY: 1.42, depth: 1.28, opacity: 1.52, shadow: 1.62, bloom: 1.12, distortion: 1.18, erosion: 1.02, noiseScale: 1.25, dustVisibility: 1.9, exposure: 1.02, toneMap: 0.12, backgroundIllumination: 0.25, emissionCurve: 0.86 },
-      quality: { grid: 1.04, pressure: 1.08, rays: 1.1, tracers: 1.32, detail: 1.12 },
+      sourcePrimitives: ['radial-impulse', 'ground-sheet', 'vertical-jet', 'ejecta-curtain', 'multiple-offset-kernels', 'paired-cap-vortices'],
+      source: {
+        centerY: 0.19, groundLevel: 0.18, radius: 0.058,
+        aspectX: 1.18, aspectY: 0.76, onsetEnd: 0.055, sustainEnd: 0.48,
+        radial: 0.18, vertical: 2.02, turbulence: 2.05,
+        heat: 1.0, smoke: 0.46, incandescent: 1.35, dust: 1.85,
+        ejecta: 1.65, clusterSpread: 1.8, capScale: 1.3, capRoll: 2.75, capVertical: 0.42,
+      },
+      physics: { buoyancy: 1.48, densityLoading: 0.62, windCoupling: 1.18, vorticity: 2.0, velocityRetention: 0.94, cooling: 1.0, smokeConversion: 0.58, scalarRetention: 0.9995 },
+      volume: { scaleX: 1.16, scaleY: 1.2, depth: 1.18, opacity: 0.43, shadow: 2.85, bloom: 0.78, distortion: 1.18, erosion: 1.38, noiseScale: 1.56, dustVisibility: 1.1, exposure: 1.03, toneMap: 0.36, backgroundIllumination: 0.12, emissionCurve: 1 },
+      // The ground profile keeps its higher solver/detail budgets, but the
+      // padded render extent does not require the historical 29-step raymarch
+      // on Balanced. The profile-local 0.64 ray factor keeps the two-octave
+      // material path readable without lowering any shared tier or other
+      // preset's quality.
+      // High-quality Ground Burst remains visually full through the existing
+      // two-octave material path, while the profile-local ray factor avoids
+      // the shared renderer's 30+ step spike on this heavy volume.
+      quality: { grid: 1.04, pressure: 1.08, rays: 0.64, tracers: 1.32, detail: 1.12 },
+      domain: {
+        mode: 1,
+        // A ten-percent solver margin keeps the ground-coupled plume away
+        // from its finite texture border while retaining enough interior
+        // resolution for the existing Balanced profile.
+        padding: 0.10,
+        renderOverscan: 1.04,
+        // The boundary contract is profile-local. Balanced renders the
+        // padded field at a modest offscreen resolution and lets the CSS
+        // canvas upscale it; High keeps more native pixels and Mobile remains
+        // native so portrait composition is not softened.
+        // Ground Burst's high tier retains the larger solver and tracer
+        // budgets, but the expensive padded volume is rendered at a modest
+        // profile-local scale so a 31-step native raymarch cannot monopolize
+        // the GPU. Shared tiers and other presets remain unchanged.
+        renderScale: { mobile: 1, balanced: 0.62, high: 0.72 },
+        // The smoke/shock event space is wider than the portrait viewport.
+        // This is a render extent only: it does not enlarge the solver grid
+        // or change source energy. Keeping the horizontal radius at the
+        // padded-domain cap lets the analytical ground front continue beyond
+        // the screen without outrunning a smaller smoke container.
+        renderExtent: { x: 1.65, y: 1.5 },
+        riskMargin: 0.07,
+        densityThreshold: 0.14,
+      },
+      groundCoupling: {
+        mode: 1,
+        radialImpulse: 0.42,
+        // Keep the physical surface front broad, but stop the source kernel
+        // from loading an almost viewport-wide horizontal sheet before the
+        // rising column has time to form. This is a Ground-only width control;
+        // the default remains neutral for every other source profile.
+        spreadWidth: 0.42,
+        heightFalloff: 1.7,
+        horizontalRetention: 0.95,
+        verticalDamping: 0.68,
+        spreadStart: 0.006,
+        spreadEnd: 0.14,
+        angularVariation: 0.42,
+        asymmetry: 0.32,
+        surfaceHeat: 1.05,
+        baseDust: 1.5,
+        transitionLift: 0.7,
+        lateGroundDrift: 0.085,
+      },
+      core: {
+        mode: 1, highlightThreshold: 0.32, highlightSharpness: 1.9,
+        structureBlend: 1.08, bloomGateScale: 7.5,
+      },
+      plume: {
+        mode: 3,
+        expansion: 0.028,
+        vortex: 0.98,
+        persistence: 0.62,
+        widen: 0.10,
+        feedTaperStart: 0.48,
+        feedTaperEnd: 0.7,
+        lateralJitter: 0.98,
+        turbulenceBlend: 0.64,
+      },
+      material: {
+        mode: 1,
+        sootAbsorption: 2.35,
+        dustAbsorption: 0.5,
+        detailBoost: 0.95,
+        warmCoolContrast: 1.02,
+        detailOctaveMode: 0,
+        interiorDepth: 1.2,
+      },
+      shockwave: {
+        mode: 1,
+        ringB: { radiusOffset: -0.26, widthScale: 1.45, strength: 0.2, phaseOffset: 0.012 },
+        ringC: { radiusOffset: 0.16, widthScale: 0.9, strength: 0.12, phaseOffset: 0.04 },
+        ringD: { radiusOffset: 0, widthScale: 1, strength: 0, phaseOffset: 0 },
+        irregularity: 0.075,
+        fadeStart: 0.3,
+        fadeSpan: 0.13,
+      },
+      tracerMaterial: {
+        mode: 1,
+        occlusionStrength: 2.25,
+        sizeVariance: 0.46,
+        brightnessVariance: 0.4,
+        minSizeFloor: 1.65,
+      },
+      dissipation: {
+        mode: 2,
+        // Begin the ground-tail handoff just after the cap rollout. The
+        // previous 0.70 gate left a bright, straight residual stem through
+        // t20 even though its feed had already tapered off.
+        lateStart: 0.5,
+        finalStart: 1,
+        sourceTaperEnd: 0.82,
+        retentionFloorSmoke: 1,
+        retentionFloorDust: 0.9994,
+        outwardBoost: 0.05,
+        buoyancyFalloff: 0.42,
+        motionDamp: 0.58,
+        lateVelocityRetention: 0.9993,
+        lateCurl: 0.0085,
+        lateShear: 0.0065,
+        latePhaseRate: 0.06,
+      },
+      edge: {
+        mode: 3,
+        center: 0.5,
+        centerAsymmetry: 1.4,
+        leftRadius: 0.46,
+        rightRadius: 0.41,
+        topRadius: 0.44,
+        leftWobble: 0.12,
+        rightWobble: -0.09,
+        topWobble: 0.11,
+        fadeStart: 0.42,
+        fadeEnd: 0.94,
+        distanceWobble: 0.28,
+        lowDensityStart: 0.035,
+        lowDensityEnd: 0.19,
+        lowDensityAttenuation: 0.18,
+      },
     },
   ),
   'extreme-historical-scale': defineFluidProfile(
@@ -713,7 +896,7 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       // curve), an energy-weighted third detail octave adds medium-scale
       // billowing, and warmCoolContrast widens the lit/shadowed range for
       // readable internal depth.
-      material: { mode: 1, sootAbsorption: 1.6, dustAbsorption: 0.35, detailBoost: 1.4, warmCoolContrast: 0.85 },
+      material: { mode: 1, sootAbsorption: 1.6, dustAbsorption: 0.35, detailBoost: 1.4, warmCoolContrast: 0.85, detailOctaveMode: 1 },
       // 2026-07 core/tracer polish: t5-t10 was reading as a flat white
       // capsule because the white-hot highlight term saturated to its
       // maximum (pow(...)=1.0) across most of the amplified Tsar core
@@ -1060,10 +1243,26 @@ uniform vec4 uSeedOffsetsA;
 uniform vec4 uSeedOffsetsB;
 uniform vec4 uProfilePhysics;
 uniform vec4 uProfileDecay;
+// Profile-specific cap controls packed as (capScale, capRoll, reserved, capVertical).
 uniform vec4 uProfileAux;
+// The active scalar region may occupy the padded center of the fixed solver
+// texture. 1.0 keeps legacy coordinates; smaller values preserve visible
+// source motion while reserving an absorbing computational margin.
+uniform float uDomainActiveScale;
+// Ground Burst-specific surface coupling, inert unless uGroundCouplingMode is
+// enabled by the immutable profile. A packs radial impulse, source-height
+// falloff, horizontal retention, and near-ground vertical damping. B packs
+// radial phase start/end, deterministic lobe variation, and left/right
+// asymmetry. C packs surface heat, base dust, transition lift, and late drift.
+uniform float uGroundCouplingMode;
+uniform float uGroundSpreadWidth;
+uniform vec4 uGroundCouplingA;
+uniform vec4 uGroundCouplingB;
+uniform vec4 uGroundCouplingC;
 // Profile-gated broad-plume research controls. uPlumeMode 0 is inert, mode 1
-// is the existing historical-scale variant, and mode 2 is the restrained
-// low-yield variant. uPlumeParams packs
+// is the historical-scale variant, mode 2 is the compact low-yield variant,
+// and mode 3 is the independently balanced ground-coupled variant.
+// uPlumeParams packs
 // (expansion, vortexStrength, persistence, columnWiden).
 uniform float uPlumeMode;
 uniform vec4 uPlumeParams;
@@ -1190,7 +1389,10 @@ float profileShockwaveLayers(vec2 uv) {
 
 float profileGroundKernel(vec2 uv) {
   float vertical = (uv.y - uSourceShape.w) / max(0.006, uSourceShape.x * 0.28);
-  float horizontal = (uv.x - profileSourceCenter().x) / max(0.02, uSourceShape.x * 4.8);
+  float widthScale = uGroundCouplingMode > 0.5
+    ? clamp(uGroundSpreadWidth, 0.42, 1.2)
+    : 1.0;
+  float horizontal = (uv.x - profileSourceCenter().x) / max(0.02, uSourceShape.x * 4.8 * widthScale);
   return exp(-vertical * vertical - horizontal * horizontal);
 }
 
@@ -1457,9 +1659,10 @@ void main() {
     velocity.y += verticalKernel * sustain * pulse * stagedImpact * uSourceMotion.y
       * 0.18 * motionScale * uDt
       * (sourceEnabled(SOURCE_VERTICAL) || sourceEnabled(SOURCE_PULSED) ? 1.0 : 0.0);
+    float legacyGroundCoupling = uGroundCouplingMode > 0.5 ? 0.0 : 1.0;
     velocity.x += sign(primitiveDelta.x + uSeedOffsetsA.x * 0.04) * groundKernel
       * onset * stagedImpact * uSourceMotion.x * 0.18 * motionScale * uDt * 60.0
-      * (sourceEnabled(SOURCE_GROUND) ? 1.0 : 0.0);
+      * (sourceEnabled(SOURCE_GROUND) ? legacyGroundCoupling : 0.0);
     vec2 ejectaDirection = safeDirection(vec2(
       primitiveDelta.x * 1.25 + uSeedOffsetsB.x * 0.03,
       abs(primitiveDelta.y) + 0.12
@@ -1474,6 +1677,67 @@ void main() {
     );
     velocity += turbulence.xy * (activeKernel * 0.5 + clusterKernel)
       * clusterActivity * uSourceMotion.w * 0.025 * motionScale * uDt * 60.0;
+
+    if (uGroundCouplingMode > 0.5 && sourceEnabled(SOURCE_GROUND)) {
+      // A sustained, height-weighted surface outflow replaces the one-frame
+      // symmetric sheet for the opted-in ground profile. Multiple seeded
+      // frequencies vary the left/right lobes without drawing a permanent
+      // ring, while the phase taper hands motion to the rising plume.
+      // Smoke and dust share one resolved velocity field, so the lateral
+      // surface impulse is weighted by the local particulate mix: dust keeps
+      // the full ground-directed spread, while soot retains a narrower lift
+      // corridor instead of becoming a wall-wide horizontal slab.
+      float groundMaterialBias = clamp(
+        dust / max(0.0001, dust + smoke),
+        0.0,
+        1.0
+      );
+      float groundFlowScale = mix(0.52, 1.0, groundMaterialBias);
+      float heightAboveGround = max(0.0, vUv.y - uSourceShape.w);
+      float heightScale = max(0.012, uSourceShape.x * uGroundCouplingA.y);
+      float groundHeightWeight = exp(
+        -heightAboveGround * heightAboveGround / (heightScale * heightScale)
+      );
+      float spreadPhase = smoothstep(
+        uGroundCouplingB.x,
+        uGroundCouplingB.x + 0.025,
+        uNormalizedTime
+      ) * (1.0 - smoothstep(
+        uGroundCouplingB.y,
+        uGroundCouplingB.y + 0.14,
+        uNormalizedTime
+      ));
+      float groundDistance = abs(primitiveDelta.x) / max(0.01, uSourceShape.x);
+      float seededLobes = 1.0 + uGroundCouplingB.z * (
+        sin(groundDistance * 4.7 + uSeedOffsetsA.z * 4.1) * 0.58
+        + sin(groundDistance * 9.3 - uSeedOffsetsB.y * 3.7) * 0.42
+      );
+      float sideBias = 1.0 + sign(primitiveDelta.x + 0.0001)
+        * uGroundCouplingB.w * uSeedOffsetsA.x;
+      float coupledGround = groundKernel * groundHeightWeight
+        * (onset + sustain * 0.48) * spreadPhase;
+      velocity.x += sign(primitiveDelta.x + uSeedOffsetsB.x * 0.018)
+        * coupledGround * seededLobes * sideBias
+        * uGroundCouplingA.x * uSourceMotion.x
+        * 0.22 * groundFlowScale * motionScale * uDt * 60.0;
+      // Suppress the vertical component only inside the surface layer. The
+      // same field transitions into a modest off-center lift above it, so the
+      // stem emerges from the base rather than detaching or forming a seam.
+      velocity.y *= mix(1.0, uGroundCouplingA.w, groundHeightWeight * spreadPhase);
+      float transitionBand = smoothstep(
+        uSourceShape.w + uSourceShape.x * 0.3,
+        uSourceShape.w + uSourceShape.x * 1.9,
+        vUv.y
+      ) * (1.0 - smoothstep(
+        uSourceShape.w + uSourceShape.x * 4.0,
+        uSourceShape.w + uSourceShape.x * 6.2,
+        vUv.y
+      ));
+      velocity.y += activeKernel * transitionBand * sustain
+        * uGroundCouplingC.z * motionScale * uDt;
+      velocity += turbulence.xy * coupledGround * uGroundCouplingB.z
+        * 0.01 * groundFlowScale * motionScale * uDt * 60.0;
+    }
   }
 
   // A paired vortex ring in the vertical slice supplies the cap's toroidal
@@ -1493,17 +1757,17 @@ void main() {
   // density. Advection therefore carries the asymmetry into the silhouette.
   float capEnabled = sourceEnabled(SOURCE_PAIRED_CAP) ? 1.0 : 0.0;
   velocity += turbulence.xy * plumeActivity * capEnvelope * capEnabled
-    * 0.0045 * motionScale * uDt * 60.0;
+    * 0.0045 * uDomainActiveScale * motionScale * uDt * 60.0;
   vec2 capCenter = uSourceCenter + vec2(
     uWind.x * capDevelopment * 0.42,
-    mix(0.075, 0.43, capDevelopment)
-  );
+    mix(0.075, uProfileAux.w, capDevelopment)
+  ) * uDomainActiveScale;
   // Profile-scaled cap geometry: capScale (uProfileAux.x) widens the paired
   // vortex separation and radius so large historical archetypes develop a
   // broader, deeper cap while the preserved research profile stays identical.
   float capGeometryScale = mix(1.0, uProfileAux.x, 0.55);
-  float capHalfWidth = mix(0.052, 0.155, capDevelopment) * capGeometryScale;
-  float vortexRadius = mix(0.055, 0.13, capDevelopment) * mix(1.0, uProfileAux.x, 0.4);
+  float capHalfWidth = mix(0.052, 0.155, capDevelopment) * capGeometryScale * uDomainActiveScale;
+  float vortexRadius = mix(0.055, 0.13, capDevelopment) * mix(1.0, uProfileAux.x, 0.4) * uDomainActiveScale;
   vec2 leftDelta = vUv - (capCenter - vec2(capHalfWidth, 0.0));
   vec2 rightDelta = vUv - (capCenter + vec2(capHalfWidth, 0.0));
   vec2 leftScaled = leftDelta / vec2(vortexRadius, vortexRadius * 0.82);
@@ -1515,14 +1779,14 @@ void main() {
   vec2 rightTangent = vec2(rightDelta.y, -rightDelta.x)
     / max(length(rightDelta), 0.004);
   float circulation = (0.078 + 0.032 * uEnergy) * capEnvelope * motionScale
-    * capEnabled * uProfileAux.x;
+    * capEnabled * uProfileAux.x * uDomainActiveScale;
   velocity += (leftTangent * leftWeight + rightTangent * rightWeight)
     * circulation * uDt;
 
   // Gentle lateral inflow around the rising column makes entrainment legible;
   // the paired vortices above provide the corresponding outer return motion.
-  float columnBand = smoothstep(uSourceCenter.y - 0.02, uSourceCenter.y + 0.04, vUv.y)
-    * (1.0 - smoothstep(capCenter.y - 0.02, capCenter.y + 0.08, vUv.y));
+  float columnBand = smoothstep(uSourceCenter.y - 0.02 * uDomainActiveScale, uSourceCenter.y + 0.04 * uDomainActiveScale, vUv.y)
+    * (1.0 - smoothstep(capCenter.y - 0.02 * uDomainActiveScale, capCenter.y + 0.08 * uDomainActiveScale, vUv.y));
   float sideDistance = abs(vUv.x - capCenter.x);
   float entrainment = exp(-sideDistance * sideDistance / max(0.002, capHalfWidth * capHalfWidth * 2.8));
   velocity.x += (capCenter.x - vUv.x) * columnBand * entrainment
@@ -1532,17 +1796,21 @@ void main() {
   // surviving upflow turns outward, so cap and umbrella structures develop
   // inside the simulated volume instead of piling flat against its upper
   // boundary. Normalized visual behavior only — not an atmospheric model.
-  float ceilingJitter = turbulence.z * 0.07;
-  float ceiling = smoothstep(0.58 + ceilingJitter, 0.88 + ceilingJitter, vUv.y);
+  float ceilingJitter = turbulence.z * 0.07 * uDomainActiveScale;
+  float ceiling = smoothstep(
+    0.5 + (0.58 - 0.5) * uDomainActiveScale + ceilingJitter,
+    0.5 + (0.88 - 0.5) * uDomainActiveScale + ceilingJitter,
+    vUv.y
+  );
   float upflow = max(velocity.y, 0.0);
   float ceilingRelax = min(1.0, 2.8 * uDt);
   velocity.y -= upflow * ceiling * ceilingRelax;
-  velocity.x += sign(vUv.x - uSourceCenter.x + uSeedOffsetsA.y * 0.03)
+  velocity.x += sign(vUv.x - uSourceCenter.x + uSeedOffsetsA.y * 0.03 * uDomainActiveScale)
     * upflow * ceiling * 0.5 * ceilingRelax;
   // Outer umbrella roll: spread material at the stable ceiling curls gently
   // downward away from the stem, rounding the crown into cap vortices.
   float rimDistance = abs(vUv.x - uSourceCenter.x);
-  velocity.y -= ceiling * smoothstep(0.09, 0.26, rimDistance)
+  velocity.y -= ceiling * smoothstep(0.09 * uDomainActiveScale, 0.26 * uDomainActiveScale, rimDistance)
     * (smoke + dust * 0.6) * 0.55 * uProfileAux.y * uDt;
 
   // ---- Profile-gated broad turbulent plume (research mechanism) ----
@@ -1561,9 +1829,9 @@ void main() {
   // All quantities are normalized visual motion cues — no blast/damage model.
   if (uPlumeMode > 0.5) {
     float plumeActivity = clamp(temperature * 0.2 + smoke * 0.72 + incandescent * 0.32, 0.0, 1.2);
-    float heightAbove = clamp((vUv.y - uSourceCenter.y) / 0.52, 0.0, 1.2);
+    float heightAbove = clamp((vUv.y - uSourceCenter.y) / (0.52 * uDomainActiveScale), 0.0, 1.2);
     float lateral = vUv.x - uSourceCenter.x;
-    float lateralSign = sign(lateral + uSeedOffsetsA.x * 0.015 + 0.0001);
+    float lateralSign = sign(lateral + uSeedOffsetsA.x * 0.015 * uDomainActiveScale + 0.0001);
     // Late-dissipation motion damp: relaxes residual widening/feed/ring
     // vortex forces toward rest so the silhouette settles before it thins.
     // Always 1.0 unless uDissipationMode is set.
@@ -1611,15 +1879,28 @@ void main() {
     // one over the same window instead of holding one fixed width until it
     // simply cuts off.
     float corridorAsymmetry = uSeedOffsetsA.x * 0.24 * (0.4 + 0.6 * heightAbove);
+    float groundStemDrift = uGroundCouplingMode > 0.5
+      ? (uSeedOffsetsB.x * 0.055 + turbulence.x * 0.018) * uDomainActiveScale
+        * (1.0 - smoothstep(0.62, 1.1, heightAbove))
+      : 0.0;
     float lateralOffset = (turbulence.z + corridorAsymmetry)
       * uPlumeStemParams.z * stemBreakup;
-    float coreLateral = lateral - lateralOffset;
+    float coreLateral = lateral - lateralOffset - groundStemDrift;
     float widthGrow = mix(1.0, 2.4, stemBreakup);
+    if (uGroundCouplingMode > 0.5) {
+      // The ground column begins as a broad, heavy base and narrows only
+      // modestly as it hands material into the cap. This is distinct from the
+      // compact Airburst corridor and avoids a tornado-like stem.
+      widthGrow *= mix(1.25, 0.92, smoothstep(0.12, 0.82, heightAbove));
+    }
     float coreBand = exp(
       -coreLateral * coreLateral
       / max(0.004, uSourceShape.x * uSourceShape.x * 9.0 * widthGrow * widthGrow)
     );
-    velocity.y += coreBand * plumeActivity * uPlumeParams.w
+    float groundFeedWeight = uGroundCouplingMode > 0.5
+      ? mix(1.28, 0.86, smoothstep(0.08, 0.9, heightAbove))
+      : 1.0;
+    velocity.y += coreBand * plumeActivity * uPlumeParams.w * groundFeedWeight
       * (0.4 + 0.6 * (1.0 - heightAbove)) * feedPhase * motionScale * uDt * 30.0 * motionDamp;
     // Medium-scale turbulence reaching into the central corridor specifically
     // (rather than only the generic vortex-ring/cluster terms elsewhere) so
@@ -1632,6 +1913,9 @@ void main() {
     // Gaussian vortices climbs with the plume; seeded offsets make radii,
     // heights and strengths unequal so the silhouette rolls asymmetrically
     // and never shows two mirrored curls.
+    // Vortex positions are transformed as a complete offset below. Keeping
+    // ringRise in the source coordinate system avoids applying the padded
+    // domain scale twice to its vertical motion.
     float ringRise = mix(0.08, 0.46, smoothstep(0.02, 0.5, uNormalizedTime));
     float ringLife = smoothstep(0.015, 0.08, uNormalizedTime)
       * (1.0 - smoothstep(0.72, 1.15, uNormalizedTime));
@@ -1647,14 +1931,14 @@ void main() {
       vec2 acc = vec2(0.0);
       for (int i = 0; i < 4; i++) {
         vec4 vtx = i == 0 ? vxA : i == 1 ? vxB : i == 2 ? vxC : vxD;
-        vec2 center = uSourceCenter + vec2(vtx.x, vtx.y);
+        vec2 center = uSourceCenter + vec2(vtx.x, vtx.y) * uDomainActiveScale;
         vec2 d = vUv - center;
-        float r2 = vtx.w * vtx.w;
+        float r2 = vtx.w * vtx.w * uDomainActiveScale * uDomainActiveScale;
         float w = exp(-dot(d, d) / max(0.0006, r2));
         vec2 tangent = vec2(-d.y, d.x) / max(length(d), 0.004);
         acc += tangent * (vtx.z * w);
       }
-      velocity += acc * ringStrength * (0.06 + 0.03 * uEnergy) * uDt * 60.0;
+      velocity += acc * ringStrength * (0.06 + 0.03 * uEnergy) * uDomainActiveScale * uDt * 60.0;
     }
     float speedCap = length(velocity);
     if (speedCap > 1.55) velocity *= 1.55 / speedCap;
@@ -1669,7 +1953,21 @@ void main() {
     if (outwardProgress > 0.0005) {
       vec2 fromCenter = vUv - uSourceCenter;
       vec2 outwardDir = fromCenter / max(length(fromCenter), 0.02);
-      velocity += outwardDir * uDissipationParams2.y * outwardProgress * motionScale * uDt * 0.6;
+      velocity += outwardDir * uDissipationParams2.y * outwardProgress * uDomainActiveScale * motionScale * uDt * 0.6;
+
+      if (uGroundCouplingMode > 0.5) {
+        // Ground dust keeps a weak horizontal tail after the main radial
+        // impulse has ended. Height weighting prevents this from pushing the
+        // elevated cap outward or manufacturing new late smoke.
+        float lateGroundHeight = exp(
+          -pow(max(0.0, vUv.y - uSourceShape.w)
+            / max(0.012, uSourceShape.x * uGroundCouplingA.y * 1.35), 2.0)
+        );
+        velocity.x += sign(fromCenter.x + uSeedOffsetsB.w * 0.012)
+          * lateGroundHeight * uGroundCouplingC.w * outwardProgress
+          * (0.5 + dust * 0.5) * uDomainActiveScale * motionScale * uDt;
+        velocity.y *= mix(1.0, 0.82, lateGroundHeight * outwardProgress);
+      }
 
       // The scalar-loss tail must remain a real flow, not a frozen density
       // field whose opacity is merely reduced. A broad seed-stable roll plus
@@ -1681,16 +1979,31 @@ void main() {
         sin((vUv.y - uSourceCenter.y) * 5.4 + slowPhase),
         -sin((vUv.x - uSourceCenter.x) * 4.8 - slowPhase * 0.73)
       );
-      velocity += broadCurl * uDissipationParams3.y * lateMaterial
+      velocity += broadCurl * uDissipationParams3.y * lateMaterial * uDomainActiveScale
         * outwardProgress * motionScale * uDt * 60.0;
       float heightShear = clamp((vUv.y - uSourceCenter.y) / 0.58, 0.0, 1.0) - 0.42;
-      velocity.x += heightShear * (0.55 + 0.45 * sin(slowPhase + vUv.y * 3.1))
+      velocity.x += heightShear * (0.55 + 0.45 * sin(slowPhase + vUv.y * 3.1)) * uDomainActiveScale
         * uDissipationParams3.z * lateMaterial * outwardProgress
         * motionScale * uDt * 60.0;
     }
   }
 
-  velocity *= pow(clamp(dissipationVelocityRetention(), 0.9, 1.0), uDt * 60.0);
+  float retainedVelocity = dissipationVelocityRetention();
+  if (uGroundCouplingMode > 0.5) {
+    float nearGround = exp(
+      -pow(max(0.0, vUv.y - uSourceShape.w)
+        / max(0.012, uSourceShape.x * uGroundCouplingA.y), 2.0)
+    );
+    float horizontalRetention = mix(
+      retainedVelocity,
+      max(retainedVelocity, uGroundCouplingA.z),
+      nearGround
+    );
+    velocity.x *= pow(clamp(horizontalRetention, 0.9, 1.0), uDt * 60.0);
+    velocity.y *= pow(clamp(retainedVelocity, 0.9, 1.0), uDt * 60.0);
+  } else {
+    velocity *= pow(clamp(retainedVelocity, 0.9, 1.0), uDt * 60.0);
+  }
   velocity *= boundaryMask(vUv);
   float speed = length(velocity);
   if (speed > 1.4) velocity *= 1.4 / speed;
@@ -1866,7 +2179,8 @@ void main() {
     float ground = profileGroundKernel(vUv);
     float ejecta = profileEjectaKernel(vUv);
     float trail = profileTrailKernel(vUv);
-    float ring = profileRingKernel(vUv) + profileShockwaveLayers(vUv);
+    float sourceRing = profileRingKernel(vUv);
+    float shockwaveLayers = profileShockwaveLayers(vUv);
     float combustion = sourceEnabled(SOURCE_SUSTAINED) ? sustain : fireEnvelope;
     float hotEnvelope = onset * 1.45 + combustion * pulse * 0.72;
     float matterEnvelope = sustain * (0.35 + pulse * 0.65);
@@ -1881,7 +2195,8 @@ void main() {
       : combined;
     float thermalKernel = clamp(
       stagedCombined
-        + ring * (sourceEnabled(SOURCE_RING) ? 0.5 : 0.0)
+        + sourceRing * (sourceEnabled(SOURCE_RING) ? 0.5 : 0.0)
+        + shockwaveLayers * 0.5
         + stagedTrail * 0.72,
       0.0,
       2.4
@@ -1897,10 +2212,76 @@ void main() {
       0.0,
       2.8
     );
-    temperature += source * thermalKernel * hotEnvelope * uSourceScalar.x * uDt * 3.2;
-    incandescent += source * thermalKernel * hotEnvelope * uSourceScalar.z * uDt * 2.4;
-    smoke += source * stagedCombined * matterEnvelope * uSourceScalar.y * uDt * 0.92;
-    dust += source * particulateKernel * matterEnvelope * uSourceScalar.w * uDt * 0.72;
+    if (uGroundCouplingMode > 0.5) {
+      // Keep the surface flash broad but short-lived and irregular; do not
+      // feed the whole ground sheet through the same high-temperature kernel
+      // as the vertical plume. The base/offset kernels supply the hot core,
+      // while the ground and ejecta kernels primarily supply particulate
+      // material. This is the white-barrel fix and is inert for all other
+      // profiles.
+      float seededThermalPockets = clamp(
+        0.62 + sourceDetail * 0.64
+          + sin((vUv.x - uSourceCenter.x) * 31.0 + uSeedOffsetsA.w * 5.2) * 0.18,
+        0.12,
+        1.38
+      );
+      float groundRipple = uSourceShape.x * (
+        sourceDetail * 0.24
+          + sin((vUv.x - uSourceCenter.x) * 38.0 + uSeedOffsetsB.z * 4.8) * 0.12
+      );
+      float irregularGround = max(
+        ground * 0.28,
+        profileGroundKernel(vUv + vec2(0.0, groundRipple))
+      );
+      float structuredCore = clamp(
+        profileBaseKernel(vUv)
+          + multi * 0.35
+          + profileVerticalKernel(vUv) * 1.4,
+        0.0,
+        1.5
+      );
+      float groundFlashEnvelope = exp(
+        -uNormalizedTime / 0.022
+      ) * step(0.000001, uTime);
+      float surfaceFlash = irregularGround * groundFlashEnvelope * uGroundCouplingC.x
+        * seededThermalPockets;
+      float groundHotEnvelope = onset * 1.2
+        + combustion * pulse * 0.32
+          * (1.0 - smoothstep(0.12, 0.32, uNormalizedTime))
+        + sustain * pulse * 0.22
+          * (1.0 - smoothstep(0.36, 0.78, uNormalizedTime));
+      float risingHeat = structuredCore * groundHotEnvelope
+        * seededThermalPockets;
+      temperature += source * (risingHeat + surfaceFlash * 2.3)
+        * uSourceScalar.x * uDt * 1.65;
+      incandescent += source * (
+        risingHeat * 0.72 + surfaceFlash * 1.15
+      ) * uSourceScalar.z * uDt * 1.2;
+      smoke += source * clamp(
+        structuredCore * 0.95 + multi * 0.3 + irregularGround * 0.12,
+        0.0,
+        2.0
+      ) * matterEnvelope * uSourceScalar.y * uDt * 0.88;
+      dust += source * clamp(
+        irregularGround * uGroundCouplingC.y
+          + ejecta * uSourceAux.y
+          + multi * 0.34
+          + structuredCore * 0.08,
+        0.0,
+        3.0
+      ) * matterEnvelope * uSourceScalar.w * uDt * 0.7
+        * (1.0 - 0.42 * smoothstep(
+          uSourceShape.w + uSourceShape.x * 1.6,
+          uSourceShape.w + uSourceShape.x * 6.0,
+          vUv.y
+        ));
+
+    } else {
+      temperature += source * thermalKernel * hotEnvelope * uSourceScalar.x * uDt * 3.2;
+      incandescent += source * thermalKernel * hotEnvelope * uSourceScalar.z * uDt * 2.4;
+      smoke += source * stagedCombined * matterEnvelope * uSourceScalar.y * uDt * 0.92;
+      dust += source * particulateKernel * matterEnvelope * uSourceScalar.w * uDt * 0.72;
+    }
   }
 
   outputValue = clamp(vec4(temperature, smoke, incandescent, dust), 0.0, 4.0);
@@ -1981,7 +2362,7 @@ void main() {
   outputValue = vec4(
     clamp(length(velocity) / 1.4, 0.0, 1.0),
     clamp(scalar.r / 4.0, 0.0, 1.0),
-    clamp(scalar.g / 4.0, 0.0, 1.0),
+    clamp((scalar.g * 0.9 + scalar.a * 0.72) / 4.0, 0.0, 1.0),
     clamp(vorticity / 1.4, 0.0, 1.0)
   );
 }`;
@@ -2258,12 +2639,17 @@ uniform vec4 uLayerVisibility;
 uniform vec4 uVolumeProfile0;
 uniform vec4 uVolumeProfile1;
 uniform vec4 uVolumeProfile2;
-// Smoke-material research controls (2026-07). uMaterialMode is 0 for every
-// shipped preset (byte-identical rendering) and 1 only for the Tsar
-// historical reference. uMaterialParams packs (sootAbsorption,
-// dustAbsorption, detailBoost, warmCoolContrast).
+uniform float uDomainDensityThreshold;
+// Material absorption is independent from high-frequency detail. Profiles can
+// keep soot/dust separation while leaving uDetailOctaveMode at 0 and retaining
+// the two-octave cost of the original volume path.
 uniform float uMaterialMode;
 uniform vec4 uMaterialParams;
+uniform float uDetailOctaveMode;
+// Ground Burst may use the already-sampled view-ray depth to separate front,
+// middle, and rear particulate layers without purchasing another detail
+// octave. Zero keeps every other profile's material path unchanged.
+uniform float uMaterialInteriorDepth;
 // Early-core research controls (2026-07 Tsar core/tracer polish). uCoreMode
 // is 0 for every shipped preset (byte-identical rendering) and 1 only for
 // the Tsar historical reference. uCoreParams packs (highlightThreshold,
@@ -2323,6 +2709,15 @@ vec3 toneMap(vec3 color) {
   return mix(aces, reinhard, clamp(uVolumeProfile2.y, 0.0, 1.0));
 }
 
+// FIELD_SAMPLING deliberately clamps solver reads for stable finite-difference
+// passes. The volume compositor must not turn that clamped texel into a visible
+// wall when a distorted ray sample travels beyond the field, so it carries a
+// separate validity term and contributes no density outside the real texture.
+float fieldSampleValidity(vec2 uv) {
+  return step(0.0, uv.x) * step(uv.x, 1.0)
+    * step(0.0, uv.y) * step(uv.y, 1.0);
+}
+
 // Extinction toward the simulation-domain boundary. The ground edge keeps a
 // deliberately narrow band to preserve surface contact on every preset.
 //
@@ -2367,6 +2762,37 @@ float approximatePow2p6(float value) {
 
 float edgeExtinction(vec2 uv, vec4 profile, float wobble) {
   float ground = smoothstep(0.0, 0.04, uv.y);
+  if (uEdgeMode > 2.5) {
+    // Ground-coupled organic envelope. Unlike the airburst/historical
+    // superellipse below, its vertical distance starts only in the upper
+    // domain. The dense base therefore reaches the surface intact while
+    // asymmetric warped sides and the cap dissolve before the computational
+    // wall. A slightly wider low-altitude radius avoids replacing the box
+    // with an oval or pinching the ground footprint into a vignette.
+    float dx = uv.x - profile.x;
+    float sideRadius = dx < 0.0 ? profile.y : profile.z;
+    float lowerWiden = mix(1.1, 0.86, smoothstep(0.18, 0.48, uv.y));
+    float capRollout = mix(1.0, 1.2, smoothstep(0.56, 0.84, uv.y));
+    float normalizedX = dx / max(0.2, sideRadius * lowerWiden * capRollout);
+    float topStart = 1.0 - profile.w;
+    float normalizedY = max(0.0, uv.y - topStart) / max(0.2, profile.w);
+    // The ground path is evaluated for every ray layer. A quartic fit keeps
+    // its warped, asymmetric envelope while avoiding a per-layer sqrt/pow
+    // pair; the legacy airburst/Tsar branches retain their established fit.
+    float normalizedX2 = normalizedX * normalizedX;
+    float normalizedY2 = normalizedY * normalizedY;
+    float organicDistance = normalizedX2 * (1.0 + 0.45 * normalizedX2)
+      + normalizedY2 * (1.0 + 0.45 * normalizedY2);
+    organicDistance += wobble * uEdgeProfile2.z
+      * mix(0.45, 1.0, smoothstep(0.2, 0.72, uv.y));
+    float envelope = 1.0 - smoothstep(
+      uEdgeProfile2.x,
+      uEdgeProfile2.y,
+      organicDistance
+    );
+    float mask = envelope * ground;
+    return mask * mask * (3.0 - 2.0 * mask);
+  }
   if (uEdgeMode > 0.5) {
     // Side and top falloff are merged into one warped superellipse distance
     // (rather than multiplied as independent axes), so the isocontour is a
@@ -2441,7 +2867,11 @@ vec4 diagnosticColor(
   }
   if (uDiagnostic == 3) {
     float value = clamp(scalar.g * 0.52, 0.0, 1.0);
-    return vec4(vec3(value), inside);
+    // Keep the developer field view density-weighted. An opaque inside
+    // alpha made every sampled solver rectangle look full even when the
+    // scalar was empty, which obscured occupancy diagnostics and suggested a
+    // boundary that the visible composite did not actually contain.
+    return vec4(vec3(value), inside * value);
   }
   if (uDiagnostic == 4) {
     float value = clamp(scalar.b * 0.72, 0.0, 1.0);
@@ -2668,13 +3098,14 @@ void main() {
     // Two trilinear texture samples replace dozens of per-layer integer hashes.
     // Velocity amplitudes use k^(-5/6), the square-root analogue of a k^(-5/3)
     // energy spectrum. This is a bounded visual perturbation, not calibrated flow.
-    // Tsar-only (uMaterialMode): a third, finer octave is added whose
+    // A third, finer octave is independently opt-in. Material coloration does
+    // not imply this extra texture sample per ray layer.
     // amplitude follows local flow energy (|centerCurl|) rather than the flat
     // falloff above — wavelet-turbulence-style energy weighting that
     // concentrates fine billowing where the flow is actually turbulent instead
     // of coating the whole plume in uniform noise. detailOctaves stays 2 for
     // every other preset, so their loop is byte-identical to before this pass.
-    int detailOctaves = uMaterialMode > 0.5 ? 3 : 2;
+    int detailOctaves = uDetailOctaveMode > 0.5 ? 3 : 2;
     for (int octave = 0; octave < 3; octave += 1) {
       if (octave >= detailOctaves) break;
       float k = exp2(float(octave));
@@ -2703,22 +3134,43 @@ void main() {
     // Organic extinction toward the domain edges: clamped samples can never
     // duplicate into visible bands, and density dissolves long before the
     // computational boundary.
-    float layerFade = edgeExtinction(layerUv, edgeProfile, boundaryWobble);
-    vec4 scalar = sampleField(uScalar, layerUv);
+    float sampleValidity = fieldSampleValidity(layerUv);
+    vec4 scalar = sampleField(uScalar, layerUv) * sampleValidity;
     float smokeDensity = max(0.0, scalar.g * 0.9 * uLayerVisibility.y);
     float dustDensity = max(0.0,
       scalar.a * 0.72 * uLayerVisibility.z * uVolumeProfile1.w
     );
     float smoke = smokeDensity + dustDensity;
-    // Only sparse boundary residue gets the additional profile-controlled
-    // attenuation. Dense central smoke stays on the regular organic envelope.
-    float lowDensityResponse = smoothstep(
-      uEdgeProfile2.w,
-      max(uEdgeProfile2.w + 0.0001, uEdgeProfile3.x),
-      smoke
-    );
-    float lowDensityWeight = (1.0 - lowDensityResponse) * uEdgeProfile3.y;
-    layerFade *= mix(1.0, layerFade, lowDensityWeight);
+    // Ground-coupled profiles use the envelope only for sparse residue. Medium
+    // and high-density material is allowed to cross the warped envelope and
+    // is constrained only by the padded render extent; otherwise the envelope
+    // itself becomes a visible flat top or side wall. Legacy airburst/Tsar
+    // modes retain their established envelope path.
+    float layerFade = sampleValidity;
+    if (uEdgeMode > 2.5) {
+      float mediumDensity = smoothstep(
+        uDomainDensityThreshold * 0.72,
+        max(uDomainDensityThreshold * 1.55, uDomainDensityThreshold + 0.001),
+        smoke
+      );
+      // Only sparse residue needs the organic boundary envelope. Dense
+      // material takes the cheap validity path and cannot be attenuated into
+      // a visible mask at the render edge.
+      if (mediumDensity < 0.999) {
+        float boundaryEnvelope = edgeExtinction(layerUv, edgeProfile, boundaryWobble);
+        layerFade = mix(boundaryEnvelope * sampleValidity, sampleValidity, mediumDensity);
+      }
+    } else {
+      float lowDensityResponse = smoothstep(
+        uEdgeProfile2.w,
+        max(uEdgeProfile2.w + 0.0001, uEdgeProfile3.x),
+        smoke
+      );
+      float lowDensityWeight = (1.0 - lowDensityResponse) * uEdgeProfile3.y;
+      float boundaryEnvelope = edgeExtinction(layerUv, edgeProfile, boundaryWobble);
+      layerFade = boundaryEnvelope * sampleValidity;
+      layerFade *= mix(1.0, layerFade, lowDensityWeight);
+    }
     float incandescent = max(0.0, scalar.b * uLayerVisibility.x);
     float temperature = max(0.0,
       scalar.r * max(uLayerVisibility.x, uLayerVisibility.w)
@@ -2738,7 +3190,21 @@ void main() {
     float opticalWeightedSmoke = uMaterialMode > 0.5
       ? smokeDensity * uMaterialParams.x + dustDensity * uMaterialParams.y
       : smoke;
+    // Ground Burst depth separation: reuse the existing ray position rather
+    // than purchasing another texture read or detail octave. The front layer
+    // stays a little clearer/warmer, the middle carries the strongest body,
+    // and the rear layer falls back into cooler particulate. The uniform is
+    // zero for every other preset, so their material path is unchanged.
+    float frontLayer = 1.0 - smoothstep(-0.92, -0.08, depth);
+    float rearLayer = smoothstep(0.08, 0.92, depth);
+    float middleLayer = clamp(1.0 - max(frontLayer, rearLayer), 0.0, 1.0);
+    float depthContrast = clamp(uMaterialInteriorDepth * 0.28, 0.0, 0.38);
     float density = (opticalWeightedSmoke + incandescent * 0.22) * radialWeight * detailModulation * layerFade;
+    density *= 1.0 + depthContrast * (
+      middleLayer * 0.25
+      - frontLayer * 0.15
+      - rearLayer * 0.2
+    );
     float erosion = smoothstep(-0.62 / max(0.4, uVolumeProfile1.y), 0.38, densityDetail);
     density = max(0.0,
       density - (1.0 - erosion) * radialWeight * 0.026 * uVolumeProfile1.y
@@ -2750,14 +3216,15 @@ void main() {
     // path. Combined with accumulated view-ray density, this gives inexpensive
     // internal self-shadowing and lets incandescent material illuminate smoke.
     vec2 lightProbeUv = mix(layerUv, uSourceCenter, 0.5);
-    vec4 lightProbe = sampleField(uScalar, lightProbeUv);
+    vec4 lightProbe = sampleField(uScalar, lightProbeUv) * fieldSampleValidity(lightProbeUv);
     float lightDensity = lightProbe.g * 0.9 * uLayerVisibility.y
       + lightProbe.a * 0.72 * uLayerVisibility.z * uVolumeProfile1.w;
     float lightTransmittance = exp(-lightDensity * 0.92 * uVolumeProfile0.z);
     float selfShadow = exp(-shadowColumn * 2.3 * uVolumeProfile0.z) * lightTransmittance;
     // Directional sky light from upper-left with a short occlusion probe:
     // sunlit crowns stay bright while dense interiors fall into shadow.
-    vec4 skyProbe = sampleField(uScalar, layerUv + vec2(-0.024, 0.05));
+    vec2 skyProbeUv = layerUv + vec2(-0.024, 0.05);
+    vec4 skyProbe = sampleField(uScalar, skyProbeUv) * fieldSampleValidity(skyProbeUv);
     float skyOcclusion = exp(
       -(skyProbe.g * 0.9 + skyProbe.a * 0.62) * 1.5 * uVolumeProfile0.z
     );
@@ -2782,10 +3249,38 @@ void main() {
       0.0,
       1.0
     );
-    vec3 smokeColor = mix(darkParticulate, litParticulate, litWeight)
+    litWeight = clamp(
+      litWeight
+        + frontLayer * depthContrast * 0.2
+        - rearLayer * depthContrast * 0.14,
+      0.0,
+      1.0
+    );
+    vec3 baseSmokeColor = mix(darkParticulate, litParticulate, litWeight);
+    float depthShadow = smoothstep(
+      0.06,
+      0.86,
+      shadowColumn * uVolumeProfile0.z
+    );
+    float interiorBlend = clamp(
+      depthShadow * uMaterialInteriorDepth * 0.72,
+      0.0,
+      0.72
+    );
+    vec3 smokeColor = mix(baseSmokeColor, darkParticulate, interiorBlend)
       * (0.4 - contrastBoost * 0.12
         + (0.42 + contrastBoost * 0.1) * skyOcclusion
         + (0.24 + contrastBoost * 0.1) * selfShadow);
+    smokeColor = mix(
+      smokeColor,
+      litParticulate,
+      frontLayer * depthContrast * 0.12
+    );
+    smokeColor = mix(
+      smokeColor,
+      darkParticulate,
+      rearLayer * depthContrast * 0.18
+    );
     vec3 emission = heatRamp(temperature + incandescent * 0.75)
       * (1.0 - exp(-incandescent * 1.1)) * (0.62 + selfShadow * 0.3)
       * (0.72 + 0.28 * detailModulation);
@@ -2834,7 +3329,8 @@ void main() {
     vec2(0.707, 0.707), vec2(-0.707, 0.707), vec2(0.707, -0.707), vec2(-0.707, -0.707)
   );
   for (int index = 0; index < 8; index += 1) {
-    vec4 neighbor = sampleField(uScalar, distortedUv + directions[index] * uTexel * 3.5);
+    vec2 neighborUv = distortedUv + directions[index] * uTexel * 3.5;
+    vec4 neighbor = sampleField(uScalar, neighborUv) * fieldSampleValidity(neighborUv);
     float neighborHeat = neighbor.r * uLayerVisibility.w
       + neighbor.b * uLayerVisibility.x;
     bloom += heatRamp(neighborHeat) * neighbor.b * uLayerVisibility.x;
@@ -2873,7 +3369,17 @@ void main() {
   // The composite alpha shares the organic extinction (gently, as its square
   // root — per-layer density and emission already carry the full mask), so
   // the volume rectangle can never appear against the environment behind it.
-  float domainFade = sqrt(edgeExtinction(localUv, edgeProfile, boundaryWobble));
+  float localSmoke = max(0.0, centerScalar.g * 0.9 * uLayerVisibility.y)
+    + max(0.0, centerScalar.a * 0.72 * uLayerVisibility.z * uVolumeProfile1.w);
+  float domainEnvelope = edgeExtinction(localUv, edgeProfile, boundaryWobble);
+  float denseDomainBlend = uEdgeMode > 2.5
+    ? smoothstep(
+      uDomainDensityThreshold * 0.72,
+      max(uDomainDensityThreshold * 1.55, uDomainDensityThreshold + 0.001),
+      localSmoke
+    )
+    : 0.0;
+  float domainFade = sqrt(mix(domainEnvelope, 1.0, denseDomainBlend));
   float densityOpacity = (1.0 - transmittance) * atmosphericFade;
   float shockOpacity = shockwaveContour * 0.12 * atmosphericFade;
   float alpha = clamp(
@@ -3159,6 +3665,8 @@ export class ResearchFluidEngine {
       maximumTemperature: 0,
       smokeDensity: 0,
       vorticityMagnitude: 0,
+      activeDensityBounds: null,
+      boundaryRisk: null,
       sampledStep: null,
     };
     this._vao = null;
@@ -3169,6 +3677,7 @@ export class ResearchFluidEngine {
     this._resets = 0;
     this._lastDiagnostic = normalizeDiagnostic(this.settings.diagnostic);
     this._lastRaySteps = this.tier.raySteps;
+    this._renderDomain = null;
     this._probeAttempts = [];
     this._lastGlError = null;
     this._boundContextLost = (event) => this._handleContextLost(event);
@@ -3319,20 +3828,69 @@ export class ResearchFluidEngine {
     const originY = clamp(1 - topOriginY / this.height, 0, 1);
     const sceneScale = clamp(finite(layout.scale, 1), 0.45, 2.4);
     const minimumDimension = Math.min(this.width, this.height);
+    const domain = this._domainState();
+    // Preserve the established visible-volume caps for every profile that has
+    // not opted into the padded-domain contract. The larger cap only gives an
+    // opted-in profile room to map its already-padded active field.
+    const maximumVolumeScaleX = domain.mode ? 1.65 : 1.15;
+    const maximumVolumeScaleY = domain.mode ? 1.5 : 1.0;
+    // An opted-in padded profile must render its solver field past the camera
+    // viewport. Keeping the old compact minimum would merely move the same
+    // rectangular boundary outward by a few pixels; the field edge would
+    // remain a visible compositing primitive. The lower bound is a render
+    // extent, not a source or event-scale change, so mobile can crop the
+    // event naturally while preserving the physical ground plane.
+    const minimumVolumeScaleX = domain.mode ? 1.08 : 0.06;
+    const minimumVolumeScaleY = domain.mode ? 1.02 : 0.08;
     const volumeScale = [
       clamp(
-        minimumDimension * 0.48 * sceneScale * this.profile.volume.scaleX / this.width,
-        0.06,
-        1.15,
+        minimumDimension * 0.48 * sceneScale * this.profile.volume.scaleX
+          * domain.renderOverscan / this.width,
+        minimumVolumeScaleX,
+        maximumVolumeScaleX,
       ),
       clamp(
         // The vertical cap keeps the full plume silhouette — stem, cap, and
         // umbrella roll — inside the frame even for the largest archetypes.
-        minimumDimension * 0.78 * sceneScale * this.profile.volume.scaleY / this.height,
-        0.08,
-        1.0,
+        minimumDimension * 0.78 * sceneScale * this.profile.volume.scaleY
+          * domain.renderOverscan / this.height,
+        minimumVolumeScaleY,
+        maximumVolumeScaleY,
       ),
     ];
+    if (domain.renderExtent) {
+      volumeScale[0] = clamp(
+        finite(domain.renderExtent.x, volumeScale[0]),
+        minimumVolumeScaleX,
+        maximumVolumeScaleX,
+      );
+      volumeScale[1] = clamp(
+        finite(domain.renderExtent.y, volumeScale[1]),
+        minimumVolumeScaleY,
+        maximumVolumeScaleY,
+      );
+    }
+    this._renderDomain = {
+      mode: domain.mode,
+      padding: domain.padding,
+      activeScale: domain.activeScale,
+      renderOverscan: domain.renderOverscan,
+      outputScale: domain.renderScale,
+      renderExtent: domain.renderExtent ? { ...domain.renderExtent } : null,
+      edgeMode: Number(this.profile.edge?.mode || 0),
+      materialMode: Number(this.profile.material?.mode || 0),
+      detailOctaveMode: Number(this.profile.material?.detailOctaveMode || 0),
+      riskMargin: domain.riskMargin,
+      densityThreshold: domain.densityThreshold,
+      sourceCenter: this._sourceCenter(),
+      volumeScale: [...volumeScale],
+      viewportFieldBounds: {
+        left: this._sourceCenter()[0] - originX / volumeScale[0],
+        right: this._sourceCenter()[0] + (1 - originX) / volumeScale[0],
+        bottom: this._sourceCenter()[1] - originY / volumeScale[1],
+        top: this._sourceCenter()[1] + (1 - originY) / volumeScale[1],
+      },
+    };
     const phaseValues = [
       clamp(finite(phase.fireAlpha ?? phase.fireGrowth, this._fallbackFirePhase()), 0, 2),
       clamp(finite(phase.cloud, this._fallbackCloudPhase()), 0, 2),
@@ -3463,6 +4021,7 @@ export class ResearchFluidEngine {
       vorticityMagnitude: this._metrics.vorticityMagnitude,
       currentVorticityMagnitude: this._metrics.vorticityMagnitude,
       metrics: { ...this._metrics },
+      renderDomain: this._renderDomain ? { ...this._renderDomain } : null,
       drawCalls: this._drawCalls,
       resets: this._resets,
       contextLost: this._contextLost,
@@ -3837,16 +4396,85 @@ export class ResearchFluidEngine {
     let temperatureByte = 0;
     let smokeByte = 0;
     let vorticityByte = 0;
+    const domain = this._domainState();
+    const densityThresholdByte = Math.round(domain.densityThreshold / 4 * 255);
+    const riskMarginX = Math.max(1, Math.round(this.gridWidth * domain.riskMargin));
+    const riskMarginY = Math.max(1, Math.round(this.gridHeight * domain.riskMargin));
+    let activeCells = 0;
+    let riskCells = 0;
+    let minX = this.gridWidth;
+    let maxX = -1;
+    let minY = this.gridHeight;
+    let maxY = -1;
+    let leftEdge = 0;
+    let rightEdge = 0;
+    let bottomEdge = 0;
+    let topEdge = 0;
     for (let offset = 0; offset < this._metricPixels.length; offset += 4) {
       velocityByte = Math.max(velocityByte, this._metricPixels[offset]);
       temperatureByte = Math.max(temperatureByte, this._metricPixels[offset + 1]);
       smokeByte = Math.max(smokeByte, this._metricPixels[offset + 2]);
       vorticityByte = Math.max(vorticityByte, this._metricPixels[offset + 3]);
+      const cell = offset / 4;
+      const x = cell % this.gridWidth;
+      const y = Math.floor(cell / this.gridWidth);
+      const density = this._metricPixels[offset + 2];
+      if (density < densityThresholdByte) continue;
+      activeCells += 1;
+      minX = Math.min(minX, x);
+      maxX = Math.max(maxX, x);
+      minY = Math.min(minY, y);
+      maxY = Math.max(maxY, y);
+      if (x < riskMarginX || x >= this.gridWidth - riskMarginX
+        || y < riskMarginY || y >= this.gridHeight - riskMarginY) riskCells += 1;
+      if (x === 0) leftEdge = Math.max(leftEdge, density);
+      if (x === this.gridWidth - 1) rightEdge = Math.max(rightEdge, density);
+      if (y === 0) bottomEdge = Math.max(bottomEdge, density);
+      if (y === this.gridHeight - 1) topEdge = Math.max(topEdge, density);
     }
     this._metrics.velocityMagnitude = velocityByte / 255 * 1.4;
     this._metrics.maximumTemperature = temperatureByte / 255 * 4;
     this._metrics.smokeDensity = smokeByte / 255 * 4;
     this._metrics.vorticityMagnitude = vorticityByte / 255 * 1.4;
+    const activeDensityBounds = activeCells > 0 ? {
+      minX: minX / Math.max(1, this.gridWidth - 1),
+      maxX: maxX / Math.max(1, this.gridWidth - 1),
+      minY: minY / Math.max(1, this.gridHeight - 1),
+      maxY: maxY / Math.max(1, this.gridHeight - 1),
+      activeCells,
+      threshold: domain.densityThreshold,
+    } : null;
+    this._metrics.activeDensityBounds = activeDensityBounds;
+    const visibleBounds = this._renderDomain?.viewportFieldBounds || null;
+    const viewportClearance = activeDensityBounds && visibleBounds ? {
+      left: activeDensityBounds.minX - visibleBounds.left,
+      right: visibleBounds.right - activeDensityBounds.maxX,
+      bottom: activeDensityBounds.minY - visibleBounds.bottom,
+      top: visibleBounds.top - activeDensityBounds.maxY,
+    } : null;
+    this._metrics.boundaryRisk = {
+      margin: domain.riskMargin,
+      activeCells,
+      riskCells,
+      riskPercent: activeCells > 0 ? riskCells / activeCells : 0,
+      maxDensityAtEdge: {
+        left: leftEdge / 255 * 4,
+        right: rightEdge / 255 * 4,
+        bottom: bottomEdge / 255 * 4,
+        top: topEdge / 255 * 4,
+      },
+      touchesMediumDensity: {
+        left: leftEdge >= densityThresholdByte,
+        right: rightEdge >= densityThresholdByte,
+        bottom: bottomEdge >= densityThresholdByte,
+        top: topEdge >= densityThresholdByte,
+      },
+      // The viewport values distinguish natural offscreen continuation from a
+      // scalar-grid collision. Negative clearance is permitted: it means the
+      // camera has cropped an otherwise valid field, not that the renderer
+      // has clipped the volume at a computational border.
+      viewportClearance,
+    };
     this._metrics.sampledStep = this.stepIndex;
     this._metricStepIndex = this.stepIndex;
   }
@@ -3922,36 +4550,72 @@ export class ResearchFluidEngine {
     this._metrics.maximumTemperature = 0;
     this._metrics.smokeDensity = 0;
     this._metrics.vorticityMagnitude = 0;
+    this._metrics.activeDensityBounds = null;
+    this._metrics.boundaryRisk = null;
     this._metrics.sampledStep = null;
     this._resets += 1;
   }
 
+  _domainState() {
+    const domain = this.profile.domain || BASE_PROFILE.domain;
+    const mode = Number(domain.mode) > 0;
+    const padding = mode ? clamp(finite(domain.padding, 0), 0, 0.3) : 0;
+    const activeScale = mode ? Math.max(0.4, 1 - padding * 2) : 1;
+    const renderOverscan = mode ? clamp(finite(domain.renderOverscan, 1), 1, 1.3) : 1;
+    const renderScaleValue = domain.renderScale && typeof domain.renderScale === 'object'
+      ? domain.renderScale[this.tier?.id || this.settings?.tier || 'balanced']
+      : domain.renderScale;
+    const renderScale = clamp(finite(renderScaleValue, 1), 0.55, 1);
+    const renderExtent = domain.renderExtent && typeof domain.renderExtent === 'object'
+      ? {
+        x: clamp(finite(domain.renderExtent.x, 1), 0.5, 2),
+        y: clamp(finite(domain.renderExtent.y, 1), 0.5, 2),
+      }
+      : null;
+    return {
+      mode: mode ? 1 : 0,
+      padding,
+      activeScale,
+      renderOverscan: renderOverscan / activeScale,
+      renderScale,
+      renderExtent,
+      riskMargin: clamp(finite(domain.riskMargin, 0.06), 0.02, 0.2),
+      densityThreshold: clamp(finite(domain.densityThreshold, 0.14), 0.02, 1),
+    };
+  }
+
+  getRenderResolutionScale() {
+    return this._domainState().renderScale;
+  }
+
   _sourceUniformState() {
     const source = this.profile.source;
+    const domain = this._domainState();
+    const coordinateScale = domain.activeScale;
+    const mapY = (value) => 0.5 + (value - 0.5) * coordinateScale;
     const offsets = seededProfileOffsets(this.settings.seed, this.profile.profileKind);
     const researchRegression = Boolean(this.profile.preserveResearchSource);
-    const offsetScale = researchRegression ? 0 : source.radius * 0.24;
     return {
       mask: this.settings.sourcePrimitiveMask,
       profileKind: this.profile.profileKind,
-      shape: [source.radius, source.aspectX, source.aspectY, source.groundLevel],
+      shape: [source.radius * coordinateScale, source.aspectX, source.aspectY, mapY(source.groundLevel)],
       timing: [source.onsetEnd, source.sustainEnd, source.pulseFrequency, source.stageOffset],
-      motion: [source.radial, source.vertical, source.directional, source.turbulence],
+      motion: [source.radial * coordinateScale, source.vertical * coordinateScale, source.directional * coordinateScale, source.turbulence * coordinateScale],
       scalar: [source.heat, source.smoke, source.incandescent, source.dust],
       vector: [
         source.directionX,
         source.directionY,
-        source.offsetX + offsets[6] * offsetScale,
-        source.offsetY + offsets[7] * offsetScale * 0.72,
+        (source.offsetX + offsets[6] * (researchRegression ? 0 : source.radius * 0.24)) * coordinateScale,
+        (source.offsetY + offsets[7] * (researchRegression ? 0 : source.radius * 0.24) * 0.72) * coordinateScale,
       ],
       aux: [source.ringRadius, source.ejecta, source.trailLength, source.clusterSpread],
       offsetsA: offsets.slice(0, 4),
       offsetsB: offsets.slice(4, 8),
       physics: [
-        this.profile.physics.buoyancy,
-        this.profile.physics.densityLoading,
-        this.profile.physics.windCoupling,
-        this.profile.physics.vorticity,
+        this.profile.physics.buoyancy * coordinateScale,
+        this.profile.physics.densityLoading * coordinateScale,
+        this.profile.physics.windCoupling * coordinateScale,
+        this.profile.physics.vorticity * coordinateScale,
       ],
       decay: [
         this.profile.physics.velocityRetention,
@@ -3963,7 +4627,7 @@ export class ResearchFluidEngine {
         source.capScale * clamp(finite(this.settings.capWidthBoost, 1), 0.6, 1.6),
         finite(source.capRoll, 1),
         0,
-        0,
+        finite(source.capVertical, 0.43),
       ],
     };
   }
@@ -3982,8 +4646,36 @@ export class ResearchFluidEngine {
     this._uniform4f(program, 'uProfilePhysics', ...state.physics);
     this._uniform4f(program, 'uProfileDecay', ...state.decay);
     this._uniform4f(program, 'uProfileAux', ...state.profileAux);
+    this._uniform1f(program, 'uDomainActiveScale', this._domainState().activeScale);
+    const groundCoupling = this.profile.groundCoupling || BASE_PROFILE.groundCoupling;
+    this._uniform1f(program, 'uGroundCouplingMode', groundCoupling.mode > 0 ? 1 : 0);
+    this._uniform1f(program, 'uGroundSpreadWidth', finite(groundCoupling.spreadWidth, 1));
+    this._uniform4f(
+      program,
+      'uGroundCouplingA',
+      finite(groundCoupling.radialImpulse, 0),
+      finite(groundCoupling.heightFalloff, 1),
+      finite(groundCoupling.horizontalRetention, 1),
+      finite(groundCoupling.verticalDamping, 1),
+    );
+    this._uniform4f(
+      program,
+      'uGroundCouplingB',
+      finite(groundCoupling.spreadStart, 0),
+      finite(groundCoupling.spreadEnd, 0),
+      finite(groundCoupling.angularVariation, 0),
+      finite(groundCoupling.asymmetry, 0),
+    );
+    this._uniform4f(
+      program,
+      'uGroundCouplingC',
+      finite(groundCoupling.surfaceHeat, 0),
+      finite(groundCoupling.baseDust, 0),
+      finite(groundCoupling.transitionLift, 0),
+      finite(groundCoupling.lateGroundDrift, 0),
+    );
     const plume = this.profile.plume || { mode: 0, expansion: 0, vortex: 0, persistence: 0, widen: 0 };
-    this._uniform1f(program, 'uPlumeMode', clamp(finite(plume.mode, 0), 0, 2));
+    this._uniform1f(program, 'uPlumeMode', clamp(finite(plume.mode, 0), 0, 3));
     this._uniform4f(
       program,
       'uPlumeParams',
@@ -4081,8 +4773,11 @@ export class ResearchFluidEngine {
       volume.backgroundIllumination,
       volume.emissionCurve,
     );
-    const material = this.profile.material || { mode: 0, sootAbsorption: 1, dustAbsorption: 1, detailBoost: 0, warmCoolContrast: 0 };
+    this._uniform1f(program, 'uDomainDensityThreshold', this._domainState().densityThreshold);
+    const material = this.profile.material || { mode: 0, sootAbsorption: 1, dustAbsorption: 1, detailBoost: 0, warmCoolContrast: 0, detailOctaveMode: 0, interiorDepth: 0 };
     this._uniform1f(program, 'uMaterialMode', material.mode > 0 ? 1 : 0);
+    this._uniform1f(program, 'uDetailOctaveMode', material.detailOctaveMode > 0 ? 1 : 0);
+    this._uniform1f(program, 'uMaterialInteriorDepth', finite(material.interiorDepth, 0));
     this._uniform4f(
       program,
       'uMaterialParams',
@@ -4103,7 +4798,7 @@ export class ResearchFluidEngine {
       finite(core.bloomGateScale, 0),
     );
     const edge = this.profile.edge || BASE_PROFILE.edge;
-    this._uniform1f(program, 'uEdgeMode', edge.mode > 0 ? 1 : 0);
+    this._uniform1f(program, 'uEdgeMode', clamp(finite(edge.mode, 0), 0, 3));
     this._uniform4f(
       program,
       'uEdgeProfile0',
@@ -4497,6 +5192,7 @@ export class ResearchFluidEngine {
   }
 
   _sourceCenter() {
+    let rawCenter;
     if (this.profile.preserveResearchSource) {
       // Preserve the flagship's established generic low-airburst placement,
       // while allowing its profile anchor to lower the source without moving
@@ -4505,16 +5201,24 @@ export class ResearchFluidEngine {
       // unless this isolated profile opts in.
       const profileOffsetY = finite(this.profile.source.centerY, BASE_PROFILE.source.centerY)
         - BASE_PROFILE.source.centerY;
-      return [0.5, clamp(0.27 + this.settings.altitude * 0.17 + profileOffsetY, 0.2, 0.48)];
+      rawCenter = [0.5, clamp(0.27 + this.settings.altitude * 0.17 + profileOffsetY, 0.2, 0.48)];
+    } else {
+      // Other event families use normalized profile anchors. Altitude is only an
+      // artistic offset inside the bounded field, never a real height or depth.
+      const source = this.profile.source;
+      const altitudeResponse = this.profile.physicalFamilyId === 'ground-coupled' ? 0.045 : 0.08;
+      rawCenter = [
+        clamp(source.centerX, 0.16, 0.84),
+        clamp(source.centerY + this.settings.altitude * altitudeResponse, 0.08, 0.76),
+      ];
     }
-    // Other event families use normalized profile anchors. Altitude is only an
-    // artistic offset inside the bounded field, never a real height or depth.
-    const source = this.profile.source;
-    const altitudeResponse = this.profile.physicalFamilyId === 'ground-coupled' ? 0.045 : 0.08;
-    return [
-      clamp(source.centerX, 0.16, 0.84),
-      clamp(source.centerY + this.settings.altitude * altitudeResponse, 0.08, 0.76),
-    ];
+    const domain = this._domainState();
+    return domain.mode > 0
+      ? [
+        0.5 + (rawCenter[0] - 0.5) * domain.activeScale,
+        0.5 + (rawCenter[1] - 0.5) * domain.activeScale,
+      ]
+      : rawCenter;
   }
 
   _normalizedTime() {

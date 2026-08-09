@@ -16,6 +16,62 @@ The papers were text-extracted and rendered for visual inspection. The implement
 
 ## Paper-to-browser mapping
 
+## Volume-domain boundary audit (2026-07)
+
+The Cinematic renderer uses a bounded two-dimensional scalar/velocity field
+and reconstructs a layered 2.5D volume from it. That is appropriate for a
+browser experiment, but a bounded numerical field must not become a visible
+geometric container. The Ground Burst proof-of-concept exposed four distinct
+boundaries that had been conflated:
+
+1. **Solver boundary.** The scalar and velocity textures end at `[0, 1]`.
+   The pressure solve and advection use finite edge samples; that is a
+   computational constraint, not a cloud shape.
+2. **Volume reconstruction boundary.** The ray marcher maps field coordinates
+   to the current event transform. A depth/curl offset can leave the field even
+   when the undistorted pixel is inside it. Sampling that offset with a clamped
+   texture lookup repeats an edge texel into a flat wall.
+3. **Extinction envelope.** The profile edge modes are an optical treatment for
+   sparse residue. They can soften an unavoidable limit, but cannot safely
+   carry medium- or high-density material without becoming a visible oval or
+   capsule.
+4. **Camera and analytical-overlay boundary.** The Canvas pressure front is
+   analytical and can naturally continue past the visible smoke. The viewport
+   may crop either layer; neither fact licenses a smaller unrelated smoke box.
+
+The reusable contract is therefore: retain an inactive padded margin in the
+fixed solver field, map the active region through a matching render transform,
+discard out-of-field ray samples rather than clamp them, and use organic
+extinction only for low-density residue. The camera may crop naturally, while
+the developer diagnostics report active-density bounds, solver-edge risk, the
+visible field extent, and viewport clearance. The analytical shock remains in
+event space rather than being clipped to smoke.
+
+This is a visual-containment technique for normalized fields only. It does not
+represent physical pressure, yield, atmospheric extent, or real-world smoke
+transport.
+
+## Nuclear Ground Burst artistic tuning (2026-08)
+
+The post-containment baseline keeps the approved padded-domain transform intact
+(`padding=0.10`, active scale `0.80`, effective overscan `1.30`, render extent
+`1.65 × 1.50`, and validity-aware ray sampling). The remaining defect is in the
+profile's visual material and motion balance rather than in the computational
+boundary.
+
+At t1–t9 the scalar smoke channel forms a broad, high-opacity horizontal layer
+while the incandescent channel has already decayed. The volume therefore reads
+as pale and uniform even though the field is spatially valid. The main causes
+are the Ground profile's strong density loading (`1.55`), rapid smoke conversion
+(`1.62`), modest buoyancy (`0.88`), and a material transfer that uses little
+low-frequency variation when the third detail octave is disabled. The cap feed
+also remains visually subordinate to the dense ground sheet.
+
+The tuning pass is restricted to the Ground profile's source/physics, material,
+volume, core, plume, and dissipation values. It must keep `detailOctaveMode=0`,
+the approved boundary architecture, the restrained Ground shockwave, and all
+non-target profiles byte-neutral.
+
 ### 1. *Animating Explosions*
 
 Relevant concepts:
@@ -450,6 +506,61 @@ more strongly, front segments retain limited contrast, and fully opaque
 fireball or smoke still occludes every echo. Internal echoes begin in stages,
 soften from roughly t3.5, and are mostly cleared around t8; no smoke/plume
 dissipation value is changed.
+
+## Nuclear Ground Burst visual proof of concept (2026-07)
+
+The next isolated rollout target is **Nuclear Ground Burst**
+(`nuclear-ground-burst`). Deterministic seed-`1842` Cinematic evidence at
+1440 × 900 High/Balanced, 768 × 1024 Balanced, 1024 × 768 Balanced, and
+390 × 844 Mobile confirms six connected defects:
+
+1. **Rectangular white ground barrel.** The generic scalar branch merges the
+   broad `ground-sheet`, narrow `vertical-jet`, offset kernels, and base
+   Gaussian into one `stagedCombined` maximum, then gives that same smooth
+   field the full heat/incandescent envelope. Ground Burst's high heat,
+   incandescence, opacity, bloom, and low tone-map value saturate the merged
+   sheet/jet into a flat white strip that grows into a rectangular cylinder.
+2. **Weak ground spread.** The ground-sheet force is a symmetric signed-x
+   impulse driven only by the short onset envelope. Its fixed Gaussian width
+   has no source-height weighting, sustained ground-layer retention, phase
+   taper, or deterministic lobe variation, so the analytical reflected wave
+   reads more clearly than resolved radial dust motion.
+3. **Smooth centered column.** Ground Burst leaves `plume.mode` off. Its
+   strong vertical source therefore stays inside the narrow
+   `profileVerticalKernel()` corridor without feed taper, lateral drift,
+   widening, or a turbulence handoff. Generic inward entrainment reinforces
+   that centered corridor as it rises.
+4. **Weak material separation.** `material.mode`, `core.mode`, and
+   `tracerMaterial.mode` are all off. Dust and soot share one optical-depth
+   curve, the white-hot highlight has no structural modulation or bloom
+   gradient gate, and bright fixed-size tracers remain visible through dense
+   particulate material.
+5. **Boxed mature and late field.** `edge.mode` is off, so the volume uses the
+   independent side/top extinction product whose low-density isocontour is a
+   rounded rectangle. Ground Burst's large scale, high opacity, and retained
+   scalar field expose that computational envelope across desktop and mobile.
+6. **Static fade instead of organic dissipation.** `dissipation.mode` is off.
+   The source remains active deep into the timeline, dust and soot share the
+   default decay path, and resolved velocity receives no late curl, shear, or
+   ground-directed drift. The boxed field therefore thins in place and then
+   clears completely instead of separating into ground haze and elevated
+   wisps.
+
+The implementation remains profile-gated. Ground Burst receives a dedicated
+ground-coupling block that separates the low surface flash and dust sheet from
+the rising thermal feed, retains horizontal velocity close to the surface,
+adds seeded lobe asymmetry, and tapers radial forcing as the plume lifts. It
+also opts into separately tuned plume, material, core, shockwave, tracer,
+organic-edge, and late-motion controls. The existing Airburst and Tsar
+mechanisms are used only as architectural references: the dense Airburst
+contour family, its compact source branch, and Tsar's historical expansion,
+vortex, persistence, and late-tail values are not reused.
+
+Expected tracked changes are limited to `scripts/fluid-engine.js`,
+`scripts/data.js` only if Mobile evidence retains a Ground Burst portrait
+pullback, `tools/fluid-contract-test.mjs`, and this implementation map.
+Captures, comparisons, performance logs, and test exports remain under ignored
+`scratch/nuclear-ground-burst-visual-poc/`.
 
 ## Browser numerical design
 

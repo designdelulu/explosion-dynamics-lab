@@ -13,8 +13,9 @@ import {
 import { EVENT_PRESETS, PALETTES } from "../scripts/data.js";
 
 const LOW_YIELD_ID = "low-yield-nuclear-airburst";
+const GROUND_BURST_ID = "nuclear-ground-burst";
 const TSAR_ID = "tsar-bomba-scale-reference";
-const RESEARCH_MODE_IDS = new Set([LOW_YIELD_ID, TSAR_ID]);
+const RESEARCH_MODE_IDS = new Set([LOW_YIELD_ID, GROUND_BURST_ID, TSAR_ID]);
 
 const tiers = Object.values(RESEARCH_FLUID_TIERS);
 assert.deepEqual(tiers.map(({ id }) => id), ["mobile", "balanced", "high"]);
@@ -96,6 +97,9 @@ for (const preset of EVENT_PRESETS) {
 assert.deepEqual(usedPrimitives, new Set(Object.keys(RESEARCH_FLUID_SOURCE_PRIMITIVES)), "Every source primitive must be exercised");
 
 const flagshipProfile = RESEARCH_FLUID_PROFILES["low-yield-nuclear-airburst"];
+const flagshipPreset = EVENT_PRESETS.find(({ id }) => id === LOW_YIELD_ID);
+const groundBurstPreset = EVENT_PRESETS.find(({ id }) => id === GROUND_BURST_ID);
+const tsarPreset = EVENT_PRESETS.find(({ id }) => id === TSAR_ID);
 assert.equal(flagshipProfile.profileId, "nuclear-airburst-fluid-v1");
 assert.equal(flagshipProfile.profileKind, 9);
 assert.equal(flagshipProfile.preserveResearchSource, true);
@@ -104,6 +108,23 @@ assert.equal(flagshipProfile.source.heat, 0.54, "Low-yield temperature source mu
 assert.equal(flagshipProfile.source.incandescent, 1.12, "Low-yield incandescence must preserve the white-hot center");
 assert.equal(flagshipProfile.source.turbulence, 1.05, "Low-yield source turbulence must retain the stem-decorrelation tune");
 assert.equal(flagshipProfile.volume.bloom, 0.86, "Low-yield bloom must retain the structured-core tune");
+assert.equal(flagshipPreset?.researchModel?.mobilePortraitPullback, 1.1,
+  "Low-yield audited mobile-portrait headroom must remain unchanged");
+assert.equal(groundBurstPreset?.researchModel?.mobilePortraitPullback, undefined,
+  "Ground Burst must retain neutral global mobile framing after the portrait fit audit");
+assert.equal(groundBurstPreset?.render?.atmosphericWash, 0.22,
+  "Ground Burst must use an explicit local flash wash without changing other presets");
+for (const preset of EVENT_PRESETS.filter(({ id }) => id !== GROUND_BURST_ID)) {
+  assert.equal(preset.render?.atmosphericWash, undefined,
+    `${preset.id}: atmospheric wash override must remain neutral`);
+}
+assert.equal(tsarPreset?.researchModel?.mobilePortraitPullback, undefined,
+  "Tsar mobile framing must remain unchanged");
+assert.equal(
+  EVENT_PRESETS.filter(({ researchModel }) => researchModel?.mobilePortraitPullback !== undefined).length,
+  1,
+  "Ground Burst tuning must not spread the low-yield mobile framing override to other presets",
+);
 
 assert.equal(RESEARCH_FLUID_DIAGNOSTICS.beauty, 0);
 assert.equal(RESEARCH_FLUID_DIAGNOSTICS.final, RESEARCH_FLUID_DIAGNOSTICS.beauty);
@@ -121,9 +142,137 @@ assert.equal(RESEARCH_FLUID_DIAGNOSTICS.tracers, 8);
 assert.equal(RESEARCH_FLUID_DEFAULTS.presetId, "low-yield-nuclear-airburst");
 assert.equal(RESEARCH_FLUID_DEFAULTS.tier, "balanced");
 
+// --- Reusable padded-domain contract (2026-07) ------------------------------
+for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
+  assert.ok(profile.domain && typeof profile.domain === "object", `${presetId}: domain config missing`);
+  for (const key of ["mode", "padding", "renderOverscan", "riskMargin", "densityThreshold"]) {
+    assert.ok(Number.isFinite(profile.domain[key]), `${presetId}: domain.${key} must be finite`);
+  }
+  assert.ok(profile.domain.renderScale !== undefined, `${presetId}: domain.renderScale missing`);
+  if (presetId === GROUND_BURST_ID) {
+    assert.equal(profile.domain.mode, 1, "Ground Burst must activate the reusable padded-domain path");
+    assert.ok(profile.domain.padding > 0 && profile.domain.padding < 0.3);
+    assert.ok(profile.domain.renderOverscan > 1);
+    assert.deepEqual(profile.domain.renderScale, { mobile: 1, balanced: 0.62, high: 0.72 });
+    assert.equal(profile.domain.padding, 0.10, "Ground Burst boundary padding is locked at ten percent");
+    assert.equal(profile.domain.renderExtent?.x, 1.65, "Ground Burst horizontal render extent is locked");
+    assert.equal(profile.domain.renderExtent?.y, 1.5, "Ground Burst vertical render extent is locked");
+    assert.equal(profile.quality.rays, 0.64, "Ground Burst High ray simplification must remain profile-local");
+    assert.ok(profile.domain.renderExtent?.x >= 1.5 && profile.domain.renderExtent?.x <= 1.65);
+    assert.ok(profile.domain.renderExtent?.y >= 1.2 && profile.domain.renderExtent?.y <= 1.5);
+    assert.ok(profile.domain.riskMargin > 0 && profile.domain.densityThreshold > 0);
+  } else {
+    assert.equal(profile.domain.mode, 0, `${presetId}: domain path must remain neutral pending its own audit`);
+    assert.equal(profile.domain.padding, 0, `${presetId}: domain padding must remain neutral`);
+    assert.equal(profile.domain.renderOverscan, 1, `${presetId}: render overscan must remain neutral`);
+    assert.equal(profile.domain.renderScale, 1, `${presetId}: render resolution scale must remain neutral`);
+    assert.equal(profile.domain.renderExtent, null, `${presetId}: render extent must remain neutral`);
+  }
+}
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /float fieldSampleValidity\(vec2 uv\)[\s\S]*?sampleField\(uScalar, layerUv\) \* sampleValidity/,
+  "Volume reconstruction must reject out-of-field distorted samples instead of extending clamped boundary texels",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.forceFragment,
+  /uniform float uDomainActiveScale;/,
+  "Padded-domain source/force transform uniform missing",
+);
+assert.doesNotMatch(
+  `${RESEARCH_FLUID_SHADER_SOURCES.forceFragment}\n${RESEARCH_FLUID_SHADER_SOURCES.volumeFragment}`,
+  /nuclear-ground-burst/,
+  "Generic padded-domain shader logic must not branch on preset IDs",
+);
+assert.match(
+  readFileSync(new URL("../scripts/fluid-engine.js", import.meta.url), "utf8"),
+  /activeDensityBounds|boundaryRisk|riskCells/,
+  "Occupancy-aware boundary diagnostics must expose active bounds and risk cells",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /float sampleValidity = fieldSampleValidity\(layerUv\);[\s\S]*?sampleField\(uScalar, layerUv\) \* sampleValidity/,
+  "Medium/high-density clipping diagnostics must sample only valid field coordinates",
+);
+assert.match(
+  readFileSync(new URL("../scripts/renderer.js", import.meta.url), "utf8"),
+  /shockToRenderRadius:[\s\S]*?shockToVerticalRadius:/,
+  "Shock/smoke alignment must expose horizontal and vertical event-space ratios",
+);
+const rendererBoundarySource = readFileSync(new URL("../scripts/renderer.js", import.meta.url), "utf8");
+assert.match(rendererBoundarySource, /getRenderResolutionScale\?\.\(\)/, "Profile render-resolution scale is not consumed by the renderer");
+assert.match(rendererBoundarySource, /outputWidth = Math\.max\(1, Math\.round\(width \* dpr \* outputScale\)\)/, "Fluid output scale must be tier/profile aware");
+assert.match(rendererBoundarySource, /renderDomain\?\.volumeScale[\s\S]*?renderDomain\?\.sourceCenter/, "Developer stats must retain render-domain geometry for alignment diagnostics");
+const engineBoundarySource = readFileSync(new URL("../scripts/fluid-engine.js", import.meta.url), "utf8");
+assert.match(engineBoundarySource, /activeDensityBounds = activeCells > 0/, "Occupancy bounds must be computed from active scalar cells");
+assert.match(engineBoundarySource, /maxDensityAtEdge:[\s\S]*?touchesMediumDensity:/, "Boundary diagnostics must distinguish edge density from camera cropping");
+assert.match(engineBoundarySource, /getRenderResolutionScale\(\)/, "Fluid engine must expose the profile render scale without preset-ID logic");
+assert.match(engineBoundarySource, /renderExtent: domain\.renderExtent ?/, "Render extent must be reported as part of the reusable domain contract");
+
+// --- Ground Burst-only source/ground coupling (2026-07) ---------------------
+for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
+  assert.ok(profile.groundCoupling && typeof profile.groundCoupling === "object",
+    `${presetId}: groundCoupling config missing`);
+  for (const key of [
+    "mode", "radialImpulse", "spreadWidth", "heightFalloff", "horizontalRetention",
+    "verticalDamping", "spreadStart", "spreadEnd", "angularVariation",
+    "asymmetry", "surfaceHeat", "baseDust", "transitionLift",
+    "lateGroundDrift",
+  ]) {
+    assert.ok(Number.isFinite(profile.groundCoupling[key]),
+      `${presetId}: groundCoupling.${key} must be finite`);
+  }
+  const ground = profile.groundCoupling;
+  if (presetId === GROUND_BURST_ID) {
+    assert.equal(ground.mode, 1, "Ground Burst alone must activate ground coupling");
+    assert.ok(ground.radialImpulse > 0);
+    assert.ok(ground.spreadWidth >= 0.42 && ground.spreadWidth < 1,
+      "Ground Burst surface kernel must retain a bounded, profile-local width");
+    assert.ok(ground.heightFalloff > 1);
+    assert.ok(ground.horizontalRetention > profile.physics.velocityRetention && ground.horizontalRetention < 1);
+    assert.ok(ground.verticalDamping > 0 && ground.verticalDamping < 1);
+    assert.ok(ground.spreadStart >= 0 && ground.spreadStart < ground.spreadEnd && ground.spreadEnd < 0.5);
+    assert.ok(ground.angularVariation > 0 && ground.asymmetry > 0);
+    assert.ok(ground.surfaceHeat > 0 && ground.baseDust > ground.surfaceHeat);
+    assert.ok(ground.transitionLift > 0 && ground.lateGroundDrift > 0);
+    assert.equal(profile.physicalFamilyId, "ground-coupled");
+  } else {
+    assert.equal(ground.mode, 0, `${presetId}: ground coupling must remain neutral`);
+    assert.equal(ground.radialImpulse, 0);
+    assert.equal(ground.angularVariation, 0);
+    assert.equal(ground.surfaceHeat, 0);
+    assert.equal(ground.baseDust, 0);
+    assert.equal(ground.lateGroundDrift, 0);
+  }
+}
+for (const uniform of [
+  "uGroundCouplingMode", "uGroundSpreadWidth", "uGroundCouplingA", "uGroundCouplingB", "uGroundCouplingC",
+]) {
+  assert.match(
+    `${RESEARCH_FLUID_SHADER_SOURCES.forceFragment}\n${RESEARCH_FLUID_SHADER_SOURCES.scalarFragment}`,
+    new RegExp(`uniform[^;]*\\b${uniform}\\b`),
+    `${uniform}: ground-coupling uniform missing`,
+  );
+}
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.forceFragment,
+  /if \(uGroundCouplingMode > 0\.5 && sourceEnabled\(SOURCE_GROUND\)\)/,
+  "Ground-layer velocity shaping must be profile-gated",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.scalarFragment,
+  /if \(uGroundCouplingMode > 0\.5\) \{[\s\S]*?float irregularGround/,
+  "Ground heat/dust separation must be profile-gated",
+);
+assert.doesNotMatch(
+  `${RESEARCH_FLUID_SHADER_SOURCES.forceFragment}\n${RESEARCH_FLUID_SHADER_SOURCES.scalarFragment}`,
+  /nuclear-ground-burst/,
+  "Generic shader logic must not branch on the Ground Burst preset ID",
+);
+
 // --- Profile-gated broad-plume research controls (2026-07) -------------------
-// Low-yield and Tsar opt in with distinct scales; all other presets remain
-// byte-identical and neutral.
+// Low-yield, Ground Burst, and Tsar opt in with distinct scales; all other
+// presets remain byte-identical and neutral.
 for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
   assert.ok(profile.plume && typeof profile.plume === "object", `${presetId}: plume config missing`);
   for (const key of ["mode", "expansion", "vortex", "persistence", "widen"]) {
@@ -137,6 +286,19 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(profile.plume.widen > 0 && profile.plume.widen < RESEARCH_FLUID_PROFILES[TSAR_ID].plume.widen);
     assert.ok(profile.source.radius > 0.065, "Low-yield source must widen from the preserved neutral radius");
     assert.ok(profile.source.radial > profile.source.vertical, "Low-yield radial injection must lead vertical feed");
+  } else if (presetId === GROUND_BURST_ID) {
+    assert.equal(profile.plume.mode, 3, "Ground Burst alone must enable the ground-coupled plume mode");
+    assert.ok(profile.plume.expansion > 0 && profile.plume.expansion < RESEARCH_FLUID_PROFILES[TSAR_ID].plume.expansion);
+    assert.ok(profile.plume.vortex > 0 && profile.plume.vortex < RESEARCH_FLUID_PROFILES[TSAR_ID].plume.vortex);
+    assert.ok(profile.plume.persistence > 0 && profile.plume.persistence < RESEARCH_FLUID_PROFILES[TSAR_ID].plume.persistence);
+    assert.ok(profile.plume.widen > 0 && profile.plume.widen < RESEARCH_FLUID_PROFILES[TSAR_ID].plume.widen);
+    assert.ok(profile.source.vertical > profile.source.radial, "Ground Burst must retain stronger upward lift than radial source injection");
+    assert.equal(profile.source.radial, 0.18, "Ground Burst radial source remains narrowed and profile-local");
+    assert.equal(profile.source.vertical, 2.02, "Ground Burst vertical feed remains explicitly strong");
+    assert.equal(profile.source.capScale, 1.3, "Ground Burst cap scale remains modest and profile-local");
+    assert.equal(profile.source.capRoll, 2.75, "Ground Burst cap underside roll remains profile-local");
+    assert.equal(profile.plume.vortex, 0.98, "Ground Burst cap vortex rollout remains profile-local");
+    assert.equal(profile.plume.feedTaperEnd, 0.7, "Ground Burst stem feed hands off before the mature cap flattens");
   } else if (presetId === TSAR_ID) {
     assert.equal(profile.plume.mode, 1, "Tsar must retain its existing historical-scale plume mode 1");
     assert.ok(profile.plume.expansion > 0, "Tsar expansion must be active");
@@ -161,7 +323,7 @@ for (const uniform of ["uPlumeMode", "uPlumeParams"]) {
 // --- Profile-gated smoke-material controls (2026-07) -------------------------
 for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
   assert.ok(profile.material && typeof profile.material === "object", `${presetId}: material config missing`);
-  for (const key of ["mode", "sootAbsorption", "dustAbsorption", "detailBoost", "warmCoolContrast"]) {
+  for (const key of ["mode", "sootAbsorption", "dustAbsorption", "detailBoost", "warmCoolContrast", "detailOctaveMode", "interiorDepth"]) {
     assert.ok(Number.isFinite(profile.material[key]), `${presetId}: material.${key} must be finite`);
   }
   if (presetId === LOW_YIELD_ID) {
@@ -169,15 +331,33 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(profile.material.sootAbsorption > profile.material.dustAbsorption);
     assert.ok(profile.material.detailBoost > 0 && profile.material.detailBoost < RESEARCH_FLUID_PROFILES[TSAR_ID].material.detailBoost);
     assert.ok(profile.material.warmCoolContrast > 0 && profile.material.warmCoolContrast < RESEARCH_FLUID_PROFILES[TSAR_ID].material.warmCoolContrast);
+    assert.equal(profile.material.interiorDepth, 0, "Low-yield must not inherit Ground Burst interior-depth shading");
+    assert.equal(profile.material.detailOctaveMode, 1, "Low-yield's approved detail octave must remain explicit");
+  } else if (presetId === GROUND_BURST_ID) {
+    assert.equal(profile.material.mode, 1, "Ground Burst must enable independent dust/soot material");
+    assert.ok(profile.material.sootAbsorption > profile.material.dustAbsorption);
+    assert.ok(profile.material.dustAbsorption > 0 && profile.material.dustAbsorption < 1,
+      "Ground Burst dust must retain translucent outer layers");
+    assert.ok(profile.material.detailBoost > 0 && profile.material.detailBoost < RESEARCH_FLUID_PROFILES[TSAR_ID].material.detailBoost);
+    assert.ok(profile.material.warmCoolContrast > 0 && profile.material.warmCoolContrast <= 1.2);
+    assert.equal(profile.material.detailOctaveMode, 0, "Ground Burst material separation must not buy the third detail octave");
+    assert.ok(profile.material.interiorDepth > 0 && profile.material.interiorDepth <= 1.5,
+      "Ground Burst must use the existing view-ray depth sample for material separation");
+    assert.equal(profile.material.interiorDepth, 1.2, "Ground Burst depth separation remains on the existing two-octave path");
+    assert.equal(profile.material.detailOctaveMode, 0, "Ground Burst must not reactivate the third detail octave");
   } else if (presetId === TSAR_ID) {
     assert.equal(profile.material.mode, 1, "Tsar must enable the smoke-material mode");
     assert.ok(profile.material.sootAbsorption > profile.material.dustAbsorption, "Tsar soot must absorb more strongly than lofted dust");
     assert.ok(profile.material.detailBoost > 0, "Tsar energy-weighted detail octave must be active");
     assert.ok(profile.material.warmCoolContrast > 0, "Tsar lit/shadowed contrast widening must be active");
+    assert.equal(profile.material.detailOctaveMode, 1, "Tsar approved detail octave must remain explicit");
+    assert.equal(profile.material.interiorDepth, 0, "Tsar must retain its established material path");
   } else {
     assert.equal(profile.material.mode, 0, `${presetId}: smoke-material mode must remain neutral`);
     assert.equal(profile.material.sootAbsorption, 1, `${presetId}: default soot absorption must stay neutral`);
     assert.equal(profile.material.dustAbsorption, 1, `${presetId}: default dust absorption must stay neutral`);
+    assert.equal(profile.material.detailOctaveMode, 0, `${presetId}: detail octave must stay neutral`);
+    assert.equal(profile.material.interiorDepth, 0, `${presetId}: interior depth must stay neutral`);
   }
 }
 // The volume shader and engine bindings must carry the material uniforms.
@@ -191,22 +371,83 @@ assert.match(
   /uniform\s+vec4\s+uMaterialParams\b/,
   "uMaterialParams: material uniform missing from the volume shader",
 );
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /uniform\s+float\s+uDetailOctaveMode\b/,
+  "uDetailOctaveMode: independent detail uniform missing from the volume shader",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /uniform\s+float\s+uMaterialInteriorDepth\b/,
+  "uMaterialInteriorDepth: Ground-only depth separation uniform missing from the volume shader",
+);
 // Every new material term must be reachable only through the uMaterialMode
 // gate, and must algebraically collapse to the prior expression when it is 0.
 for (const gatedTerm of [
   /uMaterialMode > 0\.5\s*\?\s*smokeDensity \* uMaterialParams\.x \+ dustDensity \* uMaterialParams\.y\s*:\s*smoke/,
-  /int detailOctaves = uMaterialMode > 0\.5 \? 3 : 2;/,
   /float contrastBoost = uMaterialMode > 0\.5 \? uMaterialParams\.w : 0\.0;/,
 ]) {
   assert.match(RESEARCH_FLUID_SHADER_SOURCES.volumeFragment, gatedTerm, `Material technique not properly gated behind uMaterialMode: ${gatedTerm}`);
 }
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /int detailOctaves = uDetailOctaveMode > 0\.5 \? 3 : 2;/,
+  "The expensive third detail octave must be independently profile-gated",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /float interiorBlend = clamp\([\s\S]*?uMaterialInteriorDepth[\s\S]*?\);/,
+  "Ground material depth must reuse the sampled view-ray shadow instead of a third detail octave",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /float frontLayer = 1\.0 - smoothstep\([\s\S]*?float rearLayer = smoothstep\([\s\S]*?float middleLayer = clamp\([\s\S]*?uMaterialInteriorDepth/,
+  "Ground material depth must separate front, middle, and rear layers on the existing ray",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /density \*= 1\.0 \+ depthContrast \* \([\s\S]*?middleLayer[\s\S]*?frontLayer[\s\S]*?rearLayer/,
+  "Ground material depth must add only bounded layer weighting, not another sample path",
+);
 
-// --- Tsar-scale late-dissipation research proof of concept (2026-07) --------
-// Same opt-in contract as the plume/material controls above: every profile
-// except the Tsar historical reference keeps dissipation.mode 0 (a fully
-// neutral envelope — lateStart/finalStart/sourceTaperEnd at 1, retention
-// floors at 1, no outward boost/buoyancy falloff/motion damp), so its
-// simulation is byte-identical to before this pass.
+// --- Ground Burst wind/shear streaks (2026-08) -----------------------------
+// The late flow overlay is intentionally opt-in and profile-owned. Its strand
+// family must remain deterministic, visibly multi-line at every tier, and
+// independent from the shockwave/raymarch budgets.
+const windStreaks = groundBurstPreset?.researchModel?.windStreaks;
+assert.ok(windStreaks && typeof windStreaks === "object", "Ground Burst wind-streak profile missing");
+assert.equal(windStreaks.mode, 1, "Ground Burst must opt into the wind-streak overlay");
+assert.ok(windStreaks.onset < windStreaks.peak && windStreaks.peak < windStreaks.fadeStart);
+assert.ok(windStreaks.fadeStart < windStreaks.fadeEnd && windStreaks.fadeEnd <= 1,
+  "Wind streaks must fully fade by the end of the normalized timeline");
+for (const [tierId, tier] of Object.entries(windStreaks).filter(([key]) => ["high", "balanced", "mobile"].includes(key))) {
+  assert.ok(Number.isInteger(tier.count) && tier.count >= 5 && tier.count <= 12,
+    `${tierId}: wind streak count must remain in the 5–12 visual range`);
+  assert.ok(tier.spanMin > 0 && tier.spanMin < tier.spanMax);
+  assert.ok(tier.widthMin > 0 && tier.widthMin < tier.widthMax);
+  assert.ok(tier.opacityMin > 0 && tier.opacityMin < tier.opacityMax && tier.opacityMax <= 0.25);
+  assert.ok(tier.curvature > 0 && tier.amplitude > 0);
+  assert.ok(Number.isInteger(tier.segments) && tier.segments >= 6 && tier.segments <= 18);
+  assert.ok(tier.dropout > 0 && tier.dropout < 0.7);
+  assert.ok(tier.fadeJitter >= 0 && tier.fadeJitter <= 0.3);
+}
+assert.equal(windStreaks.high.count, 11);
+assert.equal(windStreaks.balanced.count, 8);
+assert.equal(windStreaks.mobile.count, 6);
+assert.match(rendererBoundarySource, /_drawWindStreakOverlay\(/, "Profile-gated wind-streak renderer path missing");
+assert.match(rendererBoundarySource, /wind-strand:\$\{strand\}/, "Wind-strand variation must be seed-deterministic");
+assert.match(rendererBoundarySource, /wind-segment:\$\{strand\}:\$\{segment\}/, "Wind-strand segmentation must be seed-deterministic");
+assert.match(rendererBoundarySource, /fadeJitter|strandFadeStart/, "Wind strands must have deterministic per-strand fade variation");
+assert.match(rendererBoundarySource, /windStreakProfile\?\.mode > 0/, "Wind streaks must remain profile-gated");
+assert.doesNotMatch(rendererBoundarySource, /nuclear-ground-burst/, "Generic renderer must not hard-code the Ground Burst preset ID");
+for (const preset of EVENT_PRESETS.filter(({ id }) => id !== GROUND_BURST_ID)) {
+  assert.equal(preset.researchModel?.windStreaks, undefined,
+    `${preset.id}: wind-streak profile must remain neutral`);
+}
+
+// --- Profile-gated late dissipation (2026-07) --------------------------------
+// Tsar retains mode 1 and Ground Burst independently uses mode 2. Every other
+// profile keeps the neutral envelope.
 for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
   assert.ok(profile.dissipation && typeof profile.dissipation === "object", `${presetId}: dissipation config missing`);
   for (const key of [
@@ -216,7 +457,7 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
   ]) {
     assert.ok(Number.isFinite(profile.dissipation[key]), `${presetId}: dissipation.${key} must be finite`);
   }
-  if (presetId === "tsar-bomba-scale-reference") {
+  if (presetId === TSAR_ID) {
     const d = profile.dissipation;
     assert.equal(d.mode, 1, "Tsar must enable the late-dissipation mode");
     assert.ok(d.lateStart > 0 && d.lateStart < 1, "Tsar lateStart must fall strictly within the mature phase");
@@ -231,9 +472,20 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
       "Tsar late tail must retain a bounded amount of resolved velocity");
     assert.ok(d.lateCurl > 0 && d.lateShear > 0 && d.latePhaseRate > 0,
       "Tsar late tail must add deterministic curl and shear, not opacity-only dissipation");
+  } else if (presetId === GROUND_BURST_ID) {
+    const d = profile.dissipation;
+    assert.equal(d.mode, 2, "Ground Burst alone must enable its ground-tail dissipation mode");
+    assert.ok(d.lateStart > 0.45 && d.lateStart < d.sourceTaperEnd,
+      "Ground Burst late motion must begin after cap rollout, before a residual stem freezes");
+    assert.ok(d.sourceTaperEnd < d.finalStart && d.finalStart === 1);
+    assert.equal(d.retentionFloorSmoke, 1, "Ground Burst soot tail must retain faint elevated wisps");
+    assert.ok(d.retentionFloorDust < d.retentionFloorSmoke, "Ground Burst dust must thin faster than soot");
+    assert.ok(d.outwardBoost > 0 && d.outwardBoost < RESEARCH_FLUID_PROFILES[TSAR_ID].dissipation.outwardBoost);
+    assert.ok(d.lateCurl > 0 && d.lateShear > 0 && d.latePhaseRate > 0);
+    assert.ok(d.lateVelocityRetention > profile.physics.velocityRetention && d.lateVelocityRetention < 1);
   } else {
     const d = profile.dissipation;
-    assert.equal(d.mode, 0, `${presetId}: late-dissipation mode must remain off for non-Tsar presets`);
+    assert.equal(d.mode, 0, `${presetId}: late-dissipation mode must remain off for non-target presets`);
     assert.equal(d.lateStart, 1, `${presetId}: dissipation.lateStart must stay neutral (1)`);
     assert.equal(d.finalStart, 1, `${presetId}: dissipation.finalStart must stay neutral (1)`);
     assert.equal(d.retentionFloorSmoke, 1, `${presetId}: dissipation.retentionFloorSmoke must stay neutral (1)`);
@@ -267,7 +519,8 @@ for (const gatedTerm of [
   /float buoyancyFalloff = uDissipationMode > 0\.5/,
   /if \(uDissipationMode > 0\.5\) \{\s*\n\s*float outwardProgress = dissipationProgress\(\);/,
   /float dissipationVelocityRetention\(\) \{\s*\n\s*if \(uDissipationMode < 0\.5\) return uProfileDecay\.x;/,
-  /velocity \*= pow\(clamp\(dissipationVelocityRetention\(\), 0\.9, 1\.0\), uDt \* 60\.0\);/,
+  /float retainedVelocity = dissipationVelocityRetention\(\);/,
+  /if \(uGroundCouplingMode > 0\.5\)[\s\S]*?velocity\.x \*= pow\(clamp\(horizontalRetention, 0\.9, 1\.0\), uDt \* 60\.0\);/,
   /velocity \+= broadCurl \* uDissipationParams3\.y/,
   /float tracerDissipation = uDissipationMode > 0\.5 \? mix\(1\.0, 0\.35, dissipationProgress\(\)\) : 1\.0;/,
 ]) {
@@ -307,6 +560,15 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(c.highlightSharpness > 2 && c.highlightSharpness < tsarCore.highlightSharpness);
     assert.ok(c.structureBlend > 0 && c.structureBlend < tsarCore.structureBlend);
     assert.ok(c.bloomGateScale > 0 && c.bloomGateScale < tsarCore.bloomGateScale);
+  } else if (presetId === GROUND_BURST_ID) {
+    const c = profile.core;
+    assert.equal(c.mode, 1, "Ground Burst must enable structured-core mode");
+    assert.ok(c.highlightThreshold >= 0.2 && c.highlightThreshold <= 0.8,
+      "Ground Burst highlight must engage at the measured surface-flash range");
+    assert.ok(c.highlightSharpness >= 1.5 && c.highlightSharpness < 2.5,
+      "Ground Burst highlight roll-off must retain thermal pockets without a plateau");
+    assert.ok(c.structureBlend > 0 && c.structureBlend <= 1.2);
+    assert.ok(c.bloomGateScale > 0 && c.bloomGateScale < RESEARCH_FLUID_PROFILES[TSAR_ID].core.bloomGateScale);
   } else if (presetId === TSAR_ID) {
     const c = profile.core;
     assert.equal(c.mode, 1, "Tsar must enable core-polish mode");
@@ -335,6 +597,14 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(t.sizeVariance > 0 && t.sizeVariance < tsarTracer.sizeVariance);
     assert.ok(t.brightnessVariance > 0 && t.brightnessVariance < tsarTracer.brightnessVariance);
     assert.ok(t.minSizeFloor > 1 && t.minSizeFloor < tsarTracer.minSizeFloor);
+  } else if (presetId === GROUND_BURST_ID) {
+    const t = profile.tracerMaterial;
+    assert.equal(t.mode, 1, "Ground Burst must enable tracer occlusion and deterministic variance");
+    assert.ok(t.occlusionStrength > RESEARCH_FLUID_PROFILES[LOW_YIELD_ID].tracerMaterial.occlusionStrength);
+    assert.ok(t.occlusionStrength < RESEARCH_FLUID_PROFILES[TSAR_ID].tracerMaterial.occlusionStrength);
+    assert.ok(t.sizeVariance > 0 && t.sizeVariance < 1);
+    assert.ok(t.brightnessVariance > 0 && t.brightnessVariance < 1);
+    assert.ok(t.minSizeFloor > 1 && t.minSizeFloor < RESEARCH_FLUID_PROFILES[TSAR_ID].tracerMaterial.minSizeFloor);
   } else if (presetId === TSAR_ID) {
     const t = profile.tracerMaterial;
     assert.equal(t.mode, 1, "Tsar must enable tracer-occlusion mode");
@@ -468,7 +738,7 @@ assert.match(shaders.scalarFragment, /incandescent[\s\S]*uSmokeConversion/, "inc
 assert.match(shaders.scalarFragment, /temperature\s*=\s*max[\s\S]*exp\(-uCooling/, "cooling missing");
 assert.match(shaders.scalarFragment, /pow\(normalizedHeat,\s*4\.0\)/, "bounded fourth-power radiative cooling missing");
 assert.match(shaders.scalarFragment, /sampler3D\s+uCurlDetail/, "scalar source must reuse the bounded 3D detail field");
-assert.match(shaders.scalarFragment, /ring\s*\*\s*\(sourceEnabled\(SOURCE_RING\)/, "Ring scalar injection must obey its primitive mask");
+assert.match(shaders.scalarFragment, /sourceRing\s*\*\s*\(sourceEnabled\(SOURCE_RING\)/, "Primary ring scalar injection must obey its primitive mask");
 assert.match(shaders.scalarFragment, /ground\s*\*\s*\(sourceEnabled\(SOURCE_GROUND\)/, "Ground-sheet scalar injection must obey its primitive mask");
 assert.match(shaders.scalarFragment, /ejecta\s*\*\s*uSourceAux\.y\s*\*\s*\(sourceEnabled\(SOURCE_EJECTA\)/, "Ejecta scalar injection must obey its primitive mask");
 assert.match(shaders.scalarFragment, /withoutTrail\s*\*\s*stagedImpact\s*\+\s*stagedTrail/, "Meteor scalar sources must hand off from entry to impact");
@@ -506,7 +776,7 @@ assert.doesNotMatch(shaders.volumeFragment, /phaseVisibility[\s\S]*phaseVisibili
 assert.match(shaders.volumeFragment, /\(1\.0\s*-\s*transmittance\)\s*\*\s*atmosphericFade/, "density must govern final opacity");
 assert.match(shaders.metricsFragment, /length\(velocity\)\s*\/\s*1\.4/, "velocity metric encoding missing");
 assert.match(shaders.metricsFragment, /scalar\.r\s*\/\s*4\.0/, "temperature metric encoding missing");
-assert.match(shaders.metricsFragment, /scalar\.g\s*\/\s*4\.0/, "smoke metric encoding missing");
+assert.match(shaders.metricsFragment, /scalar\.g\s*\*\s*0\.9\s*\+\s*scalar\.a\s*\*\s*0\.72/, "combined smoke/dust occupancy metric encoding missing");
 assert.match(shaders.metricsFragment, /abs\(sampleField\(uCurl/, "vorticity metric encoding missing");
 
 const stepSource = engineSource.slice(
@@ -702,6 +972,32 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(p.feedTaperEnd < tsarPlume.feedTaperEnd, "Low-yield feed must finish tapering earlier than Tsar");
     assert.ok(p.lateralJitter > 0 && p.lateralJitter < tsarPlume.lateralJitter);
     assert.ok(p.turbulenceBlend > 0 && p.turbulenceBlend < tsarPlume.turbulenceBlend);
+  } else if (presetId === GROUND_BURST_ID) {
+    const s = profile.shockwave;
+    assert.equal(s.mode, 1, "Ground Burst must use restrained explicit subordinate shock bands");
+    assert.ok(s.ringB.strength > 0 && s.ringC.strength > 0);
+    assert.equal(s.ringD.strength, 0, "Ground Burst must not create a dense multi-ring target");
+    assert.ok(s.ringB.strength < RESEARCH_FLUID_PROFILES[TSAR_ID].shockwave.ringB.strength);
+    assert.ok(s.ringC.strength < RESEARCH_FLUID_PROFILES[TSAR_ID].shockwave.ringC.strength);
+    assert.ok(s.irregularity > RESEARCH_FLUID_PROFILES[TSAR_ID].shockwave.irregularity);
+    for (const key of [
+      "denseBandsHigh", "denseBandsBalanced", "denseBandsMobile",
+      "denseInnerRadius", "denseOuterRadius", "denseSpacingVariation",
+      "denseWidthMin", "denseWidthMax", "denseInnerStrength", "denseOuterStrength",
+      "denseSegmentVariation", "denseDepthContrast", "denseOnsetSpread",
+      "denseFadeVariation", "denseIrregularity", "denseFadeStart", "denseFadeSpan",
+    ]) {
+      assert.equal(s[key], 0, `Ground Burst must not enable dense Airburst shockwave ${key}`);
+    }
+    const p = profile.plume;
+    assert.equal(p.mode, 3);
+    assert.ok(p.feedTaperStart > 0 && p.feedTaperStart < p.feedTaperEnd);
+    assert.ok(p.feedTaperEnd < 0.8,
+      "Ground Burst stem feed must hand off before the late atmospheric tail");
+    assert.ok(p.lateralJitter > RESEARCH_FLUID_PROFILES[TSAR_ID].plume.lateralJitter,
+      "Ground Burst stem needs stronger lateral deformation than Tsar");
+    assert.ok(p.turbulenceBlend > RESEARCH_FLUID_PROFILES[TSAR_ID].plume.turbulenceBlend,
+      "Ground Burst stem needs stronger dust-rich turbulence than Tsar");
   } else if (presetId === TSAR_ID) {
     const s = profile.shockwave;
     assert.deepEqual(
@@ -815,8 +1111,8 @@ assert.match(
 );
 assert.match(
   RESEARCH_FLUID_SHADER_SOURCES.scalarFragment,
-  /float ring = profileRingKernel\(vUv\) \+ profileShockwaveLayers\(vUv\);/,
-  "The generic primitive branch must retain the explicit subordinate-ring consumer",
+  /float sourceRing = profileRingKernel\(vUv\);[\s\S]*?float shockwaveLayers = profileShockwaveLayers\(vUv\);[\s\S]*?\+ shockwaveLayers \* 0\.5/,
+  "The generic primitive branch must retain profile-gated subordinate rings independently of SOURCE_RING",
 );
 // The force shader's velocity-shaping ring term must remain the single
 // primary ring only — the new bands are density-only shell structure and
@@ -907,9 +1203,10 @@ assert.doesNotMatch(
 // (Chebyshev) envelope. Invisible while density saturates the interior, but
 // the visible isocontour of a near-uniform low-density residue, which is
 // exactly the low-yield responsive residue and Tsar's late-dissipation tail.
-// uEdgeMode gates a merged profile-supplied superellipse envelope; only these
-// two approved profiles opt in, while every other preset retains the original
-// independent-axis product byte-identically.
+// uEdgeMode gates merged profile-supplied envelopes. Low-yield and Tsar retain
+// their approved superellipse paths; Ground Burst uses mode 3, which starts
+// vertical extinction only in the upper domain so the surface base survives.
+// Every other preset retains the original independent-axis product.
 assert.match(
   RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
   /uniform float uEdgeMode;/,
@@ -919,6 +1216,11 @@ assert.match(
   RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
   /if \(uEdgeMode > 0\.5\) \{[\s\S]*?ellipseDistance[\s\S]*?\n  \}/,
   "Profile-driven organic superellipse envelope missing from edgeExtinction()",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /if \(uEdgeMode > 2\.5\) \{[\s\S]*?float capRollout[\s\S]*?float topStart = 1\.0 - profile\.w;/,
+  "Ground Burst upper-domain edge path must preserve the lower ground field",
 );
 assert.match(
   RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
@@ -961,6 +1263,13 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(edge.distanceWobble > 0 && edge.lowDensityAttenuation > 0,
       "Low-yield must fade sparse boundary smoke more strongly than dense plume material");
     assert.ok(edge.lowDensityStart < edge.lowDensityEnd, "Low-yield low-density response must be a smooth interval");
+  } else if (presetId === GROUND_BURST_ID) {
+    const edge = profile.edge;
+    assert.equal(edge.mode, 3, "Ground Burst alone must enable the ground-preserving organic edge path");
+    assert.ok(edge.leftRadius !== edge.rightRadius, "Ground Burst boundary must stay asymmetric");
+    assert.ok(edge.leftWobble !== edge.rightWobble && edge.distanceWobble > 0);
+    assert.ok(edge.lowDensityStart < edge.lowDensityEnd);
+    assert.ok(edge.lowDensityAttenuation > 0 && edge.lowDensityAttenuation < RESEARCH_FLUID_PROFILES[LOW_YIELD_ID].edge.lowDensityAttenuation);
   } else if (presetId === TSAR_ID) {
     assert.equal(profile.edge.mode, 1, "Tsar must enable the organic domain-edge envelope");
     assert.equal(profile.edge.lowDensityAttenuation, 0, "Tsar approved edge response must remain unchanged");
@@ -984,5 +1293,6 @@ console.log("Explosion Dynamics Lab fluid contract test: PASS");
 console.log(`  ${tiers.length} bounded tiers × ${EVENT_PRESETS.length} preset profiles across seven event families`);
 console.log("  primitive diversity, profile budgets, palette-driven volume uniforms, fluid evolution, and GPU tracers verified");
 console.log("  non-WebGL runtime fails closed to the existing Canvas renderer");
-console.log("  low-yield mode 2 and historical-scale mode 1 remain profile-isolated");
-console.log("  dense-phase raymarch shading skip reverted; organic edge envelopes and late motion remain profile-gated");
+console.log("  low-yield mode 2, Ground Burst mode 3, and historical-scale mode 1 remain profile-isolated");
+console.log("  Ground Burst ground coupling, material, shockwave, edge, and late motion remain profile-gated");
+console.log("  dense-phase raymarch shading skip remains absent; organic edge envelopes remain profile-gated");

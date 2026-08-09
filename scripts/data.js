@@ -282,7 +282,7 @@ export const EVENT_RENDERER_MODELS = deepFreeze({
     physicalFamilyId: "ground-coupled",
     family: "Nuclear scale · ground-coupled",
     profileId: "nuclear-ground-fluid-v1",
-    sourcePrimitives: ["radial-impulse", "ground-sheet", "vertical-jet", "ejecta-curtain", "multiple-offset-kernels"]
+    sourcePrimitives: ["radial-impulse", "ground-sheet", "vertical-jet", "ejecta-curtain", "multiple-offset-kernels", "paired-cap-vortices"]
   },
   "extreme-historical-scale": {
     familyId: "nuclear-scale",
@@ -861,7 +861,62 @@ export const EVENT_PRESETS = deepFreeze([
     defaultPaletteId: "white-hot",
     defaultAltitude: 0,
     particleBudget: { low: 1600, balanced: 3520, high: 6600 },
-    render: { flash: 1.8, fireballRadius: 1.32, fireballGrowth: 1.28, shockRadius: 1.58, shockThickness: 0.66, surfaceInteraction: 1.54, debris: 1.28, dust: 1.68, smoke: 1.46, columnRise: 1.56, cloudSpread: 1.5, turbulence: 1.4, windResponse: 1.22, atmosphericLight: 1.82, heatDistortion: 1.42, cameraShake: 1.44 },
+    researchModel: {
+      // The optional flow overlay is profile-driven. Ground Burst uses a
+      // sparse family of wind/shear strands so late atmospheric motion reads
+      // as layered airflow instead of one merged analytical ribbon. Values
+      // are normalized visual controls, not physical wind measurements.
+      windStreaks: {
+        mode: 1,
+        onset: 0.31,
+        peak: 0.58,
+        fadeStart: 0.77,
+        fadeEnd: 1.0,
+        high: {
+          count: 11,
+          spanMin: 0.34,
+          spanMax: 0.66,
+          widthMin: 0.52,
+          widthMax: 1.18,
+          opacityMin: 0.055,
+          opacityMax: 0.16,
+          curvature: 0.13,
+          amplitude: 0.052,
+          segments: 13,
+          dropout: 0.34,
+          fadeJitter: 0.11,
+        },
+        balanced: {
+          count: 8,
+          spanMin: 0.32,
+          spanMax: 0.61,
+          widthMin: 0.58,
+          widthMax: 1.12,
+          opacityMin: 0.05,
+          opacityMax: 0.145,
+          curvature: 0.12,
+          amplitude: 0.048,
+          segments: 11,
+          dropout: 0.3,
+          fadeJitter: 0.1,
+        },
+        mobile: {
+          count: 6,
+          spanMin: 0.28,
+          spanMax: 0.52,
+          widthMin: 0.76,
+          widthMax: 1.28,
+          opacityMin: 0.07,
+          opacityMax: 0.17,
+          curvature: 0.1,
+          amplitude: 0.043,
+          segments: 9,
+          dropout: 0.26,
+          fadeJitter: 0.08,
+        },
+      },
+    },
+    render: { flash: 1.8, fireballRadius: 1.32, fireballGrowth: 1.28, shockRadius: 1.58, shockThickness: 0.66, surfaceInteraction: 1.54, debris: 1.28, dust: 1.68, smoke: 1.46, columnRise: 1.56, cloudSpread: 1.5, turbulence: 1.4, windResponse: 1.22, atmosphericLight: 0.32, atmosphericWash: 0.22, heatDistortion: 1.42, cameraShake: 1.44 },
     overview: { luminous: 1, innerWave: 1.3, outerWave: 1.62, particulate: 1.48 },
     phases: phaseList([
       ["detonation", 0, 0.2, 1, "outExpo"],
