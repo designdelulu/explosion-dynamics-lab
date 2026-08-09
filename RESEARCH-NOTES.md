@@ -748,3 +748,80 @@ The collocated grid and finite Jacobi iteration count do not enforce engineering
 ## Safety boundary in the interface
 
 No new dimensional or predictive controls are introduced. Every profile exposes only the existing normalized educational controls plus visualization quality. Developer diagnostics are URL-gated and display the event family, fluid profile, source primitives, and actively simulated dimensionless velocity, relative temperature, smoke density, incandescent density, pressure, post-projection divergence, vorticity, and advected tracers; the overlay also reports sampled field maxima and the active fallback reason. The diagnostics never expose blast pressure, yield, damage radius, material selection, construction, geometry, triggering, targeting, casualties, or optimization.
+
+## Hiroshima-scale visual diagnosis (2026-08)
+
+The fresh deterministic seed-1842 Cinematic baseline was captured in Chrome with
+WebGL2, GPU FLUID, and no fallback at 1440 × 900 Balanced/High, 768 × 1024
+Balanced, 1024 × 768 Balanced, and 390 × 844 Mobile. The baseline is a
+profile-specific risk case, not a shared-renderer failure:
+
+1. **Near-edge risk without a visible wall.** During roughly t3–t12 the sampled
+   field expands to approximately `x 0.02–0.98` and `y 0.99`, with 13–24% of
+   active cells inside the legacy risk margin. Direct solver-edge density stays
+   `0.000` at every captured checkpoint, so the images do not show a flat roof,
+   hard side wall, capsule, or rectangular extinction contour. The root cause
+   is Hiroshima retaining `domain.mode: 0` while its generic radial/vertical
+   source and analytical shock occupy nearly the full normalized field. A small
+   profile-local padded-domain configuration is justified to restore clearance;
+   it is a render-coordinate margin, not a source shrink or decorative mask.
+2. **Generic narrow-column silhouette.** The t5–t15 body is bright and mostly
+   cylindrical, with a narrow stem and a cap that arrives as a weak, left-biased
+   ring rather than a connected compact mushroom. The root cause is the neutral
+   `plume.mode: 0` path: Hiroshima has no feed taper, widening, lateral jitter,
+   profile persistence, or tunable vortex/expansion values, so the generic
+   vertical primitive and paired cap vortices remain too orderly.
+3. **Compressed early and internal material.** The t0.5 thermal body is close to
+   a smooth white orb and the mature t15–t20 mass has limited warm/cool or
+   front/middle/rear separation. The root cause is the neutral material/core
+   path (`material.mode: 0`, `core.mode: 0`, `warmCoolContrast: 0`): soot and
+   dust use one optical curve, the highlight has no structural pockets, and
+   the current profile's `shadow: 1.22` / `exposure: 1.10` leaves the smoke
+   body visually flatter than its field density suggests.
+4. **Weak mature handoff and late tail.** At t20 the cap remains small relative
+   to the long stem and its underside is hard to read; by t30 the field is
+   nearly inactive (`smoke density ≈ 0.03–0.05`) and the cloud has little
+   continuing curl/shear. The root cause is the neutral `dissipation.mode: 0`
+   path combined with a short `sustainEnd: 0.42`, `cooling: 0.85`, and no
+   profile-specific late velocity retention/curl/shear. Hiroshima therefore
+   loses readable mass before its compact historical silhouette has time to
+   settle into a living late haze.
+5. **Shockwave is coherent but over-assertive early.** The analytical shell
+   tracks the shared event-space volume (`~1.48× horizontal at mature times`)
+   and does not mismatch smoke or create a boundary. Its t0.5–t9 rings are
+   visually dominant only because the Hiroshima fluid body is still generic and
+   under-structured. No extra shockwave bands are warranted by this diagnosis;
+   the first correction belongs in Hiroshima's source, plume, material, and
+   late-tail profile controls.
+
+The approved reusable boundary architecture remains unchanged. The candidate
+was evaluated against only existing profile controls: a possible modest padded
+domain, profile-local plume shaping and persistence, a structured early
+core/material path with no third detail octave, and a restrained late-motion
+tail. Ground Burst, Nuclear Airburst, Castle Bravo, Tsar, camera, wind,
+overlays, and shock systems remain regression locks.
+
+## Hiroshima refinement decision (2026-08)
+
+Controlled profile-only A/B checks rejected the padded-domain experiment and
+the high-force historical plume experiment: the first enlarged the rendered
+composition, while the second produced a generic disk and a rectangular-looking
+cap. A lower-force A/B retained the compact scale while making the cap/stem
+handoff readable. The retained candidate leaves `domain.mode: 0`, `edge.mode: 0`,
+and all shockwave values neutral because the direct edge-density diagnostic
+remained `0.000` and no computational wall was visible. It uses the existing
+historical plume path at restrained values: expansion `0.005`, vortex `0.015`,
+persistence `0.36`, and widening `0.007`.
+
+The stem handoff uses feed taper `0.68–0.88`, lateral jitter `0.1`, and
+turbulence blend `0.035`; these remain well below the larger historical
+profiles and are profile-local rather than shared renderer changes.
+
+The retained source/cap balance is `radius: 0.061`, `sustainEnd: 0.46`,
+`turbulence: 1.06`, `clusterSpread: 1.16`, `capScale: 1.14`, `capRoll: 1.28`,
+and `capVertical: 0.46`. Material/core structure uses soot `0.94`, dust `0.78`,
+warm/cool contrast `0.25`, interior depth `0.15`, highlight threshold `1.8`,
+sharpness `2.4`, structure blend `0.35`, and bloom gate `5.5`; `detailOctaveMode`
+stays `0`. The late tail is profile-local and restrained (`lateStart: 0.72`,
+`finalStart: 0.95`, `sourceTaperEnd: 0.84`, smoke floor `0.9995`, dust floor
+`0.9988`, late velocity retention `0.994`, curl `0.002`, shear `0.0015`).

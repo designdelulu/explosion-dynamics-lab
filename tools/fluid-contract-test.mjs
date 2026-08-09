@@ -16,6 +16,7 @@ const LOW_YIELD_ID = "low-yield-nuclear-airburst";
 const GROUND_BURST_ID = "nuclear-ground-burst";
 const CASTLE_BRAVO_ID = "castle-bravo-scale-reference";
 const TSAR_ID = "tsar-bomba-scale-reference";
+const HIROSHIMA_ID = "hiroshima-scale-reference";
 const RESEARCH_MODE_IDS = new Set([LOW_YIELD_ID, GROUND_BURST_ID, TSAR_ID]);
 
 const tiers = Object.values(RESEARCH_FLUID_TIERS);
@@ -336,6 +337,16 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     // Source must broaden the plume: radial injection at least matches vertical
     // so the column is no longer a pencil jet.
     assert.ok(profile.source.radial >= profile.source.vertical, "Tsar radial injection must not be dominated by vertical");
+  } else if (presetId === HIROSHIMA_ID) {
+    assert.equal(profile.plume.mode, 1, "Hiroshima must use the historical persistence path");
+    assert.ok(profile.plume.expansion > 0 && profile.plume.expansion < 0.02, "Hiroshima expansion must remain compact");
+    assert.ok(profile.plume.vortex > 0 && profile.plume.vortex < 0.1, "Hiroshima vortex force must remain compact");
+    assert.ok(profile.plume.persistence > 0 && profile.plume.persistence < RESEARCH_FLUID_PROFILES[TSAR_ID].plume.persistence);
+    assert.ok(profile.plume.widen > 0 && profile.plume.widen < 0.02, "Hiroshima widening must remain compact");
+    assert.ok(profile.plume.feedTaperStart > 0.5 && profile.plume.feedTaperStart < profile.plume.feedTaperEnd);
+    assert.ok(profile.plume.feedTaperEnd < 0.95);
+    assert.ok(profile.plume.lateralJitter > 0 && profile.plume.lateralJitter < 0.2);
+    assert.ok(profile.plume.turbulenceBlend > 0 && profile.plume.turbulenceBlend < 0.1);
   } else {
     assert.equal(profile.plume.mode, 0, `${presetId}: broad-plume mode must remain neutral`);
   }
@@ -389,6 +400,13 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(profile.material.warmCoolContrast > 0, "Tsar lit/shadowed contrast widening must be active");
     assert.equal(profile.material.detailOctaveMode, 1, "Tsar approved detail octave must remain explicit");
     assert.equal(profile.material.interiorDepth, 0, "Tsar must retain its established material path");
+  } else if (presetId === HIROSHIMA_ID) {
+    assert.equal(profile.material.mode, 1, "Hiroshima must enable structured smoke material");
+    assert.ok(profile.material.sootAbsorption > profile.material.dustAbsorption);
+    assert.equal(profile.material.detailBoost, 0, "Hiroshima must retain the two-octave detail budget");
+    assert.ok(profile.material.warmCoolContrast > 0, "Hiroshima must separate warm and cool material");
+    assert.equal(profile.material.detailOctaveMode, 0, "Hiroshima must not activate a third detail octave");
+    assert.ok(profile.material.interiorDepth > 0, "Hiroshima must use the existing interior-depth weighting");
   } else {
     assert.equal(profile.material.mode, 0, `${presetId}: smoke-material mode must remain neutral`);
     assert.equal(profile.material.sootAbsorption, 1, `${presetId}: default soot absorption must stay neutral`);
@@ -530,6 +548,16 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(d.outwardBoost > 0 && d.buoyancyFalloff > 0 && d.motionDamp > 0);
     assert.ok(d.lateVelocityRetention > profile.physics.velocityRetention && d.lateVelocityRetention < 1);
     assert.ok(d.lateCurl > 0 && d.lateShear > 0 && d.latePhaseRate > 0);
+  } else if (presetId === HIROSHIMA_ID) {
+    const d = profile.dissipation;
+    assert.equal(d.mode, 1, "Hiroshima must enable a restrained late-motion tail");
+    assert.ok(d.lateStart > 0.5 && d.lateStart < d.sourceTaperEnd);
+    assert.ok(d.sourceTaperEnd < d.finalStart && d.finalStart <= 1);
+    assert.ok(d.retentionFloorSmoke < 1 && d.retentionFloorSmoke > 0);
+    assert.ok(d.retentionFloorDust < d.retentionFloorSmoke && d.retentionFloorDust > 0);
+    assert.ok(d.motionDamp > 0 && d.outwardBoost >= 0);
+    assert.ok(d.lateVelocityRetention > profile.physics.velocityRetention && d.lateVelocityRetention < 1);
+    assert.ok(d.lateCurl > 0 && d.lateShear > 0 && d.latePhaseRate > 0);
   } else {
     const d = profile.dissipation;
     assert.equal(d.mode, 0, `${presetId}: late-dissipation mode must remain off for non-target presets`);
@@ -621,6 +649,13 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.equal(c.mode, 1, "Castle Bravo must enable structured-core roll-off");
     assert.ok(c.highlightThreshold > 1.5, "Castle Bravo must narrow the white-hot plateau");
     assert.ok(c.highlightSharpness > 2, "Castle Bravo must sharpen the retained thermal structure");
+    assert.ok(c.structureBlend > 0 && c.structureBlend <= 1);
+    assert.ok(c.bloomGateScale > 0 && c.bloomGateScale < RESEARCH_FLUID_PROFILES[TSAR_ID].core.bloomGateScale);
+  } else if (presetId === HIROSHIMA_ID) {
+    const c = profile.core;
+    assert.equal(c.mode, 1, "Hiroshima must enable structured-core roll-off");
+    assert.ok(c.highlightThreshold > 1.5);
+    assert.ok(c.highlightSharpness > 2);
     assert.ok(c.structureBlend > 0 && c.structureBlend <= 1);
     assert.ok(c.bloomGateScale > 0 && c.bloomGateScale < RESEARCH_FLUID_PROFILES[TSAR_ID].core.bloomGateScale);
   } else if (presetId === TSAR_ID) {
@@ -1128,6 +1163,19 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(p.feedTaperStart < 0.85, "Tsar coreBand must taper earlier than the old end-of-timeline default (0.85)");
     assert.ok(p.lateralJitter > 0, "Tsar stem lateral decorrelation must be active");
     assert.ok(p.turbulenceBlend > 0, "Tsar stem turbulence blend must be active");
+  } else if (presetId === HIROSHIMA_ID) {
+    const s = profile.shockwave;
+    assert.equal(s.mode, 0, "Hiroshima must retain the shared neutral shockwave treatment");
+    for (const ringKey of ["ringB", "ringC", "ringD"]) {
+      assert.equal(s[ringKey].strength, 0, `Hiroshima shockwave.${ringKey}.strength must stay neutral`);
+      assert.equal(s[ringKey].widthScale, 1, `Hiroshima shockwave.${ringKey}.widthScale must stay neutral`);
+      assert.equal(s[ringKey].radiusOffset, 0, `Hiroshima shockwave.${ringKey}.radiusOffset must stay neutral`);
+    }
+    const p = profile.plume;
+    assert.equal(p.feedTaperStart, 0.68, "Hiroshima stem feed taper must remain profile-local");
+    assert.equal(p.feedTaperEnd, 0.88, "Hiroshima stem feed handoff must remain profile-local");
+    assert.equal(p.lateralJitter, 0.1, "Hiroshima stem lateral decorrelation must remain profile-local");
+    assert.equal(p.turbulenceBlend, 0.035, "Hiroshima stem turbulence blend must remain profile-local");
   } else {
     const s = profile.shockwave;
     assert.equal(s.mode, 0, `${presetId}: shockwave mode must remain neutral`);
