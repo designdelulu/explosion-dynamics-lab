@@ -823,10 +823,62 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       eventFamilyId: 'nuclear-scale', eventFamily: 'Nuclear scale · early airburst reference', profileKind: 13,
       tracerType: 'thermal',
       sourcePrimitives: ['radial-impulse', 'vertical-jet', 'multiple-offset-kernels', 'paired-cap-vortices'],
-      source: { centerY: 0.33, radius: 0.06, aspectX: 0.95, aspectY: 0.9, onsetEnd: 0.05, sustainEnd: 0.42, radial: 1.05, vertical: 1.32, turbulence: 0.95, heat: 1.22, smoke: 1.02, incandescent: 1.1, dust: 0.42, clusterSpread: 1.1, capScale: 0.96, capRoll: 1.05 },
-      physics: { buoyancy: 0.94, densityLoading: 0.98, windCoupling: 0.98, vorticity: 1.18, velocityRetention: 0.992, cooling: 0.85, smokeConversion: 1.05, scalarRetention: 0.999 },
-      volume: { scaleX: 1.32, scaleY: 1.22, depth: 1.05, opacity: 1.12, shadow: 1.22, bloom: 1.18, distortion: 1.1, erosion: 1, noiseScale: 1.12, dustVisibility: 0.55, exposure: 1.1, backgroundIllumination: 0.3, emissionCurve: 0.82 },
+      // Keep the elevated profile compact while giving the source enough
+      // material and cap scale to hand off as one connected body.
+      source: { centerY: 0.33, radius: 0.061, aspectX: 0.96, aspectY: 0.9, onsetEnd: 0.05, sustainEnd: 0.46, radial: 1.05, vertical: 1.3, turbulence: 1.06, heat: 1.2, smoke: 1.05, incandescent: 1.08, dust: 0.46, clusterSpread: 1.16, capScale: 1.14, capRoll: 1.28, capVertical: 0.46 },
+      physics: { buoyancy: 0.95, densityLoading: 0.99, windCoupling: 0.99, vorticity: 1.22, velocityRetention: 0.993, cooling: 0.84, smokeConversion: 1.06, scalarRetention: 0.9992 },
+      volume: { scaleX: 1.32, scaleY: 1.22, depth: 1.08, opacity: 1.08, shadow: 1.16, bloom: 1.1, distortion: 1.1, erosion: 1.03, noiseScale: 1.15, dustVisibility: 0.62, exposure: 1.06, backgroundIllumination: 0.3, emissionCurve: 0.83 },
       quality: { grid: 1, pressure: 1, rays: 1.02, tracers: 1.08, detail: 1 },
+      // Keep the historical plume force deliberately below the larger
+      // presets. This is enough to join the compact cap to the stem without
+      // entering the broad disk silhouette produced by a high-force pass.
+      plume: {
+        mode: 1,
+        expansion: 0.005,
+        vortex: 0.015,
+        persistence: 0.36,
+        widen: 0.007,
+        feedTaperStart: 0.68,
+        feedTaperEnd: 0.88,
+        lateralJitter: 0.1,
+        turbulenceBlend: 0.035,
+      },
+      // The compact historical plume uses only a restrained share of the
+      // reusable shaping path; the paired cap vortices remain the primary
+      // source of its smaller-scale identity.
+      material: {
+        mode: 1,
+        sootAbsorption: 0.94,
+        dustAbsorption: 0.78,
+        detailBoost: 0,
+        warmCoolContrast: 0.25,
+        detailOctaveMode: 0,
+        interiorDepth: 0.15,
+      },
+      core: {
+        mode: 1,
+        highlightThreshold: 1.8,
+        highlightSharpness: 2.4,
+        structureBlend: 0.35,
+        bloomGateScale: 5.5,
+      },
+      // The late tail is deliberately weaker than Tsar's: it preserves
+      // readable mass through t20–t30 and adds only broad, slow deformation.
+      dissipation: {
+        mode: 1,
+        lateStart: 0.72,
+        finalStart: 0.95,
+        sourceTaperEnd: 0.84,
+        retentionFloorSmoke: 0.9995,
+        retentionFloorDust: 0.9988,
+        outwardBoost: 0.02,
+        buoyancyFalloff: 0.25,
+        motionDamp: 0.3,
+        lateVelocityRetention: 0.994,
+        lateCurl: 0.002,
+        lateShear: 0.0015,
+        latePhaseRate: 0.04,
+      },
     },
   ),
   'castle-bravo-scale-reference': defineFluidProfile(

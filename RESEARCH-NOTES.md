@@ -795,8 +795,33 @@ profile-specific risk case, not a shared-renderer failure:
    late-tail profile controls.
 
 The approved reusable boundary architecture remains unchanged. The candidate
-will use only existing profile controls: a modest padded domain for clearance,
-profile-local plume shaping and persistence, a structured early core/material
-path with no third detail octave, and a restrained late-motion tail. Ground
-Burst, Nuclear Airburst, Castle Bravo, Tsar, camera, wind, overlays, and shock
-systems remain regression locks.
+was evaluated against only existing profile controls: a possible modest padded
+domain, profile-local plume shaping and persistence, a structured early
+core/material path with no third detail octave, and a restrained late-motion
+tail. Ground Burst, Nuclear Airburst, Castle Bravo, Tsar, camera, wind,
+overlays, and shock systems remain regression locks.
+
+## Hiroshima refinement decision (2026-08)
+
+Controlled profile-only A/B checks rejected the padded-domain experiment and
+the high-force historical plume experiment: the first enlarged the rendered
+composition, while the second produced a generic disk and a rectangular-looking
+cap. A lower-force A/B retained the compact scale while making the cap/stem
+handoff readable. The retained candidate leaves `domain.mode: 0`, `edge.mode: 0`,
+and all shockwave values neutral because the direct edge-density diagnostic
+remained `0.000` and no computational wall was visible. It uses the existing
+historical plume path at restrained values: expansion `0.005`, vortex `0.015`,
+persistence `0.36`, and widening `0.007`.
+
+The stem handoff uses feed taper `0.68–0.88`, lateral jitter `0.1`, and
+turbulence blend `0.035`; these remain well below the larger historical
+profiles and are profile-local rather than shared renderer changes.
+
+The retained source/cap balance is `radius: 0.061`, `sustainEnd: 0.46`,
+`turbulence: 1.06`, `clusterSpread: 1.16`, `capScale: 1.14`, `capRoll: 1.28`,
+and `capVertical: 0.46`. Material/core structure uses soot `0.94`, dust `0.78`,
+warm/cool contrast `0.25`, interior depth `0.15`, highlight threshold `1.8`,
+sharpness `2.4`, structure blend `0.35`, and bloom gate `5.5`; `detailOctaveMode`
+stays `0`. The late tail is profile-local and restrained (`lateStart: 0.72`,
+`finalStart: 0.95`, `sourceTaperEnd: 0.84`, smoke floor `0.9995`, dust floor
+`0.9988`, late velocity retention `0.994`, curl `0.002`, shear `0.0015`).
