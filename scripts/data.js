@@ -282,7 +282,7 @@ export const EVENT_RENDERER_MODELS = deepFreeze({
     physicalFamilyId: "ground-coupled",
     family: "Nuclear scale · ground-coupled",
     profileId: "nuclear-ground-fluid-v1",
-    sourcePrimitives: ["radial-impulse", "ground-sheet", "vertical-jet", "ejecta-curtain", "multiple-offset-kernels"]
+    sourcePrimitives: ["radial-impulse", "ground-sheet", "vertical-jet", "ejecta-curtain", "multiple-offset-kernels", "paired-cap-vortices"]
   },
   "extreme-historical-scale": {
     familyId: "nuclear-scale",

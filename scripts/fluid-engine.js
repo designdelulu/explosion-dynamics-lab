@@ -192,6 +192,7 @@ const BASE_PROFILE = Object.freeze({
     clusterSpread: 1,
     capScale: 1,
     capRoll: 1,
+    capVertical: 0.43,
   }),
   physics: Object.freeze({
     buoyancy: 1,
@@ -645,15 +646,15 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
     {
       eventFamilyId: 'nuclear-scale', physicalFamilyId: 'ground-coupled', eventFamily: 'Nuclear scale · ground-coupled', profileKind: 10,
       tracerType: 'particulate',
-      sourcePrimitives: ['radial-impulse', 'ground-sheet', 'vertical-jet', 'ejecta-curtain', 'multiple-offset-kernels'],
+      sourcePrimitives: ['radial-impulse', 'ground-sheet', 'vertical-jet', 'ejecta-curtain', 'multiple-offset-kernels', 'paired-cap-vortices'],
       source: {
         centerY: 0.19, groundLevel: 0.18, radius: 0.058,
-        aspectX: 1.18, aspectY: 0.76, onsetEnd: 0.055, sustainEnd: 0.36,
-        radial: 0.22, vertical: 2.02, turbulence: 2.05,
+        aspectX: 1.18, aspectY: 0.76, onsetEnd: 0.055, sustainEnd: 0.48,
+        radial: 0.18, vertical: 2.02, turbulence: 2.05,
         heat: 1.0, smoke: 0.46, incandescent: 1.35, dust: 1.85,
-        ejecta: 1.65, clusterSpread: 1.8, capScale: 1.48, capRoll: 2.75,
+        ejecta: 1.65, clusterSpread: 1.8, capScale: 1.3, capRoll: 2.75, capVertical: 0.42,
       },
-      physics: { buoyancy: 1.42, densityLoading: 0.68, windCoupling: 1.18, vorticity: 2.0, velocityRetention: 0.968, cooling: 1.0, smokeConversion: 0.58, scalarRetention: 0.9995 },
+      physics: { buoyancy: 1.48, densityLoading: 0.62, windCoupling: 1.18, vorticity: 2.0, velocityRetention: 0.94, cooling: 1.0, smokeConversion: 0.58, scalarRetention: 0.9995 },
       volume: { scaleX: 1.16, scaleY: 1.2, depth: 1.18, opacity: 0.43, shadow: 2.85, bloom: 0.78, distortion: 1.18, erosion: 1.38, noiseScale: 1.56, dustVisibility: 1.1, exposure: 1.03, toneMap: 0.36, backgroundIllumination: 0.12, emissionCurve: 1 },
       // The ground profile keeps its higher solver/detail budgets, but the
       // padded render extent does not require the historical 29-step raymarch
@@ -691,14 +692,14 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       },
       groundCoupling: {
         mode: 1,
-        radialImpulse: 0.58,
+        radialImpulse: 0.42,
         // Keep the physical surface front broad, but stop the source kernel
         // from loading an almost viewport-wide horizontal sheet before the
         // rising column has time to form. This is a Ground-only width control;
         // the default remains neutral for every other source profile.
-        spreadWidth: 0.43,
+        spreadWidth: 0.42,
         heightFalloff: 1.7,
-        horizontalRetention: 0.972,
+        horizontalRetention: 0.95,
         verticalDamping: 0.68,
         spreadStart: 0.006,
         spreadEnd: 0.14,
@@ -706,7 +707,7 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
         asymmetry: 0.32,
         surfaceHeat: 1.05,
         baseDust: 1.5,
-        transitionLift: 0.45,
+        transitionLift: 0.7,
         lateGroundDrift: 0.085,
       },
       core: {
@@ -718,9 +719,9 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
         expansion: 0.028,
         vortex: 0.98,
         persistence: 0.62,
-        widen: 0.055,
-        feedTaperStart: 0.2,
-        feedTaperEnd: 0.42,
+        widen: 0.10,
+        feedTaperStart: 0.48,
+        feedTaperEnd: 0.7,
         lateralJitter: 0.98,
         turbulenceBlend: 0.64,
       },
@@ -1242,6 +1243,7 @@ uniform vec4 uSeedOffsetsA;
 uniform vec4 uSeedOffsetsB;
 uniform vec4 uProfilePhysics;
 uniform vec4 uProfileDecay;
+// Profile-specific cap controls packed as (capScale, capRoll, reserved, capVertical).
 uniform vec4 uProfileAux;
 // The active scalar region may occupy the padded center of the fixed solver
 // texture. 1.0 keeps legacy coordinates; smaller values preserve visible
@@ -1758,7 +1760,7 @@ void main() {
     * 0.0045 * uDomainActiveScale * motionScale * uDt * 60.0;
   vec2 capCenter = uSourceCenter + vec2(
     uWind.x * capDevelopment * 0.42,
-    mix(0.075, 0.43, capDevelopment)
+    mix(0.075, uProfileAux.w, capDevelopment)
   ) * uDomainActiveScale;
   // Profile-scaled cap geometry: capScale (uProfileAux.x) widens the paired
   // vortex separation and radius so large historical archetypes develop a
@@ -1889,7 +1891,7 @@ void main() {
       // The ground column begins as a broad, heavy base and narrows only
       // modestly as it hands material into the cap. This is distinct from the
       // compact Airburst corridor and avoids a tornado-like stem.
-      widthGrow *= mix(1.6, 1.08, smoothstep(0.12, 0.82, heightAbove));
+      widthGrow *= mix(1.25, 0.92, smoothstep(0.12, 0.82, heightAbove));
     }
     float coreBand = exp(
       -coreLateral * coreLateral
@@ -2234,7 +2236,7 @@ void main() {
       float structuredCore = clamp(
         profileBaseKernel(vUv)
           + multi * 0.35
-          + profileVerticalKernel(vUv) * 0.04,
+          + profileVerticalKernel(vUv) * 1.4,
         0.0,
         1.5
       );
@@ -2245,7 +2247,9 @@ void main() {
         * seededThermalPockets;
       float groundHotEnvelope = onset * 1.2
         + combustion * pulse * 0.32
-          * (1.0 - smoothstep(0.12, 0.32, uNormalizedTime));
+          * (1.0 - smoothstep(0.12, 0.32, uNormalizedTime))
+        + sustain * pulse * 0.22
+          * (1.0 - smoothstep(0.36, 0.78, uNormalizedTime));
       float risingHeat = structuredCore * groundHotEnvelope
         * seededThermalPockets;
       temperature += source * (risingHeat + surfaceFlash * 2.3)
@@ -2254,18 +2258,24 @@ void main() {
         risingHeat * 0.72 + surfaceFlash * 1.15
       ) * uSourceScalar.z * uDt * 1.2;
       smoke += source * clamp(
-        structuredCore * 0.72 + multi * 0.38 + irregularGround * 0.16,
+        structuredCore * 0.95 + multi * 0.3 + irregularGround * 0.12,
         0.0,
         2.0
       ) * matterEnvelope * uSourceScalar.y * uDt * 0.88;
       dust += source * clamp(
         irregularGround * uGroundCouplingC.y
           + ejecta * uSourceAux.y
-          + multi * 0.46
-          + structuredCore * 0.22,
+          + multi * 0.34
+          + structuredCore * 0.08,
         0.0,
         3.0
-      ) * matterEnvelope * uSourceScalar.w * uDt * 0.7;
+      ) * matterEnvelope * uSourceScalar.w * uDt * 0.7
+        * (1.0 - 0.42 * smoothstep(
+          uSourceShape.w + uSourceShape.x * 1.6,
+          uSourceShape.w + uSourceShape.x * 6.0,
+          vUv.y
+        ));
+
     } else {
       temperature += source * thermalKernel * hotEnvelope * uSourceScalar.x * uDt * 3.2;
       incandescent += source * thermalKernel * hotEnvelope * uSourceScalar.z * uDt * 2.4;
@@ -4617,7 +4627,7 @@ export class ResearchFluidEngine {
         source.capScale * clamp(finite(this.settings.capWidthBoost, 1), 0.6, 1.6),
         finite(source.capRoll, 1),
         0,
-        0,
+        finite(source.capVertical, 0.43),
       ],
     };
   }
