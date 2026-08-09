@@ -121,6 +121,73 @@ mismatch; no additional shock bands are assumed from this diagnosis. Shared
 tiers, ray budgets, Ground Burst, Airburst, Tsar, camera behavior, and exports
 remain regression boundaries for the pass.
 
+## Castle Bravo visual-refinement result (2026-08)
+
+The fresh GPU baseline confirmed the diagnosis. The successful candidate keeps
+the approved boundary architecture and makes Castle Bravo profile-local rather
+than changing shared renderer behavior. The historical-scale `plume.mode=1`
+probe was not retained: with Castle Bravo's surface-source balance it drove the
+visible smoke toward an under-filled/off-screen state before a readable cap
+could form. The retained `plume.mode=3` path is the existing broad,
+ground-coupled path, constrained with Castle-specific values; this is not a new
+mask or a Ground Burst configuration copy.
+
+### Retained Castle Bravo controls
+
+- Source/physics: `centerY=0.21`, `groundLevel=0.18`, `radius=0.084`,
+  `aspectX=1.38`, `aspectY=0.88`, `radial=1.12`, `vertical=1.44`,
+  `turbulence=1.55`, `heat=1.2`, `smoke=1.48`, `dust=1.78`,
+  `buoyancy=1.0`, `densityLoading=1.15`, `vorticity=1.48`,
+  `cooling=0.82`, and `smokeConversion=1.0`.
+- Ground coupling: `mode=1`, `radialImpulse=0.26`, `spreadWidth=0.34`,
+  `heightFalloff=1.55`, `horizontalRetention=0.92`,
+  `verticalDamping=0.78`, `spreadStart=0.006`, `spreadEnd=0.16`,
+  `angularVariation=0.3`, `asymmetry=0.22`, `surfaceHeat=0.68`,
+  `baseDust=1.25`, `transitionLift=0.58`, `lateGroundDrift=0.05`.
+- Plume: `mode=3`, `expansion=0.016`, `vortex=0.42`, `persistence=0.08`,
+  `widen=0.06`, `feedTaperStart=0.5`, `feedTaperEnd=0.72`,
+  `lateralJitter=0.5`, `turbulenceBlend=0.28`.
+- Volume/material/core: `opacity=0.78`, `shadow=1.45`, `bloom=0.68`,
+  `exposure=0.82`, `toneMap=0.32`, `noiseScale=1.1`, `material.mode=1`,
+  `sootAbsorption=1.45`, `dustAbsorption=0.65`, `warmCoolContrast=0.75`,
+  `interiorDepth=0.75`, `detailOctaveMode=0`, `core.mode=1`,
+  `highlightThreshold=2.65`, `highlightSharpness=3.0`,
+  `structureBlend=0.6`, and `bloomGateScale=8.0`.
+- Late motion: `lateStart=0.62`, `sourceTaperEnd=0.84`, `finalStart=0.94`,
+  `retentionFloorSmoke=0.9997`, `retentionFloorDust=0.999`,
+  `outwardBoost=0.04`, `buoyancyFalloff=0.3`, `motionDamp=0.42`,
+  `lateVelocityRetention=0.992`, `lateCurl=0.006`, `lateShear=0.004`,
+  and `latePhaseRate=0.05`.
+
+### Boundary and visual result
+
+Castle Bravo now uses `domain.mode=1`, `padding=0.09`, `renderOverscan=1.05`,
+profile-local `renderScale={mobile:1, balanced:0.76, high:0.82}`, and
+`renderExtent={x:1.08, y:1.02}`. `edge.mode=0` and
+`lowDensityAttenuation=0` remain neutral. No additional extinction mask was
+needed. At representative Balanced desktop checkpoints, diagnostics reported
+edge density `0.000` at t0.5, t5, t12, t20, t30, and t42, with boundary-risk
+margin between `1.9%` and `10.1%`; the visible extent reported
+`padded · 1.08 × 1.02 · 9% margin`. The small late/mobile edge values in the
+responsive matrix are natural field occupancy inside the padded margin, not a
+flat wall or capsule. The lower horizon contact remains the physical ground
+plane. The shock stays shared and coherent: approximately `0.99×` horizontal
+shock/render extent from t12 onward, without adding bands.
+
+The candidate changes the early body from a white saturated wall to a broad,
+gray/thermally structured body; produces a substantial connected stem and a
+large, irregular rolling cap by t20–t30; preserves soot/dust depth and a
+warm/cool lower separation; and retains a visible, deforming final haze instead
+of dropping to an empty horizon. Mobile lets the large cloud crop naturally;
+the event is not shrunk to fit the portrait frame.
+
+Evidence is retained locally, uncommitted, under
+`scratch/castle-bravo-visual-refinement/`, including `diagnostics/baseline.json`,
+`diagnostics/candidate.json`, and `comparison.html`. The comparison is intended
+for user visual review. Ground Burst, Airburst, Tsar, camera, replay/reset,
+export parity, and the shared solver architecture remain regression boundaries;
+no approved preset was edited by this pass.
+
 ## Nuclear Ground Burst artistic tuning (2026-08)
 
 The post-containment baseline keeps the approved padded-domain transform intact
