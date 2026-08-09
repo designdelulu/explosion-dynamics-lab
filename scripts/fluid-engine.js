@@ -16,6 +16,47 @@ const TAU = Math.PI * 2;
 const MAX_OUTPUT_DIMENSION = 4096;
 const MAX_SEEK_SECONDS = 120;
 
+export function classifyBoundaryRisk({
+  activeCells = 0,
+  riskCells = 0,
+  physicalGroundContactCells = 0,
+  maxDensityAtEdge = {},
+  touchesMediumDensity = {},
+  groundCoupled = false,
+} = {}) {
+  const totalCells = Math.max(0, Math.floor(finite(activeCells, 0)));
+  const allRiskCells = Math.max(0, Math.floor(finite(riskCells, 0)));
+  const groundCells = groundCoupled
+    ? Math.min(
+      allRiskCells,
+      Math.max(0, Math.floor(finite(physicalGroundContactCells, 0))),
+    )
+    : 0;
+  const computationalRiskCells = Math.max(0, allRiskCells - groundCells);
+  const computationalEdges = groundCoupled
+    ? ["left", "right", "top"]
+    : ["left", "right", "bottom", "top"];
+  const edgeDensity = (edge) => Math.max(0, finite(maxDensityAtEdge[edge], 0));
+  const edgeTouchesMediumDensity = (edge) => Boolean(touchesMediumDensity[edge]);
+  return {
+    computationalRiskCells,
+    computationalRiskPercent: totalCells > 0 ? computationalRiskCells / totalCells : 0,
+    computationalEdgeDensity: Math.max(...computationalEdges.map(edgeDensity)),
+    computationalTouchesMediumDensity: Object.fromEntries(
+      computationalEdges.map((edge) => [edge, edgeTouchesMediumDensity(edge)]),
+    ),
+    physicalGroundContact: groundCoupled
+      ? {
+        expected: true,
+        cells: groundCells,
+        riskPercent: totalCells > 0 ? groundCells / totalCells : 0,
+        density: edgeDensity("bottom"),
+        touchesMediumDensity: edgeTouchesMediumDensity("bottom"),
+      }
+      : null,
+  };
+}
+
 const deepFreeze = (value) => {
   if (!value || typeof value !== 'object' || Object.isFrozen(value)) return value;
   for (const child of Object.values(value)) deepFreeze(child);
@@ -4602,8 +4643,10 @@ export class ResearchFluidEngine {
     const densityThresholdByte = Math.round(domain.densityThreshold / 4 * 255);
     const riskMarginX = Math.max(1, Math.round(this.gridWidth * domain.riskMargin));
     const riskMarginY = Math.max(1, Math.round(this.gridHeight * domain.riskMargin));
+    const groundCoupled = Number(this.profile.groundCoupling?.mode) > 0.5;
     let activeCells = 0;
     let riskCells = 0;
+    let physicalGroundContactCells = 0;
     let minX = this.gridWidth;
     let maxX = -1;
     let minY = this.gridHeight;
@@ -4627,8 +4670,13 @@ export class ResearchFluidEngine {
       maxX = Math.max(maxX, x);
       minY = Math.min(minY, y);
       maxY = Math.max(maxY, y);
-      if (x < riskMarginX || x >= this.gridWidth - riskMarginX
-        || y < riskMarginY || y >= this.gridHeight - riskMarginY) riskCells += 1;
+      const inSideMargin = x < riskMarginX || x >= this.gridWidth - riskMarginX;
+      const inBottomMargin = y < riskMarginY;
+      const inTopMargin = y >= this.gridHeight - riskMarginY;
+      if (inSideMargin || inBottomMargin || inTopMargin) riskCells += 1;
+      if (groundCoupled && inBottomMargin && !inSideMargin && !inTopMargin) {
+        physicalGroundContactCells += 1;
+      }
       if (x === 0) leftEdge = Math.max(leftEdge, density);
       if (x === this.gridWidth - 1) rightEdge = Math.max(rightEdge, density);
       if (y === 0) bottomEdge = Math.max(bottomEdge, density);
@@ -4647,6 +4695,26 @@ export class ResearchFluidEngine {
       threshold: domain.densityThreshold,
     } : null;
     this._metrics.activeDensityBounds = activeDensityBounds;
+    const maxDensityAtEdge = {
+      left: leftEdge / 255 * 4,
+      right: rightEdge / 255 * 4,
+      bottom: bottomEdge / 255 * 4,
+      top: topEdge / 255 * 4,
+    };
+    const touchesMediumDensity = {
+      left: leftEdge >= densityThresholdByte,
+      right: rightEdge >= densityThresholdByte,
+      bottom: bottomEdge >= densityThresholdByte,
+      top: topEdge >= densityThresholdByte,
+    };
+    const boundaryClassification = classifyBoundaryRisk({
+      activeCells,
+      riskCells,
+      physicalGroundContactCells,
+      maxDensityAtEdge,
+      touchesMediumDensity,
+      groundCoupled,
+    });
     const visibleBounds = this._renderDomain?.viewportFieldBounds || null;
     const viewportClearance = activeDensityBounds && visibleBounds ? {
       left: activeDensityBounds.minX - visibleBounds.left,
@@ -4659,18 +4727,9 @@ export class ResearchFluidEngine {
       activeCells,
       riskCells,
       riskPercent: activeCells > 0 ? riskCells / activeCells : 0,
-      maxDensityAtEdge: {
-        left: leftEdge / 255 * 4,
-        right: rightEdge / 255 * 4,
-        bottom: bottomEdge / 255 * 4,
-        top: topEdge / 255 * 4,
-      },
-      touchesMediumDensity: {
-        left: leftEdge >= densityThresholdByte,
-        right: rightEdge >= densityThresholdByte,
-        bottom: bottomEdge >= densityThresholdByte,
-        top: topEdge >= densityThresholdByte,
-      },
+      maxDensityAtEdge,
+      touchesMediumDensity,
+      ...boundaryClassification,
       // The viewport values distinguish natural offscreen continuation from a
       // scalar-grid collision. Negative clearance is permitted: it means the
       // camera has cropped an otherwise valid field, not that the renderer

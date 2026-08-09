@@ -9,6 +9,7 @@ import {
   RESEARCH_FLUID_SOURCE_PRIMITIVES,
   RESEARCH_FLUID_TIERS,
   ResearchFluidEngine,
+  classifyBoundaryRisk,
 } from "../scripts/fluid-engine.js";
 import { EVENT_PRESETS, PALETTES } from "../scripts/data.js";
 
@@ -19,6 +20,7 @@ const TSAR_ID = "tsar-bomba-scale-reference";
 const HIROSHIMA_ID = "hiroshima-scale-reference";
 const EARLY_FISSION_ID = "early-fission-test-scale";
 const RESEARCH_MODE_IDS = new Set([LOW_YIELD_ID, GROUND_BURST_ID, TSAR_ID]);
+const GROUND_COUPLED_IDS = new Set([GROUND_BURST_ID, CASTLE_BRAVO_ID, EARLY_FISSION_ID]);
 
 const tiers = Object.values(RESEARCH_FLUID_TIERS);
 assert.deepEqual(tiers.map(({ id }) => id), ["mobile", "balanced", "high"]);
@@ -222,9 +224,55 @@ assert.match(rendererBoundarySource, /outputWidth = Math\.max\(1, Math\.round\(w
 assert.match(rendererBoundarySource, /renderDomain\?\.volumeScale[\s\S]*?renderDomain\?\.sourceCenter/, "Developer stats must retain render-domain geometry for alignment diagnostics");
 const engineBoundarySource = readFileSync(new URL("../scripts/fluid-engine.js", import.meta.url), "utf8");
 assert.match(engineBoundarySource, /activeDensityBounds = activeCells > 0/, "Occupancy bounds must be computed from active scalar cells");
-assert.match(engineBoundarySource, /maxDensityAtEdge:[\s\S]*?touchesMediumDensity:/, "Boundary diagnostics must distinguish edge density from camera cropping");
+assert.match(engineBoundarySource, /maxDensityAtEdge\s*[=:][\s\S]*?touchesMediumDensity\s*[=:]/, "Boundary diagnostics must distinguish edge density from camera cropping");
+assert.match(engineBoundarySource, /computationalRiskPercent[\s\S]*?physicalGroundContact/, "Ground contact must be separated from computational boundary risk");
 assert.match(engineBoundarySource, /getRenderResolutionScale\(\)/, "Fluid engine must expose the profile render scale without preset-ID logic");
 assert.match(engineBoundarySource, /renderExtent: domain\.renderExtent ?/, "Render extent must be reported as part of the reusable domain contract");
+const appBoundarySource = readFileSync(new URL("../scripts/app.js", import.meta.url), "utf8");
+assert.match(appBoundarySource, /computationalEdgeDensity[\s\S]*?physicalGroundContact/, "Developer HUD must label computational edges separately from ground contact");
+
+const groundContactOnly = classifyBoundaryRisk({
+  activeCells: 100,
+  riskCells: 24,
+  physicalGroundContactCells: 24,
+  maxDensityAtEdge: { left: 0, right: 0, bottom: 0.52, top: 0 },
+  touchesMediumDensity: { left: false, right: false, bottom: true, top: false },
+  groundCoupled: true,
+});
+assert.equal(groundContactOnly.computationalRiskCells, 0,
+  "Ground-coupled bottom contact must not count as computational risk");
+assert.equal(groundContactOnly.computationalEdgeDensity, 0,
+  "Ground-coupled bottom density must not populate computational edge density");
+assert.equal(groundContactOnly.physicalGroundContact.density, 0.52,
+  "Ground contact density must remain available to diagnostics");
+assert.equal(groundContactOnly.physicalGroundContact.touchesMediumDensity, true,
+  "Ground contact medium-density state must remain available to diagnostics");
+
+const groundWithTopContact = classifyBoundaryRisk({
+  activeCells: 100,
+  riskCells: 24,
+  physicalGroundContactCells: 12,
+  maxDensityAtEdge: { left: 0, right: 0, bottom: 0.52, top: 0.21 },
+  touchesMediumDensity: { left: false, right: false, bottom: true, top: true },
+  groundCoupled: true,
+});
+assert.equal(groundWithTopContact.computationalRiskCells, 12,
+  "Ground-coupled top contact must remain computational risk");
+assert.equal(groundWithTopContact.computationalEdgeDensity, 0.21,
+  "Ground-coupled top density must populate computational edge density");
+
+const nonGroundBottomContact = classifyBoundaryRisk({
+  activeCells: 100,
+  riskCells: 24,
+  physicalGroundContactCells: 24,
+  maxDensityAtEdge: { left: 0, right: 0, bottom: 0.52, top: 0 },
+  touchesMediumDensity: { left: false, right: false, bottom: true, top: false },
+  groundCoupled: false,
+});
+assert.equal(nonGroundBottomContact.computationalRiskCells, 24,
+  "Non-ground profiles must not receive a bottom-contact exemption");
+assert.equal(nonGroundBottomContact.computationalEdgeDensity, 0.52,
+  "Non-ground bottom density must remain computational edge risk");
 
 // --- Ground-coupled source path (2026-07) -----------------------------------
 for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
@@ -240,6 +288,11 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
       `${presetId}: groundCoupling.${key} must be finite`);
   }
   const ground = profile.groundCoupling;
+  assert.equal(
+    ground.mode,
+    GROUND_COUPLED_IDS.has(presetId) ? 1 : 0,
+    `${presetId}: diagnostic ground-contact semantics must follow profile coupling mode`,
+  );
   if (presetId === CASTLE_BRAVO_ID) {
     assert.equal(ground.mode, 1, "Castle Bravo must activate only the reusable ground-coupling path for its surface interaction");
     assert.ok(ground.radialImpulse > 0 && ground.radialImpulse < 0.42);
