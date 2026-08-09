@@ -851,7 +851,7 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       eventFamilyId: 'nuclear-scale', eventFamily: 'Nuclear scale · early fission reference', profileKind: 12,
       tracerType: 'particulate',
       sourcePrimitives: ['radial-impulse', 'ground-sheet', 'vertical-jet', 'multiple-offset-kernels', 'paired-cap-vortices'],
-      source: { centerY: 0.21, groundLevel: 0.18, radius: 0.062, aspectX: 1.16, aspectY: 0.82, onsetEnd: 0.05, sustainEnd: 0.72, radial: 1.08, vertical: 1.3, turbulence: 1.18, heat: 1.16, smoke: 1.25, incandescent: 1.0, dust: 1.3, capScale: 1.06, capRoll: 1.1, capVertical: 0.48, clusterSpread: 1.14 },
+      source: { centerY: 0.21, groundLevel: 0.18, radius: 0.062, aspectX: 1.16, aspectY: 0.82, onsetEnd: 0.05, sustainEnd: 0.80, radial: 1.08, vertical: 1.3, turbulence: 1.18, heat: 1.16, smoke: 1.25, incandescent: 1.0, dust: 1.3, capScale: 1.06, capRoll: 1.1, capVertical: 0.48, clusterSpread: 1.14 },
       physics: { buoyancy: 1.22, densityLoading: 0.78, windCoupling: 0.92, vorticity: 1.45, velocityRetention: 0.992, cooling: 0.88, smokeConversion: 1.05, scalarRetention: 0.9997 },
       volume: { scaleX: 1.28, scaleY: 1.16, depth: 1.08, opacity: 1.06, shadow: 1.22, bloom: 0.92, distortion: 1.04, erosion: 1.08, noiseScale: 1.18, dustVisibility: 1.18, exposure: 1.02, toneMap: 0.12, backgroundIllumination: 0.2, emissionCurve: 0.88 },
       quality: { grid: 1, pressure: 1, rays: 1, tracers: 1.1, detail: 1 },
@@ -912,7 +912,7 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       },
       dissipation: {
         mode: 1,
-        lateStart: 0.72,
+        lateStart: 0.76,
         finalStart: 1.0,
         sourceTaperEnd: 1.0,
         retentionFloorSmoke: 1.0,

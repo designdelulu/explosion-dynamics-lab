@@ -649,6 +649,8 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
   } else if (presetId === EARLY_FISSION_ID) {
     const d = profile.dissipation;
     assert.equal(d.mode, 1, "Early Fission must enable a profile-local late-motion tail");
+    assert.equal(profile.source.sustainEnd, 0.8, "Early Fission source sustain must extend beyond the previous late-phase handoff");
+    assert.equal(d.lateStart, 0.76, "Early Fission late dissipation must begin after the source handoff");
     assert.ok(d.lateStart > 0.5 && d.lateStart < d.sourceTaperEnd);
     assert.equal(d.finalStart, 1);
     assert.equal(d.sourceTaperEnd, 1);
