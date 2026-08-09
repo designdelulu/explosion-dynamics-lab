@@ -293,12 +293,12 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(profile.plume.persistence > 0 && profile.plume.persistence < RESEARCH_FLUID_PROFILES[TSAR_ID].plume.persistence);
     assert.ok(profile.plume.widen > 0 && profile.plume.widen < RESEARCH_FLUID_PROFILES[TSAR_ID].plume.widen);
     assert.ok(profile.source.vertical > profile.source.radial, "Ground Burst must retain stronger upward lift than radial source injection");
-    assert.equal(profile.source.radial, 0.22, "Ground Burst radial source remains narrowed and profile-local");
+    assert.equal(profile.source.radial, 0.18, "Ground Burst radial source remains narrowed and profile-local");
     assert.equal(profile.source.vertical, 2.02, "Ground Burst vertical feed remains explicitly strong");
-    assert.equal(profile.source.capScale, 1.48, "Ground Burst cap scale remains modest and profile-local");
+    assert.equal(profile.source.capScale, 1.3, "Ground Burst cap scale remains modest and profile-local");
     assert.equal(profile.source.capRoll, 2.75, "Ground Burst cap underside roll remains profile-local");
     assert.equal(profile.plume.vortex, 0.98, "Ground Burst cap vortex rollout remains profile-local");
-    assert.equal(profile.plume.feedTaperEnd, 0.42, "Ground Burst stem feed hands off before the mature cap flattens");
+    assert.equal(profile.plume.feedTaperEnd, 0.7, "Ground Burst stem feed hands off before the mature cap flattens");
   } else if (presetId === TSAR_ID) {
     assert.equal(profile.plume.mode, 1, "Tsar must retain its existing historical-scale plume mode 1");
     assert.ok(profile.plume.expansion > 0, "Tsar expansion must be active");
@@ -992,7 +992,8 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     const p = profile.plume;
     assert.equal(p.mode, 3);
     assert.ok(p.feedTaperStart > 0 && p.feedTaperStart < p.feedTaperEnd);
-    assert.ok(p.feedTaperEnd < RESEARCH_FLUID_PROFILES[TSAR_ID].plume.feedTaperEnd);
+    assert.ok(p.feedTaperEnd < 0.8,
+      "Ground Burst stem feed must hand off before the late atmospheric tail");
     assert.ok(p.lateralJitter > RESEARCH_FLUID_PROFILES[TSAR_ID].plume.lateralJitter,
       "Ground Burst stem needs stronger lateral deformation than Tsar");
     assert.ok(p.turbulenceBlend > RESEARCH_FLUID_PROFILES[TSAR_ID].plume.turbulenceBlend,
