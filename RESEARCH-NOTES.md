@@ -924,3 +924,80 @@ t19–t20 the cap/stem mass spreads into a low ground haze and the final frame
 does not retain a strong upper cloud. This remains a profile-specific artistic
 defect; no renderer-wide, camera, shockwave, wind, or quality change is
 indicated.
+
+## Underground Detonation visual diagnosis (2026-08)
+
+The fresh deterministic seed-1842 Cinematic baseline was captured in one
+hardware-accelerated Chrome session with WebGL2, GPU FLUID, no fallback, no
+reported GL error, and no application-origin error at 1440 × 900
+Balanced/High, 768 × 1024 Balanced, 1024 × 768 Balanced, and 390 × 844 Mobile.
+The preset timeline ends at `15.4 s`; the requested t20/t30 checkpoints were
+therefore replaced by `t14.4` (late) and `t15.4` (final).
+
+1. **The profile is still on a legacy fluid path.** Underground currently has
+   `domain.mode: 0`, zero padding, neutral render overscan/extent,
+   `groundCoupling.mode: 0`, `plume.mode: 0`, `material.mode: 0`,
+   `dissipation.mode: 0`, `core.mode: 0`, `edge.mode: 0`, and a neutral
+   shockwave profile. The preset metadata identifies the event as
+   ground-coupled and below-surface (`defaultAltitude: -0.18`), but the fluid
+   profile has not yet opted into the reusable padded/ground-aware systems.
+   This explains both the legacy visible-volume diagnostic and why the newer
+   ground-contact distinction is not active for this profile.
+2. **The nonzero aggregate edge signal is lower physical contact, not a roof or
+   side wall.** Direct per-edge readback found top, left, and right density at
+   `0.000` at representative stages in every viewport. The only nonzero edge
+   was bottom: desktop High reached approximately `0.408` at t9 and `0.533`
+   at t12; tablet portrait reached `0.361` and `0.502`; tablet landscape
+   reached `0.298` and `0.392`; Mobile reached `0.157` at t9 and `0.141` at
+   t12. The bottom signal receded by late/final checkpoints. No screenshot
+   showed a flat computational roof, hard side wall, capsule, rectangular
+   haze slab, or fallback. Because `groundCoupling.mode` is still neutral,
+   the aggregate legacy edge field currently overstates computational risk by
+   treating expected lower contact as computational. The retained correction
+   should activate existing ground semantics and report bottom contact
+   separately; it must not add a mask or enlarge the domain solely to erase
+   this physical contact.
+3. **The early breakthrough reads as a smooth vertical pillar.** At t0.5 the
+   source is a narrow dark column with a faint surface ring. From t3 through
+   t9 the upper material becomes a broad, smooth, nearly symmetric dark wall
+   with a narrow bright center feed and a bright lower ejecta skirt. The
+   current source values (`vertical: 1.55`, `dust: 2.25`, `ejecta: 1.65`) are
+   directionally appropriate, but the neutral plume/ground paths provide no
+   profile-local rollout, asymmetry, or feed handoff to break the cylindrical
+   silhouette.
+4. **Ground interaction is heavy but visually homogeneous.** The base remains
+   attached to the surface and the radial ground response is visible, yet the
+   skirt is broad and smooth rather than articulated ejecta. Neutral material
+   shading combined with `opacity: 1.55`, `shadow: 1.55`, `dustVisibility: 2`,
+   and `exposure: 0.78` compresses front/middle/rear particulate depth into a
+   dark wall with a pale lower sheet. There is no soot/dust separation,
+   warm/cool contrast, or interior-depth weighting in the fluid profile.
+5. **The late state loses the upper event too quickly.** At t12 the upper
+   column is already faint; t14.4 and t15.4 are dominated by low haze and a
+   barely legible vertical remnant. Neutral dissipation, scalar retention
+   without profile-local motion controls, and the data timeline's
+   `dissipation` phase cause the material to lose readable upper structure
+   rather than deforming through a sustained particulate tail. This is an
+   artistic late-motion/material problem, not boundary extinction.
+6. **Mobile is readable early but under-composed late.** At 390 × 844 the
+   breakthrough remains centered and the event continues naturally offscreen
+   without exposing a solver container. The t3/t7 column is comparatively
+   small in the portrait frame, while t12/final reduce to a low, faint haze;
+   the problem is loss of useful late material, not excessive camera pullback
+   or a visible computational boundary. A profile-local composition change is
+   not yet justified before testing the existing plume/material/late controls.
+7. **The shock treatment is coherent but visually over-assertive by contrast.**
+   The neutral analytical shock remains in the shared event space and reports
+   no smoke/shock boundary mismatch. Its early presence reads strongly only
+   because the fluid body is smooth and under-layered. No additional bands are
+   justified by this baseline.
+
+The smallest existing-system correction path is therefore profile-local:
+activate the reusable ground-aware/padded-domain path only as needed to encode
+the already-observed physical contact and preserve top/side clearance; then
+introduce restrained ground-coupled plume shaping, structured particulate
+material, and a late-motion tail. Source scale, camera, shockwave, wind,
+overlays, quality budgets, and all approved neighboring presets remain
+regression locks. The result must remain subsurface-driven rather than
+converging on Ground Burst, Meteor Impact, Volcanic Eruption, or a generic
+conventional explosion.
