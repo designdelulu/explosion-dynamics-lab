@@ -14,6 +14,7 @@ import { EVENT_PRESETS, PALETTES } from "../scripts/data.js";
 
 const LOW_YIELD_ID = "low-yield-nuclear-airburst";
 const GROUND_BURST_ID = "nuclear-ground-burst";
+const CASTLE_BRAVO_ID = "castle-bravo-scale-reference";
 const TSAR_ID = "tsar-bomba-scale-reference";
 const RESEARCH_MODE_IDS = new Set([LOW_YIELD_ID, GROUND_BURST_ID, TSAR_ID]);
 
@@ -149,7 +150,14 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(Number.isFinite(profile.domain[key]), `${presetId}: domain.${key} must be finite`);
   }
   assert.ok(profile.domain.renderScale !== undefined, `${presetId}: domain.renderScale missing`);
-  if (presetId === GROUND_BURST_ID) {
+  if (presetId === CASTLE_BRAVO_ID) {
+    assert.equal(profile.domain.mode, 1, "Castle Bravo must activate the reusable padded-domain path");
+    assert.equal(profile.domain.padding, 0.09, "Castle Bravo boundary padding must remain profile-local");
+    assert.equal(profile.domain.renderOverscan, 1.05, "Castle Bravo render overscan must remain profile-local");
+    assert.deepEqual(profile.domain.renderScale, { mobile: 1, balanced: 0.76, high: 0.82 });
+    assert.deepEqual(profile.domain.renderExtent, { x: 1.58, y: 1.44 });
+    assert.ok(profile.domain.riskMargin > 0 && profile.domain.densityThreshold > 0);
+  } else if (presetId === GROUND_BURST_ID) {
     assert.equal(profile.domain.mode, 1, "Ground Burst must activate the reusable padded-domain path");
     assert.ok(profile.domain.padding > 0 && profile.domain.padding < 0.3);
     assert.ok(profile.domain.renderOverscan > 1);

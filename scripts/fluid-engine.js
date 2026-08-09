@@ -840,6 +840,20 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       physics: { buoyancy: 0.96, densityLoading: 1.32, windCoupling: 1.3, vorticity: 1.42, velocityRetention: 0.995, cooling: 0.72, smokeConversion: 1.15, scalarRetention: 0.9996 },
       volume: { scaleX: 1.36, scaleY: 1.34, depth: 1.35, opacity: 1.42, shadow: 1.55, bloom: 1.32, distortion: 1.22, erosion: 0.92, noiseScale: 1.02, dustVisibility: 1.55, exposure: 1.1, toneMap: 0.1, backgroundIllumination: 0.34, emissionCurve: 0.84 },
       quality: { grid: 1.08, pressure: 1.1, rays: 1.12, tracers: 1.3, detail: 1.15 },
+      // Castle Bravo reaches the shared solver roof and side cells at dense
+      // mid-phase. Opt into the approved padded-domain transform with a
+      // profile-local margin and render extent; the event remains large enough
+      // to crop naturally on portrait screens, while valid samples and the
+      // physical ground plane stay intact. This is not an extinction mask.
+      domain: {
+        mode: 1,
+        padding: 0.09,
+        renderOverscan: 1.05,
+        renderScale: { mobile: 1, balanced: 0.76, high: 0.82 },
+        renderExtent: { x: 1.58, y: 1.44 },
+        riskMargin: 0.07,
+        densityThreshold: 0.14,
+      },
     },
   ),
   'tsar-bomba-scale-reference': defineFluidProfile(
