@@ -814,6 +814,18 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       physics: { buoyancy: 0.84, densityLoading: 1.3, windCoupling: 0.92, vorticity: 1.3, velocityRetention: 0.988, cooling: 1.05, smokeConversion: 1.15, scalarRetention: 0.998 },
       volume: { scaleX: 1.34, scaleY: 1.12, depth: 1.05, opacity: 1.3, shadow: 1.35, bloom: 1.02, distortion: 1.02, erosion: 1.08, noiseScale: 1.22, dustVisibility: 1.6, exposure: 1.05, toneMap: 0.08, backgroundIllumination: 0.2, emissionCurve: 0.88 },
       quality: { grid: 1, pressure: 1, rays: 1, tracers: 1.1, detail: 1 },
+      // Use the approved padded-domain transform for the profile's measured
+      // solver-roof risk. This reserves valid solver cells without shrinking
+      // the source, changing the physical ground plane, or adding a mask.
+      domain: {
+        mode: 1,
+        padding: 0.08,
+        renderOverscan: 1.04,
+        renderScale: 1,
+        renderExtent: { x: 1.12, y: 1.16 },
+        riskMargin: 0.07,
+        densityThreshold: 0.14,
+      },
     },
   ),
   'hiroshima-scale-reference': defineFluidProfile(
