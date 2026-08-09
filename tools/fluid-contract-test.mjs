@@ -9,6 +9,7 @@ import {
   RESEARCH_FLUID_SOURCE_PRIMITIVES,
   RESEARCH_FLUID_TIERS,
   ResearchFluidEngine,
+  classifyBoundaryRisk,
 } from "../scripts/fluid-engine.js";
 import { EVENT_PRESETS, PALETTES } from "../scripts/data.js";
 
@@ -17,7 +18,9 @@ const GROUND_BURST_ID = "nuclear-ground-burst";
 const CASTLE_BRAVO_ID = "castle-bravo-scale-reference";
 const TSAR_ID = "tsar-bomba-scale-reference";
 const HIROSHIMA_ID = "hiroshima-scale-reference";
+const EARLY_FISSION_ID = "early-fission-test-scale";
 const RESEARCH_MODE_IDS = new Set([LOW_YIELD_ID, GROUND_BURST_ID, TSAR_ID]);
+const GROUND_COUPLED_IDS = new Set([GROUND_BURST_ID, CASTLE_BRAVO_ID, EARLY_FISSION_ID]);
 
 const tiers = Object.values(RESEARCH_FLUID_TIERS);
 assert.deepEqual(tiers.map(({ id }) => id), ["mobile", "balanced", "high"]);
@@ -170,6 +173,13 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(profile.domain.renderExtent?.x >= 1.5 && profile.domain.renderExtent?.x <= 1.65);
     assert.ok(profile.domain.renderExtent?.y >= 1.2 && profile.domain.renderExtent?.y <= 1.5);
     assert.ok(profile.domain.riskMargin > 0 && profile.domain.densityThreshold > 0);
+  } else if (presetId === EARLY_FISSION_ID) {
+    assert.equal(profile.domain.mode, 1, "Early Fission must use the audited padded-domain path");
+    assert.equal(profile.domain.padding, 0.08, "Early Fission boundary padding must remain profile-local");
+    assert.equal(profile.domain.renderOverscan, 1.04, "Early Fission render overscan must remain profile-local");
+    assert.equal(profile.domain.renderScale, 1, "Early Fission must retain the shared tier render scale");
+    assert.deepEqual(profile.domain.renderExtent, { x: 1.12, y: 1.16 });
+    assert.ok(profile.domain.riskMargin > 0 && profile.domain.densityThreshold > 0);
   } else {
     assert.equal(profile.domain.mode, 0, `${presetId}: domain path must remain neutral pending its own audit`);
     assert.equal(profile.domain.padding, 0, `${presetId}: domain padding must remain neutral`);
@@ -214,9 +224,55 @@ assert.match(rendererBoundarySource, /outputWidth = Math\.max\(1, Math\.round\(w
 assert.match(rendererBoundarySource, /renderDomain\?\.volumeScale[\s\S]*?renderDomain\?\.sourceCenter/, "Developer stats must retain render-domain geometry for alignment diagnostics");
 const engineBoundarySource = readFileSync(new URL("../scripts/fluid-engine.js", import.meta.url), "utf8");
 assert.match(engineBoundarySource, /activeDensityBounds = activeCells > 0/, "Occupancy bounds must be computed from active scalar cells");
-assert.match(engineBoundarySource, /maxDensityAtEdge:[\s\S]*?touchesMediumDensity:/, "Boundary diagnostics must distinguish edge density from camera cropping");
+assert.match(engineBoundarySource, /maxDensityAtEdge\s*[=:][\s\S]*?touchesMediumDensity\s*[=:]/, "Boundary diagnostics must distinguish edge density from camera cropping");
+assert.match(engineBoundarySource, /computationalRiskPercent[\s\S]*?physicalGroundContact/, "Ground contact must be separated from computational boundary risk");
 assert.match(engineBoundarySource, /getRenderResolutionScale\(\)/, "Fluid engine must expose the profile render scale without preset-ID logic");
 assert.match(engineBoundarySource, /renderExtent: domain\.renderExtent ?/, "Render extent must be reported as part of the reusable domain contract");
+const appBoundarySource = readFileSync(new URL("../scripts/app.js", import.meta.url), "utf8");
+assert.match(appBoundarySource, /computationalEdgeDensity[\s\S]*?physicalGroundContact/, "Developer HUD must label computational edges separately from ground contact");
+
+const groundContactOnly = classifyBoundaryRisk({
+  activeCells: 100,
+  riskCells: 24,
+  physicalGroundContactCells: 24,
+  maxDensityAtEdge: { left: 0, right: 0, bottom: 0.52, top: 0 },
+  touchesMediumDensity: { left: false, right: false, bottom: true, top: false },
+  groundCoupled: true,
+});
+assert.equal(groundContactOnly.computationalRiskCells, 0,
+  "Ground-coupled bottom contact must not count as computational risk");
+assert.equal(groundContactOnly.computationalEdgeDensity, 0,
+  "Ground-coupled bottom density must not populate computational edge density");
+assert.equal(groundContactOnly.physicalGroundContact.density, 0.52,
+  "Ground contact density must remain available to diagnostics");
+assert.equal(groundContactOnly.physicalGroundContact.touchesMediumDensity, true,
+  "Ground contact medium-density state must remain available to diagnostics");
+
+const groundWithTopContact = classifyBoundaryRisk({
+  activeCells: 100,
+  riskCells: 24,
+  physicalGroundContactCells: 12,
+  maxDensityAtEdge: { left: 0, right: 0, bottom: 0.52, top: 0.21 },
+  touchesMediumDensity: { left: false, right: false, bottom: true, top: true },
+  groundCoupled: true,
+});
+assert.equal(groundWithTopContact.computationalRiskCells, 12,
+  "Ground-coupled top contact must remain computational risk");
+assert.equal(groundWithTopContact.computationalEdgeDensity, 0.21,
+  "Ground-coupled top density must populate computational edge density");
+
+const nonGroundBottomContact = classifyBoundaryRisk({
+  activeCells: 100,
+  riskCells: 24,
+  physicalGroundContactCells: 24,
+  maxDensityAtEdge: { left: 0, right: 0, bottom: 0.52, top: 0 },
+  touchesMediumDensity: { left: false, right: false, bottom: true, top: false },
+  groundCoupled: false,
+});
+assert.equal(nonGroundBottomContact.computationalRiskCells, 24,
+  "Non-ground profiles must not receive a bottom-contact exemption");
+assert.equal(nonGroundBottomContact.computationalEdgeDensity, 0.52,
+  "Non-ground bottom density must remain computational edge risk");
 
 // --- Ground-coupled source path (2026-07) -----------------------------------
 for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
@@ -232,6 +288,11 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
       `${presetId}: groundCoupling.${key} must be finite`);
   }
   const ground = profile.groundCoupling;
+  assert.equal(
+    ground.mode,
+    GROUND_COUPLED_IDS.has(presetId) ? 1 : 0,
+    `${presetId}: diagnostic ground-contact semantics must follow profile coupling mode`,
+  );
   if (presetId === CASTLE_BRAVO_ID) {
     assert.equal(ground.mode, 1, "Castle Bravo must activate only the reusable ground-coupling path for its surface interaction");
     assert.ok(ground.radialImpulse > 0 && ground.radialImpulse < 0.42);
@@ -256,6 +317,17 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(ground.surfaceHeat > 0 && ground.baseDust > ground.surfaceHeat);
     assert.ok(ground.transitionLift > 0 && ground.lateGroundDrift > 0);
     assert.equal(profile.physicalFamilyId, "ground-coupled");
+  } else if (presetId === EARLY_FISSION_ID) {
+    assert.equal(ground.mode, 1, "Early Fission must use the profile-local ground-coupling path");
+    assert.ok(ground.radialImpulse > 0 && ground.radialImpulse < 0.42);
+    assert.ok(ground.spreadWidth > 0 && ground.spreadWidth < 0.42);
+    assert.ok(ground.heightFalloff > 1);
+    assert.ok(ground.horizontalRetention > 0 && ground.horizontalRetention < 1);
+    assert.ok(ground.verticalDamping > 0 && ground.verticalDamping < 1);
+    assert.ok(ground.spreadStart >= 0 && ground.spreadStart < ground.spreadEnd && ground.spreadEnd < 0.5);
+    assert.ok(ground.angularVariation > 0 && ground.asymmetry > 0);
+    assert.ok(ground.surfaceHeat > 0 && ground.baseDust > ground.surfaceHeat);
+    assert.ok(ground.transitionLift > 0 && ground.lateGroundDrift > 0);
   } else {
     assert.equal(ground.mode, 0, `${presetId}: ground coupling must remain neutral`);
     assert.equal(ground.radialImpulse, 0);
@@ -319,6 +391,15 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.equal(profile.source.capRoll, 2.75, "Ground Burst cap underside roll remains profile-local");
     assert.equal(profile.plume.vortex, 0.98, "Ground Burst cap vortex rollout remains profile-local");
     assert.equal(profile.plume.feedTaperEnd, 0.7, "Ground Burst stem feed hands off before the mature cap flattens");
+  } else if (presetId === EARLY_FISSION_ID) {
+    assert.equal(profile.plume.mode, 3, "Early Fission must use the ground-coupled broad-plume mode");
+    assert.ok(profile.plume.expansion > 0 && profile.plume.expansion < RESEARCH_FLUID_PROFILES[TSAR_ID].plume.expansion);
+    assert.ok(profile.plume.vortex > 0 && profile.plume.vortex < RESEARCH_FLUID_PROFILES[TSAR_ID].plume.vortex);
+    assert.ok(profile.plume.persistence > 0 && profile.plume.persistence < RESEARCH_FLUID_PROFILES[TSAR_ID].plume.persistence);
+    assert.ok(profile.plume.widen > 0 && profile.plume.widen < RESEARCH_FLUID_PROFILES[TSAR_ID].plume.widen);
+    assert.ok(profile.source.vertical > profile.source.radial, "Early Fission must rise before lateral rollout");
+    assert.ok(profile.plume.feedTaperStart > 0 && profile.plume.feedTaperStart < profile.plume.feedTaperEnd);
+    assert.ok(profile.plume.feedTaperEnd < 0.8);
   } else if (presetId === CASTLE_BRAVO_ID) {
     assert.equal(profile.plume.mode, 3, "Castle Bravo must use the ground-coupled broad-plume mode");
     assert.ok(profile.plume.expansion > 0 && profile.plume.expansion < RESEARCH_FLUID_PROFILES[TSAR_ID].plume.expansion);
@@ -407,6 +488,13 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(profile.material.warmCoolContrast > 0, "Hiroshima must separate warm and cool material");
     assert.equal(profile.material.detailOctaveMode, 0, "Hiroshima must not activate a third detail octave");
     assert.ok(profile.material.interiorDepth > 0, "Hiroshima must use the existing interior-depth weighting");
+  } else if (presetId === EARLY_FISSION_ID) {
+    assert.equal(profile.material.mode, 1, "Early Fission must enable structured smoke material");
+    assert.ok(profile.material.sootAbsorption > profile.material.dustAbsorption);
+    assert.equal(profile.material.detailBoost, 0, "Early Fission must retain the two-octave detail path");
+    assert.ok(profile.material.warmCoolContrast > 0);
+    assert.equal(profile.material.detailOctaveMode, 0, "Early Fission must not activate a third detail octave");
+    assert.ok(profile.material.interiorDepth > 0);
   } else {
     assert.equal(profile.material.mode, 0, `${presetId}: smoke-material mode must remain neutral`);
     assert.equal(profile.material.sootAbsorption, 1, `${presetId}: default soot absorption must stay neutral`);
@@ -558,6 +646,19 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(d.motionDamp > 0 && d.outwardBoost >= 0);
     assert.ok(d.lateVelocityRetention > profile.physics.velocityRetention && d.lateVelocityRetention < 1);
     assert.ok(d.lateCurl > 0 && d.lateShear > 0 && d.latePhaseRate > 0);
+  } else if (presetId === EARLY_FISSION_ID) {
+    const d = profile.dissipation;
+    assert.equal(d.mode, 1, "Early Fission must enable a profile-local late-motion tail");
+    assert.equal(profile.source.sustainEnd, 0.8, "Early Fission source sustain must extend beyond the previous late-phase handoff");
+    assert.equal(d.lateStart, 0.76, "Early Fission late dissipation must begin after the source handoff");
+    assert.ok(d.lateStart > 0.5 && d.lateStart < d.sourceTaperEnd);
+    assert.equal(d.finalStart, 1);
+    assert.equal(d.sourceTaperEnd, 1);
+    assert.equal(d.retentionFloorSmoke, 1, "Early Fission smoke must retain its late visual mass");
+    assert.ok(d.retentionFloorDust < d.retentionFloorSmoke && d.retentionFloorDust > 0);
+    assert.ok(d.motionDamp > 0 && d.outwardBoost > 0);
+    assert.ok(d.lateVelocityRetention > profile.physics.velocityRetention && d.lateVelocityRetention < 1);
+    assert.ok(d.lateCurl > 0 && d.lateShear > 0 && d.latePhaseRate > 0);
   } else {
     const d = profile.dissipation;
     assert.equal(d.mode, 0, `${presetId}: late-dissipation mode must remain off for non-target presets`);
@@ -654,6 +755,13 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
   } else if (presetId === HIROSHIMA_ID) {
     const c = profile.core;
     assert.equal(c.mode, 1, "Hiroshima must enable structured-core roll-off");
+    assert.ok(c.highlightThreshold > 1.5);
+    assert.ok(c.highlightSharpness > 2);
+    assert.ok(c.structureBlend > 0 && c.structureBlend <= 1);
+    assert.ok(c.bloomGateScale > 0 && c.bloomGateScale < RESEARCH_FLUID_PROFILES[TSAR_ID].core.bloomGateScale);
+  } else if (presetId === EARLY_FISSION_ID) {
+    const c = profile.core;
+    assert.equal(c.mode, 1, "Early Fission must enable structured-core roll-off");
     assert.ok(c.highlightThreshold > 1.5);
     assert.ok(c.highlightSharpness > 2);
     assert.ok(c.structureBlend > 0 && c.structureBlend <= 1);
@@ -1176,6 +1284,19 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.equal(p.feedTaperEnd, 0.88, "Hiroshima stem feed handoff must remain profile-local");
     assert.equal(p.lateralJitter, 0.1, "Hiroshima stem lateral decorrelation must remain profile-local");
     assert.equal(p.turbulenceBlend, 0.035, "Hiroshima stem turbulence blend must remain profile-local");
+  } else if (presetId === EARLY_FISSION_ID) {
+    const s = profile.shockwave;
+    assert.equal(s.mode, 0, "Early Fission must retain the shared neutral shockwave treatment");
+    for (const ringKey of ["ringB", "ringC", "ringD"]) {
+      assert.equal(s[ringKey].strength, 0, `Early Fission shockwave.${ringKey}.strength must stay neutral`);
+      assert.equal(s[ringKey].widthScale, 1, `Early Fission shockwave.${ringKey}.widthScale must stay neutral`);
+      assert.equal(s[ringKey].radiusOffset, 0, `Early Fission shockwave.${ringKey}.radiusOffset must stay neutral`);
+    }
+    const p = profile.plume;
+    assert.equal(p.feedTaperStart, 0.46, "Early Fission stem feed taper must remain profile-local");
+    assert.equal(p.feedTaperEnd, 0.7, "Early Fission stem feed handoff must remain profile-local");
+    assert.equal(p.lateralJitter, 0.4, "Early Fission stem lateral decorrelation must remain profile-local");
+    assert.equal(p.turbulenceBlend, 0.22, "Early Fission stem turbulence blend must remain profile-local");
   } else {
     const s = profile.shockwave;
     assert.equal(s.mode, 0, `${presetId}: shockwave mode must remain neutral`);

@@ -1048,9 +1048,15 @@ function updateFluidDebugOverlay(stats) {
     ? `x ${bounds.minX.toFixed(2)}–${bounds.maxX.toFixed(2)} · y ${bounds.minY.toFixed(2)}–${bounds.maxY.toFixed(2)}`
     : "inactive";
   const risk = metrics.boundaryRisk;
-  const maxEdgeDensity = risk ? Math.max(...Object.values(risk.maxDensityAtEdge || { value: 0 })) : 0;
+  const computationalRiskPercent = risk?.computationalRiskPercent ?? risk?.riskPercent ?? 0;
+  const computationalEdgeDensity = risk?.computationalEdgeDensity
+    ?? (risk ? Math.max(...Object.values(risk.maxDensityAtEdge || { value: 0 })) : 0);
+  const groundContact = risk?.physicalGroundContact;
+  const groundContactLabel = groundContact?.expected
+    ? ` · ground ${groundContact.density.toFixed(3)}`
+    : "";
   elements.debugBoundaryRisk.textContent = risk
-    ? `${(risk.riskPercent * 100).toFixed(1)}% in margin · edge ${maxEdgeDensity.toFixed(3)}`
+    ? `${(computationalRiskPercent * 100).toFixed(1)}% computational margin · edge ${computationalEdgeDensity.toFixed(3)}${groundContactLabel}`
     : "not sampled";
   const renderDomain = stats.renderDomain;
   elements.debugRenderExtent.textContent = renderDomain

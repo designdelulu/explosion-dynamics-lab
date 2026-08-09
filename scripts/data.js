@@ -294,7 +294,7 @@ export const EVENT_RENDERER_MODELS = deepFreeze({
     familyId: "nuclear-scale",
     family: "Nuclear scale · early fission reference",
     profileId: "early-fission-reference-fluid-v1",
-    sourcePrimitives: ["radial-impulse", "ground-sheet", "vertical-jet", "paired-cap-vortices"]
+    sourcePrimitives: ["radial-impulse", "ground-sheet", "vertical-jet", "multiple-offset-kernels", "paired-cap-vortices"]
   },
   "hiroshima-scale-reference": {
     familyId: "nuclear-scale",

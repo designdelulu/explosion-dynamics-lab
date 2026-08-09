@@ -825,3 +825,102 @@ sharpness `2.4`, structure blend `0.35`, and bloom gate `5.5`; `detailOctaveMode
 stays `0`. The late tail is profile-local and restrained (`lateStart: 0.72`,
 `finalStart: 0.95`, `sourceTaperEnd: 0.84`, smoke floor `0.9995`, dust floor
 `0.9988`, late velocity retention `0.994`, curl `0.002`, shear `0.0015`).
+
+## Early Fission Test Scale visual diagnosis (2026-08)
+
+The fresh deterministic seed-1842 Cinematic baseline was captured in Chrome
+with WebGL2, GPU FLUID, no fallback, and no app-origin console errors at
+1440 × 900 Balanced/High, 768 × 1024 Balanced, 1024 × 768 Balanced, and
+390 × 844 Mobile. The preset timeline ends at 26 seconds, so `t24` and final
+`t26` replace the requested `t30` checkpoint.
+
+1. **Profile-local solver-roof risk.** The profile starts with the neutral
+   `domain.mode: 0`, `edge.mode: 0`, legacy visible extent, and no padded
+   render coordinate margin. At t15 the active field reaches `y 0.00` in all
+   desktop/tablet views and reports edge risk from `0.153` to `0.392`; at t20
+   it remains near the top with edge risk up to `0.173`. Side bounds stay well
+   inside the field (`x` approximately `0.11–0.89` at t15), so the dominant
+   risk is the computational roof rather than a physical ground contact or a
+   side-wall artifact. The visible plume does not yet form a clean rectangular
+   wall, but the diagnostics justify the existing padded-domain architecture
+   for this profile. No new extinction mask is indicated.
+2. **Featureless early thermal body.** At t0.5 the source reads as a smooth,
+   pale dome with a narrow white vertical nozzle. By t5 the thermal column is
+   nearly a full-height bright cylinder. The cause is the inherited neutral
+   core/material path (`core.mode: 0`, `material.mode: 0`, warm/cool contrast
+   `0`, interior depth `0`) combined with high dust visibility `1.6`, opacity
+   `1.3`, and shadow `1.35`; there is no structured highlight gate or
+   soot/dust optical separation to break the body into readable material.
+3. **Weak stem/cap handoff.** The neutral plume path (`plume.mode: 0`) leaves
+   the vertical source feed at its generic taper and supplies no profile-local
+   expansion, vortex, widening, lateral jitter, or turbulence blend. The
+   result is a thin, straight, cylindrical stem that does not hand off into a
+   rising cap. At t12–t15 the visible lower cloud is a flat, surface-level
+   horizontal ring/skirt, while the upper shaft continues toward the solver
+   roof. The cause is the small `capScale: 0.88`, `capRoll: 0.85`, `capVertical:
+   0.43` source balance plus neutral ground coupling; the physical surface
+   contact is legitimate, but the cap shape is not yet convincing.
+4. **Insufficient late persistence.** With `dissipation.mode: 0`, the field
+   becomes sparse by t20 and inactive by t24–t26 across the captured views.
+   The short source sustain (`0.46`), cooling `1.05`, and lack of profile-local
+   late velocity retention/curl/shear leave little active cloud after the
+   surface ring. This is an artistic persistence/deformation defect, not a
+   boundary extinction mask.
+5. **Shockwave is coherent but over-dominant by comparison.** The neutral
+   analytical shockwave remains event-space coherent (`shock/render` reaches
+   about `2.46×` horizontally on desktop and `3.10×` on Mobile) and does not
+   show a smoke/shock scale mismatch. Its rings dominate the early composition
+   because the fluid body is too pale, cylindrical, and under-structured; no
+   additional bands are justified.
+
+The dominant correction path is therefore profile-local: configure the
+approved padded domain only to restore roof clearance; then tune source/cap
+balance, the existing plume/ground-coupling controls, structured core/material
+separation, and a restrained late tail. Global renderer quality, ray/slice
+budgets, camera, shockwave, wind, overlays, and all approved neighboring
+profiles remain regression locks.
+
+## Early Fission Test Scale candidate refinement (2026-08)
+
+The retained local candidate activates the approved padded-domain path with
+`padding: 0.08`, `renderOverscan: 1.04`, `renderExtent: 1.12 × 1.16`,
+`riskMargin: 0.07`, and `densityThreshold: 0.14`; `edge.mode` and shockwave
+remain neutral. Representative desktop/tablet checkpoints report no visible
+solver roof or side wall and `edge: 0.000`; late edge-risk readings are
+associated with sparse lower ground material rather than a box silhouette.
+
+The profile-only artistic pass adds the existing ground-coupled source path and
+multiple offset kernels. Retained source values are `radius: 0.062`,
+`aspectX: 1.16`, `aspectY: 0.82`, `sustainEnd: 0.72`, `radial: 1.08`,
+`vertical: 1.30`, `turbulence: 1.18`, `heat: 1.16`, `smoke: 1.25`,
+`incandescent: 1.0`, `dust: 1.3`, `capScale: 1.06`, `capRoll: 1.1`,
+`capVertical: 0.48`, and `clusterSpread: 1.14`. Physics retains buoyancy
+`1.22`, density loading `0.78`, vorticity `1.45`, velocity retention `0.992`,
+cooling `0.88`, smoke conversion `1.05`, and scalar retention `0.9997`.
+
+The retained ground-coupling values are radial impulse `0.18`, spread width
+`0.32`, height falloff `1.6`, horizontal retention `0.94`, vertical damping
+`0.8`, spread window `0.006–0.13`, angular variation `0.32`, asymmetry `0.22`,
+surface heat `0.54`, base dust `1.15`, transition lift `0.62`, and late ground
+drift `0.04`. Plume mode `3` uses expansion `0.012`, vortex `0.32`, persistence
+`0.72`, widening `0.045`, feed taper `0.46–0.70`, lateral jitter `0.4`, and
+turbulence blend `0.22`.
+
+Material/core values are soot absorption `1.18`, dust absorption `0.68`,
+warm/cool contrast `0.42`, interior depth `0.2`, detail boost `0`,
+`detailOctaveMode: 0`, highlight threshold `1.7`, sharpness `2.3`, structure
+blend `0.42`, and bloom gate `5.8`. The late tail uses `lateStart: 0.72`,
+`finalStart: 1.0`, `sourceTaperEnd: 1.0`, smoke floor `1.0`, dust floor
+`0.9998`, outward boost `0.02`, buoyancy falloff `0.25`, motion damping `0.5`,
+late velocity retention `0.9985`, curl `0.0015`, shear `0.001`, and phase rate
+`0.035`.
+
+Controlled A/B checks rejected a higher persistence-only pass and a
+motion-reduction pass: the former kept mass but still lost compact upper
+structure, while the latter weakened the mature t15 cap. The retained
+direction clearly improves the baseline's smooth cylinder and flat skirt, but
+the remaining specific defect is late-tail compactness: after approximately
+t19–t20 the cap/stem mass spreads into a low ground haze and the final frame
+does not retain a strong upper cloud. This remains a profile-specific artistic
+defect; no renderer-wide, camera, shockwave, wind, or quality change is
+indicated.
