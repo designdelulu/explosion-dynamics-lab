@@ -1001,3 +1001,48 @@ overlays, quality budgets, and all approved neighboring presets remain
 regression locks. The result must remain subsurface-driven rather than
 converging on Ground Burst, Meteor Impact, Volcanic Eruption, or a generic
 conventional explosion.
+
+## Underground Detonation candidate refinement (2026-08)
+
+The retained candidate did not require a domain change. Repeated representative
+readback kept top, left, and right edge density at `0.000`; the only material
+contact was the expected lower ground plane. `domain.mode` therefore remains
+`0` with neutral padding, overscan, and render extent. `groundCoupling.mode` is
+now `1`, so the same lower contact is reported as physical ground contact and
+does not inflate computational-edge risk. The neutral analytical shockwave,
+camera, mobile framing, and quality budgets remain unchanged.
+
+The profile-local structural pass uses the existing reusable paths: source
+`sustainEnd: 0.64`, physics `buoyancy: 0.82`, `densityLoading: 1.48`,
+`windCoupling: 0.72`, `vorticity: 1.58`, `velocityRetention: 0.985`,
+`cooling: 1.16`, and `smokeConversion: 1.08`; volume `depth: 1.14`,
+`opacity: 1.28`, `shadow: 1.38`, `bloom: 0.46`, `distortion: 0.58`,
+`erosion: 1.22`, `noiseScale: 1.30`, `dustVisibility: 1.55`, `exposure: 0.88`,
+`backgroundIllumination: 0.06`, and `emissionCurve: 1.08`. Ground coupling
+uses radial impulse `0.26`, spread width `0.34`, height falloff `1.8`,
+horizontal retention `0.93`, vertical damping `0.76`, spread `0.008–0.16`,
+angular variation `0.48`, asymmetry `0.38`, surface heat `0.36`, base dust
+`1.4`, transition lift `0.74`, and late ground drift `0.08`.
+
+Plume mode `3` uses expansion `0.008`, vortex `0.42`, persistence `0.82`,
+widening `0.028`, feed taper `0.40–0.72`, lateral jitter `0.46`, and
+turbulence blend `0.32`. Material mode `1` uses soot absorption `1.35`, dust
+absorption `0.75`, detail boost `0.15`, warm/cool contrast `0.34`, interior
+depth `0.28`, and `detailOctaveMode: 0`. Core mode `1` uses threshold `0.42`,
+sharpness `1.9`, structure blend `0.62`, and bloom gate `5.2`.
+
+The late tail is a restrained profile-local handoff: `lateStart: 0.60`,
+`finalStart: 0.96`, `sourceTaperEnd: 0.72`, smoke floor `0.998`, dust floor
+`0.994`, outward boost `0.02`, buoyancy falloff `0.20`, motion damping `0.38`,
+late velocity retention `0.995`, curl `0.006`, shear `0.004`, and phase rate
+`0.045`. Compared with the baseline, the upper vent remains legible longer and
+continues to deform while the lower particulate remains attached to the
+surface. The final state retains a faint upper remnant rather than clearing to
+only low haze; no frozen cap or new containment silhouette was observed.
+
+The final candidate remains a compact subsurface breakthrough rather than a
+classic mushroom: its distinctive cues are the heavy ground skirt, asymmetric
+vertical vent, soot/dust depth, and subordinate upper haze. The remaining
+visual judgment is whether the final upper remnant has enough contrast on
+Mobile; no further autonomous browser tuning is justified without a human
+visual decision.
