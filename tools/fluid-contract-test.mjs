@@ -19,8 +19,9 @@ const CASTLE_BRAVO_ID = "castle-bravo-scale-reference";
 const TSAR_ID = "tsar-bomba-scale-reference";
 const HIROSHIMA_ID = "hiroshima-scale-reference";
 const EARLY_FISSION_ID = "early-fission-test-scale";
+const UNDERGROUND_ID = "underground-detonation";
 const RESEARCH_MODE_IDS = new Set([LOW_YIELD_ID, GROUND_BURST_ID, TSAR_ID]);
-const GROUND_COUPLED_IDS = new Set([GROUND_BURST_ID, CASTLE_BRAVO_ID, EARLY_FISSION_ID]);
+const GROUND_COUPLED_IDS = new Set([GROUND_BURST_ID, CASTLE_BRAVO_ID, EARLY_FISSION_ID, UNDERGROUND_ID]);
 
 const tiers = Object.values(RESEARCH_FLUID_TIERS);
 assert.deepEqual(tiers.map(({ id }) => id), ["mobile", "balanced", "high"]);
@@ -328,6 +329,17 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(ground.angularVariation > 0 && ground.asymmetry > 0);
     assert.ok(ground.surfaceHeat > 0 && ground.baseDust > ground.surfaceHeat);
     assert.ok(ground.transitionLift > 0 && ground.lateGroundDrift > 0);
+  } else if (presetId === UNDERGROUND_ID) {
+    assert.equal(ground.mode, 1, "Underground Detonation must report physical ground contact separately");
+    assert.ok(ground.radialImpulse > 0 && ground.radialImpulse < 0.42);
+    assert.ok(ground.spreadWidth > 0 && ground.spreadWidth < 0.42);
+    assert.ok(ground.heightFalloff > 1);
+    assert.ok(ground.horizontalRetention > 0 && ground.horizontalRetention < 1);
+    assert.ok(ground.verticalDamping > 0 && ground.verticalDamping < 1);
+    assert.ok(ground.spreadStart >= 0 && ground.spreadStart < ground.spreadEnd && ground.spreadEnd < 0.5);
+    assert.ok(ground.angularVariation > 0 && ground.asymmetry > 0);
+    assert.ok(ground.surfaceHeat > 0 && ground.baseDust > ground.surfaceHeat);
+    assert.ok(ground.transitionLift > 0 && ground.lateGroundDrift > 0);
   } else {
     assert.equal(ground.mode, 0, `${presetId}: ground coupling must remain neutral`);
     assert.equal(ground.radialImpulse, 0);
@@ -400,6 +412,16 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(profile.source.vertical > profile.source.radial, "Early Fission must rise before lateral rollout");
     assert.ok(profile.plume.feedTaperStart > 0 && profile.plume.feedTaperStart < profile.plume.feedTaperEnd);
     assert.ok(profile.plume.feedTaperEnd < 0.8);
+  } else if (presetId === UNDERGROUND_ID) {
+    assert.equal(profile.plume.mode, 3, "Underground Detonation must use the ground-coupled plume mode");
+    assert.ok(profile.plume.expansion > 0);
+    assert.ok(profile.plume.vortex > 0);
+    assert.ok(profile.plume.persistence > 0 && profile.plume.persistence < 1);
+    assert.ok(profile.plume.widen > 0);
+    assert.ok(profile.source.vertical > profile.source.radial, "Underground Detonation must retain a vertically driven breakthrough");
+    assert.equal(profile.plume.feedTaperStart, 0.4);
+    assert.equal(profile.plume.feedTaperEnd, 0.72);
+    assert.ok(profile.plume.lateralJitter > 0 && profile.plume.turbulenceBlend > 0);
   } else if (presetId === CASTLE_BRAVO_ID) {
     assert.equal(profile.plume.mode, 3, "Castle Bravo must use the ground-coupled broad-plume mode");
     assert.ok(profile.plume.expansion > 0 && profile.plume.expansion < RESEARCH_FLUID_PROFILES[TSAR_ID].plume.expansion);
@@ -495,6 +517,13 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(profile.material.warmCoolContrast > 0);
     assert.equal(profile.material.detailOctaveMode, 0, "Early Fission must not activate a third detail octave");
     assert.ok(profile.material.interiorDepth > 0);
+  } else if (presetId === UNDERGROUND_ID) {
+    assert.equal(profile.material.mode, 1, "Underground Detonation must enable particulate depth material");
+    assert.ok(profile.material.sootAbsorption > profile.material.dustAbsorption);
+    assert.ok(profile.material.detailBoost >= 0 && profile.material.detailBoost < 0.5);
+    assert.ok(profile.material.warmCoolContrast > 0);
+    assert.equal(profile.material.detailOctaveMode, 0, "Underground Detonation must retain the two-octave detail path");
+    assert.ok(profile.material.interiorDepth > 0);
   } else {
     assert.equal(profile.material.mode, 0, `${presetId}: smoke-material mode must remain neutral`);
     assert.equal(profile.material.sootAbsorption, 1, `${presetId}: default soot absorption must stay neutral`);
@@ -589,8 +618,8 @@ for (const preset of EVENT_PRESETS.filter(({ id }) => id !== GROUND_BURST_ID)) {
 }
 
 // --- Profile-gated late dissipation (2026-07) --------------------------------
-// Tsar retains mode 1 and Ground Burst independently uses mode 2. Every other
-// profile keeps the neutral envelope.
+// Tsar, Ground Burst, and Underground Detonation use profile-local late tails.
+// Every other profile keeps the neutral envelope.
 for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
   assert.ok(profile.dissipation && typeof profile.dissipation === "object", `${presetId}: dissipation config missing`);
   for (const key of [
@@ -657,6 +686,18 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.equal(d.retentionFloorSmoke, 1, "Early Fission smoke must retain its late visual mass");
     assert.ok(d.retentionFloorDust < d.retentionFloorSmoke && d.retentionFloorDust > 0);
     assert.ok(d.motionDamp > 0 && d.outwardBoost > 0);
+    assert.ok(d.lateVelocityRetention > profile.physics.velocityRetention && d.lateVelocityRetention < 1);
+    assert.ok(d.lateCurl > 0 && d.lateShear > 0 && d.latePhaseRate > 0);
+  } else if (presetId === UNDERGROUND_ID) {
+    const d = profile.dissipation;
+    assert.equal(d.mode, 1, "Underground Detonation must use a gradual particulate late tail");
+    assert.equal(profile.source.sustainEnd, 0.64, "Underground Detonation sustain must preserve the upper vent without extending mature geometry");
+    assert.equal(d.lateStart, 0.60, "Underground Detonation late dissipation must begin before the final particulate fade");
+    assert.equal(d.finalStart, 0.96);
+    assert.equal(d.sourceTaperEnd, 0.72);
+    assert.ok(d.retentionFloorSmoke < 1 && d.retentionFloorSmoke > 0);
+    assert.ok(d.retentionFloorDust < d.retentionFloorSmoke && d.retentionFloorDust > 0);
+    assert.ok(d.outwardBoost > 0 && d.buoyancyFalloff > 0 && d.motionDamp > 0);
     assert.ok(d.lateVelocityRetention > profile.physics.velocityRetention && d.lateVelocityRetention < 1);
     assert.ok(d.lateCurl > 0 && d.lateShear > 0 && d.latePhaseRate > 0);
   } else {
@@ -766,6 +807,13 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(c.highlightSharpness > 2);
     assert.ok(c.structureBlend > 0 && c.structureBlend <= 1);
     assert.ok(c.bloomGateScale > 0 && c.bloomGateScale < RESEARCH_FLUID_PROFILES[TSAR_ID].core.bloomGateScale);
+  } else if (presetId === UNDERGROUND_ID) {
+    const c = profile.core;
+    assert.equal(c.mode, 1, "Underground Detonation must enable a structured particulate core");
+    assert.equal(c.highlightThreshold, 0.42);
+    assert.equal(c.highlightSharpness, 1.9);
+    assert.equal(c.structureBlend, 0.62);
+    assert.equal(c.bloomGateScale, 5.2);
   } else if (presetId === TSAR_ID) {
     const c = profile.core;
     assert.equal(c.mode, 1, "Tsar must enable core-polish mode");
@@ -1297,6 +1345,19 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.equal(p.feedTaperEnd, 0.7, "Early Fission stem feed handoff must remain profile-local");
     assert.equal(p.lateralJitter, 0.4, "Early Fission stem lateral decorrelation must remain profile-local");
     assert.equal(p.turbulenceBlend, 0.22, "Early Fission stem turbulence blend must remain profile-local");
+  } else if (presetId === UNDERGROUND_ID) {
+    const s = profile.shockwave;
+    assert.equal(s.mode, 0, "Underground Detonation must retain the neutral shockwave treatment");
+    for (const ringKey of ["ringB", "ringC", "ringD"]) {
+      assert.equal(s[ringKey].strength, 0, `Underground Detonation shockwave.${ringKey}.strength must stay neutral`);
+      assert.equal(s[ringKey].widthScale, 1, `Underground Detonation shockwave.${ringKey}.widthScale must stay neutral`);
+      assert.equal(s[ringKey].radiusOffset, 0, `Underground Detonation shockwave.${ringKey}.radiusOffset must stay neutral`);
+    }
+    const p = profile.plume;
+    assert.equal(p.feedTaperStart, 0.4);
+    assert.equal(p.feedTaperEnd, 0.72);
+    assert.equal(p.lateralJitter, 0.46);
+    assert.equal(p.turbulenceBlend, 0.32);
   } else {
     const s = profile.shockwave;
     assert.equal(s.mode, 0, `${presetId}: shockwave mode must remain neutral`);
