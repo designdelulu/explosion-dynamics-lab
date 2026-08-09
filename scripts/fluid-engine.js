@@ -842,7 +842,7 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       // the larger dust share reserves visible weight for the lower plume.
       source: { centerY: 0.21, groundLevel: 0.18, radius: 0.084, aspectX: 1.38, aspectY: 0.88, onsetEnd: 0.06, sustainEnd: 0.72, pulseFrequency: 1.6, radial: 1.12, vertical: 1.44, turbulence: 1.55, heat: 1.2, smoke: 1.48, incandescent: 1.08, dust: 1.78, ringRadius: 1.58, capScale: 1.45, capRoll: 1.65, capVertical: 0.47 },
       physics: { buoyancy: 1.0, densityLoading: 1.15, windCoupling: 1.22, vorticity: 1.48, velocityRetention: 0.985, cooling: 0.82, smokeConversion: 1.0, scalarRetention: 0.99985 },
-      volume: { scaleX: 1.36, scaleY: 1.34, depth: 1.38, opacity: 0.78, shadow: 1.45, bloom: 0.68, distortion: 1.22, erosion: 1.0, noiseScale: 1.1, dustVisibility: 1.45, exposure: 0.82, toneMap: 0.32, backgroundIllumination: 0.25, emissionCurve: 0.9 },
+      volume: { scaleX: 1.36, scaleY: 1.34, depth: 1.38, opacity: 0.78, shadow: 1.2, bloom: 0.68, distortion: 1.22, erosion: 1.0, noiseScale: 1.1, dustVisibility: 1.45, exposure: 0.9, toneMap: 0.32, backgroundIllumination: 0.25, emissionCurve: 0.9 },
       quality: { grid: 1.08, pressure: 1.1, rays: 1.12, tracers: 1.3, detail: 1.15 },
       // Castle Bravo reaches the shared solver roof and side cells at dense
       // mid-phase. Opt into the approved padded-domain transform with a
