@@ -836,10 +836,90 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       eventFamilyId: 'nuclear-scale', eventFamily: 'Nuclear scale · thermonuclear surface reference', profileKind: 14,
       tracerType: 'atmospheric',
       sourcePrimitives: ['radial-impulse', 'ring-source', 'ground-sheet', 'vertical-jet', 'paired-cap-vortices'],
-      source: { centerY: 0.2, groundLevel: 0.18, radius: 0.088, aspectX: 1.5, aspectY: 0.85, onsetEnd: 0.06, sustainEnd: 0.72, pulseFrequency: 1.6, radial: 1.26, vertical: 1.4, turbulence: 1.35, heat: 1.35, smoke: 1.6, incandescent: 1.22, dust: 1.72, ringRadius: 1.6, capScale: 1.42, capRoll: 1.3 },
-      physics: { buoyancy: 0.96, densityLoading: 1.32, windCoupling: 1.3, vorticity: 1.42, velocityRetention: 0.995, cooling: 0.72, smokeConversion: 1.15, scalarRetention: 0.9996 },
-      volume: { scaleX: 1.36, scaleY: 1.34, depth: 1.35, opacity: 1.42, shadow: 1.55, bloom: 1.32, distortion: 1.22, erosion: 0.92, noiseScale: 1.02, dustVisibility: 1.55, exposure: 1.1, toneMap: 0.1, backgroundIllumination: 0.34, emissionCurve: 0.84 },
+      // Castle Bravo's visual identity is a broad, ground-coupled body that
+      // rises decisively before the cap rolls outward. The lower heat/opacity
+      // loading keeps the hot phase structured rather than white-saturated;
+      // the larger dust share reserves visible weight for the lower plume.
+      source: { centerY: 0.21, groundLevel: 0.18, radius: 0.084, aspectX: 1.38, aspectY: 0.88, onsetEnd: 0.06, sustainEnd: 0.72, pulseFrequency: 1.6, radial: 1.12, vertical: 1.44, turbulence: 1.55, heat: 1.2, smoke: 1.48, incandescent: 1.08, dust: 1.78, ringRadius: 1.58, capScale: 1.45, capRoll: 1.65, capVertical: 0.47 },
+      physics: { buoyancy: 1.0, densityLoading: 1.15, windCoupling: 1.22, vorticity: 1.48, velocityRetention: 0.985, cooling: 0.82, smokeConversion: 1.0, scalarRetention: 0.99985 },
+      volume: { scaleX: 1.36, scaleY: 1.34, depth: 1.38, opacity: 0.78, shadow: 1.2, bloom: 0.68, distortion: 1.22, erosion: 1.0, noiseScale: 1.1, dustVisibility: 1.45, exposure: 0.9, toneMap: 0.32, backgroundIllumination: 0.25, emissionCurve: 0.9 },
       quality: { grid: 1.08, pressure: 1.1, rays: 1.12, tracers: 1.3, detail: 1.15 },
+      // Castle Bravo reaches the shared solver roof and side cells at dense
+      // mid-phase. Opt into the approved padded-domain transform with a
+      // profile-local margin and render extent; the event remains large enough
+      // to crop naturally on portrait screens, while valid samples and the
+      // physical ground plane stay intact. This is not an extinction mask.
+      domain: {
+        mode: 1,
+        padding: 0.09,
+        renderOverscan: 1.05,
+        renderScale: { mobile: 1, balanced: 0.76, high: 0.82 },
+        renderExtent: { x: 1.08, y: 1.02 },
+        riskMargin: 0.07,
+        densityThreshold: 0.14,
+      },
+      // Castle Bravo uses the reusable ground-coupling path only for the
+      // initial heavy surface interaction. These values are profile-local:
+      // they broaden the lower material briefly without inheriting Ground
+      // Burst's approved source or edge configuration.
+      groundCoupling: {
+        mode: 1,
+        radialImpulse: 0.26,
+        spreadWidth: 0.34,
+        heightFalloff: 1.55,
+        horizontalRetention: 0.92,
+        verticalDamping: 0.78,
+        spreadStart: 0.006,
+        spreadEnd: 0.16,
+        angularVariation: 0.3,
+        asymmetry: 0.22,
+        surfaceHeat: 0.68,
+        baseDust: 1.25,
+        transitionLift: 0.58,
+        lateGroundDrift: 0.05,
+      },
+      plume: {
+        mode: 3,
+        expansion: 0.016,
+        vortex: 0.42,
+        persistence: 0.08,
+        widen: 0.06,
+        feedTaperStart: 0.5,
+        feedTaperEnd: 0.72,
+        lateralJitter: 0.5,
+        turbulenceBlend: 0.28,
+      },
+      material: {
+        mode: 1,
+        sootAbsorption: 1.45,
+        dustAbsorption: 0.65,
+        detailBoost: 0,
+        warmCoolContrast: 0.75,
+        detailOctaveMode: 0,
+        interiorDepth: 0.75,
+      },
+      core: {
+        mode: 1,
+        highlightThreshold: 2.65,
+        highlightSharpness: 3.0,
+        structureBlend: 0.6,
+        bloomGateScale: 8.0,
+      },
+      dissipation: {
+        mode: 1,
+        lateStart: 0.62,
+        finalStart: 0.94,
+        sourceTaperEnd: 0.84,
+        retentionFloorSmoke: 0.9997,
+        retentionFloorDust: 0.999,
+        outwardBoost: 0.04,
+        buoyancyFalloff: 0.3,
+        motionDamp: 0.42,
+        lateVelocityRetention: 0.992,
+        lateCurl: 0.006,
+        lateShear: 0.004,
+        latePhaseRate: 0.05,
+      },
     },
   ),
   'tsar-bomba-scale-reference': defineFluidProfile(

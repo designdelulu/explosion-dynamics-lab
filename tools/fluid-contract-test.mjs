@@ -14,6 +14,7 @@ import { EVENT_PRESETS, PALETTES } from "../scripts/data.js";
 
 const LOW_YIELD_ID = "low-yield-nuclear-airburst";
 const GROUND_BURST_ID = "nuclear-ground-burst";
+const CASTLE_BRAVO_ID = "castle-bravo-scale-reference";
 const TSAR_ID = "tsar-bomba-scale-reference";
 const RESEARCH_MODE_IDS = new Set([LOW_YIELD_ID, GROUND_BURST_ID, TSAR_ID]);
 
@@ -149,7 +150,14 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(Number.isFinite(profile.domain[key]), `${presetId}: domain.${key} must be finite`);
   }
   assert.ok(profile.domain.renderScale !== undefined, `${presetId}: domain.renderScale missing`);
-  if (presetId === GROUND_BURST_ID) {
+  if (presetId === CASTLE_BRAVO_ID) {
+    assert.equal(profile.domain.mode, 1, "Castle Bravo must activate the reusable padded-domain path");
+    assert.equal(profile.domain.padding, 0.09, "Castle Bravo boundary padding must remain profile-local");
+    assert.equal(profile.domain.renderOverscan, 1.05, "Castle Bravo render overscan must remain profile-local");
+    assert.deepEqual(profile.domain.renderScale, { mobile: 1, balanced: 0.76, high: 0.82 });
+    assert.deepEqual(profile.domain.renderExtent, { x: 1.08, y: 1.02 });
+    assert.ok(profile.domain.riskMargin > 0 && profile.domain.densityThreshold > 0);
+  } else if (presetId === GROUND_BURST_ID) {
     assert.equal(profile.domain.mode, 1, "Ground Burst must activate the reusable padded-domain path");
     assert.ok(profile.domain.padding > 0 && profile.domain.padding < 0.3);
     assert.ok(profile.domain.renderOverscan > 1);
@@ -209,7 +217,7 @@ assert.match(engineBoundarySource, /maxDensityAtEdge:[\s\S]*?touchesMediumDensit
 assert.match(engineBoundarySource, /getRenderResolutionScale\(\)/, "Fluid engine must expose the profile render scale without preset-ID logic");
 assert.match(engineBoundarySource, /renderExtent: domain\.renderExtent ?/, "Render extent must be reported as part of the reusable domain contract");
 
-// --- Ground Burst-only source/ground coupling (2026-07) ---------------------
+// --- Ground-coupled source path (2026-07) -----------------------------------
 for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
   assert.ok(profile.groundCoupling && typeof profile.groundCoupling === "object",
     `${presetId}: groundCoupling config missing`);
@@ -223,7 +231,18 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
       `${presetId}: groundCoupling.${key} must be finite`);
   }
   const ground = profile.groundCoupling;
-  if (presetId === GROUND_BURST_ID) {
+  if (presetId === CASTLE_BRAVO_ID) {
+    assert.equal(ground.mode, 1, "Castle Bravo must activate only the reusable ground-coupling path for its surface interaction");
+    assert.ok(ground.radialImpulse > 0 && ground.radialImpulse < 0.42);
+    assert.ok(ground.spreadWidth > 0 && ground.spreadWidth < 0.42);
+    assert.ok(ground.heightFalloff > 1);
+    assert.ok(ground.horizontalRetention > 0 && ground.horizontalRetention < 1);
+    assert.ok(ground.verticalDamping > 0 && ground.verticalDamping < 1);
+    assert.ok(ground.spreadStart >= 0 && ground.spreadStart < ground.spreadEnd && ground.spreadEnd < 0.5);
+    assert.ok(ground.angularVariation > 0 && ground.asymmetry > 0);
+    assert.ok(ground.surfaceHeat > 0 && ground.baseDust > ground.surfaceHeat);
+    assert.ok(ground.transitionLift > 0 && ground.lateGroundDrift > 0);
+  } else if (presetId === GROUND_BURST_ID) {
     assert.equal(ground.mode, 1, "Ground Burst alone must activate ground coupling");
     assert.ok(ground.radialImpulse > 0);
     assert.ok(ground.spreadWidth >= 0.42 && ground.spreadWidth < 1,
@@ -271,8 +290,8 @@ assert.doesNotMatch(
 );
 
 // --- Profile-gated broad-plume research controls (2026-07) -------------------
-// Low-yield, Ground Burst, and Tsar opt in with distinct scales; all other
-// presets remain byte-identical and neutral.
+// Low-yield, Ground Burst, Castle Bravo, and Tsar opt in with distinct scales;
+// all other presets remain byte-identical and neutral.
 for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
   assert.ok(profile.plume && typeof profile.plume === "object", `${presetId}: plume config missing`);
   for (const key of ["mode", "expansion", "vortex", "persistence", "widen"]) {
@@ -299,6 +318,16 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.equal(profile.source.capRoll, 2.75, "Ground Burst cap underside roll remains profile-local");
     assert.equal(profile.plume.vortex, 0.98, "Ground Burst cap vortex rollout remains profile-local");
     assert.equal(profile.plume.feedTaperEnd, 0.7, "Ground Burst stem feed hands off before the mature cap flattens");
+  } else if (presetId === CASTLE_BRAVO_ID) {
+    assert.equal(profile.plume.mode, 3, "Castle Bravo must use the ground-coupled broad-plume mode");
+    assert.ok(profile.plume.expansion > 0 && profile.plume.expansion < RESEARCH_FLUID_PROFILES[TSAR_ID].plume.expansion);
+    assert.ok(profile.plume.vortex > 0 && profile.plume.vortex < RESEARCH_FLUID_PROFILES[TSAR_ID].plume.vortex);
+    assert.ok(profile.plume.persistence > 0 && profile.plume.persistence < RESEARCH_FLUID_PROFILES[TSAR_ID].plume.persistence);
+    assert.ok(profile.plume.widen > 0 && profile.plume.widen < RESEARCH_FLUID_PROFILES[TSAR_ID].plume.widen);
+    assert.ok(profile.source.vertical > profile.source.radial, "Castle Bravo must rise before its mature lateral rollout");
+    assert.ok(profile.plume.lateralJitter > 0 && profile.plume.turbulenceBlend > 0);
+    assert.ok(profile.plume.feedTaperStart > 0 && profile.plume.feedTaperStart < profile.plume.feedTaperEnd);
+    assert.ok(profile.plume.feedTaperEnd < 0.8);
   } else if (presetId === TSAR_ID) {
     assert.equal(profile.plume.mode, 1, "Tsar must retain its existing historical-scale plume mode 1");
     assert.ok(profile.plume.expansion > 0, "Tsar expansion must be active");
@@ -345,6 +374,14 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
       "Ground Burst must use the existing view-ray depth sample for material separation");
     assert.equal(profile.material.interiorDepth, 1.2, "Ground Burst depth separation remains on the existing two-octave path");
     assert.equal(profile.material.detailOctaveMode, 0, "Ground Burst must not reactivate the third detail octave");
+  } else if (presetId === CASTLE_BRAVO_ID) {
+    assert.equal(profile.material.mode, 1, "Castle Bravo must enable independent soot/dust optical depth");
+    assert.ok(profile.material.sootAbsorption > profile.material.dustAbsorption);
+    assert.ok(profile.material.dustAbsorption > 0 && profile.material.dustAbsorption < 1);
+    assert.equal(profile.material.detailOctaveMode, 0, "Castle Bravo must retain the two-octave detail budget");
+    assert.equal(profile.material.detailBoost, 0, "Castle Bravo must not purchase a third detail octave indirectly");
+    assert.ok(profile.material.warmCoolContrast > 0 && profile.material.warmCoolContrast <= 1.2);
+    assert.ok(profile.material.interiorDepth > 0 && profile.material.interiorDepth <= 1.5);
   } else if (presetId === TSAR_ID) {
     assert.equal(profile.material.mode, 1, "Tsar must enable the smoke-material mode");
     assert.ok(profile.material.sootAbsorption > profile.material.dustAbsorption, "Tsar soot must absorb more strongly than lofted dust");
@@ -483,6 +520,16 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(d.outwardBoost > 0 && d.outwardBoost < RESEARCH_FLUID_PROFILES[TSAR_ID].dissipation.outwardBoost);
     assert.ok(d.lateCurl > 0 && d.lateShear > 0 && d.latePhaseRate > 0);
     assert.ok(d.lateVelocityRetention > profile.physics.velocityRetention && d.lateVelocityRetention < 1);
+  } else if (presetId === CASTLE_BRAVO_ID) {
+    const d = profile.dissipation;
+    assert.equal(d.mode, 1, "Castle Bravo must enable a gradual late-motion tail");
+    assert.ok(d.lateStart > 0.5 && d.lateStart < d.sourceTaperEnd);
+    assert.ok(d.sourceTaperEnd < d.finalStart && d.finalStart <= 1);
+    assert.ok(d.retentionFloorSmoke < 1 && d.retentionFloorSmoke > 0);
+    assert.ok(d.retentionFloorDust < d.retentionFloorSmoke && d.retentionFloorDust > 0);
+    assert.ok(d.outwardBoost > 0 && d.buoyancyFalloff > 0 && d.motionDamp > 0);
+    assert.ok(d.lateVelocityRetention > profile.physics.velocityRetention && d.lateVelocityRetention < 1);
+    assert.ok(d.lateCurl > 0 && d.lateShear > 0 && d.latePhaseRate > 0);
   } else {
     const d = profile.dissipation;
     assert.equal(d.mode, 0, `${presetId}: late-dissipation mode must remain off for non-target presets`);
@@ -569,6 +616,13 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
       "Ground Burst highlight roll-off must retain thermal pockets without a plateau");
     assert.ok(c.structureBlend > 0 && c.structureBlend <= 1.2);
     assert.ok(c.bloomGateScale > 0 && c.bloomGateScale < RESEARCH_FLUID_PROFILES[TSAR_ID].core.bloomGateScale);
+  } else if (presetId === CASTLE_BRAVO_ID) {
+    const c = profile.core;
+    assert.equal(c.mode, 1, "Castle Bravo must enable structured-core roll-off");
+    assert.ok(c.highlightThreshold > 1.5, "Castle Bravo must narrow the white-hot plateau");
+    assert.ok(c.highlightSharpness > 2, "Castle Bravo must sharpen the retained thermal structure");
+    assert.ok(c.structureBlend > 0 && c.structureBlend <= 1);
+    assert.ok(c.bloomGateScale > 0 && c.bloomGateScale < RESEARCH_FLUID_PROFILES[TSAR_ID].core.bloomGateScale);
   } else if (presetId === TSAR_ID) {
     const c = profile.core;
     assert.equal(c.mode, 1, "Tsar must enable core-polish mode");
@@ -605,6 +659,20 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(t.sizeVariance > 0 && t.sizeVariance < 1);
     assert.ok(t.brightnessVariance > 0 && t.brightnessVariance < 1);
     assert.ok(t.minSizeFloor > 1 && t.minSizeFloor < RESEARCH_FLUID_PROFILES[TSAR_ID].tracerMaterial.minSizeFloor);
+  } else if (presetId === CASTLE_BRAVO_ID) {
+    const s = profile.shockwave;
+    assert.equal(s.mode, 0, "Castle Bravo must retain the shared neutral shockwave treatment");
+    for (const ringKey of ["ringB", "ringC", "ringD"]) {
+      assert.equal(s[ringKey].strength, 0, `Castle Bravo shockwave.${ringKey}.strength must stay neutral`);
+      assert.equal(s[ringKey].widthScale, 1, `Castle Bravo shockwave.${ringKey}.widthScale must stay neutral`);
+      assert.equal(s[ringKey].radiusOffset, 0, `Castle Bravo shockwave.${ringKey}.radiusOffset must stay neutral`);
+    }
+    assert.equal(s.irregularity, 0);
+    assert.equal(s.fadeStart, 1);
+    assert.equal(s.fadeSpan, 0.001);
+    const p = profile.plume;
+    assert.ok(p.feedTaperStart > 0 && p.feedTaperStart < p.feedTaperEnd);
+    assert.ok(p.feedTaperEnd < 0.8, "Castle Bravo stem feed must hand off before the late tail");
   } else if (presetId === TSAR_ID) {
     const t = profile.tracerMaterial;
     assert.equal(t.mode, 1, "Tsar must enable tracer-occlusion mode");
@@ -998,6 +1066,10 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
       "Ground Burst stem needs stronger lateral deformation than Tsar");
     assert.ok(p.turbulenceBlend > RESEARCH_FLUID_PROFILES[TSAR_ID].plume.turbulenceBlend,
       "Ground Burst stem needs stronger dust-rich turbulence than Tsar");
+  } else if (presetId === CASTLE_BRAVO_ID) {
+    const edge = profile.edge;
+    assert.equal(edge.mode, 0, "Castle Bravo must not add an extinction mask");
+    assert.equal(edge.lowDensityAttenuation, 0, "Castle Bravo must retain neutral sparse-edge attenuation");
   } else if (presetId === TSAR_ID) {
     const s = profile.shockwave;
     assert.deepEqual(
@@ -1293,6 +1365,7 @@ console.log("Explosion Dynamics Lab fluid contract test: PASS");
 console.log(`  ${tiers.length} bounded tiers × ${EVENT_PRESETS.length} preset profiles across seven event families`);
 console.log("  primitive diversity, profile budgets, palette-driven volume uniforms, fluid evolution, and GPU tracers verified");
 console.log("  non-WebGL runtime fails closed to the existing Canvas renderer");
-console.log("  low-yield mode 2, Ground Burst mode 3, and historical-scale mode 1 remain profile-isolated");
+console.log("  low-yield mode 2, Castle/Ground Burst ground-coupled mode 3, and Tsar historical mode 1 remain profile-isolated");
+console.log("  Castle Bravo plume, material, core, late motion, boundary, and neutral shock/edge treatment remain profile-gated");
 console.log("  Ground Burst ground coupling, material, shockwave, edge, and late motion remain profile-gated");
 console.log("  dense-phase raymarch shading skip remains absent; organic edge envelopes remain profile-gated");
