@@ -879,3 +879,48 @@ balance, the existing plume/ground-coupling controls, structured core/material
 separation, and a restrained late tail. Global renderer quality, ray/slice
 budgets, camera, shockwave, wind, overlays, and all approved neighboring
 profiles remain regression locks.
+
+## Early Fission Test Scale candidate refinement (2026-08)
+
+The retained local candidate activates the approved padded-domain path with
+`padding: 0.08`, `renderOverscan: 1.04`, `renderExtent: 1.12 × 1.16`,
+`riskMargin: 0.07`, and `densityThreshold: 0.14`; `edge.mode` and shockwave
+remain neutral. Representative desktop/tablet checkpoints report no visible
+solver roof or side wall and `edge: 0.000`; late edge-risk readings are
+associated with sparse lower ground material rather than a box silhouette.
+
+The profile-only artistic pass adds the existing ground-coupled source path and
+multiple offset kernels. Retained source values are `radius: 0.062`,
+`aspectX: 1.16`, `aspectY: 0.82`, `sustainEnd: 0.72`, `radial: 1.08`,
+`vertical: 1.30`, `turbulence: 1.18`, `heat: 1.16`, `smoke: 1.25`,
+`incandescent: 1.0`, `dust: 1.3`, `capScale: 1.06`, `capRoll: 1.1`,
+`capVertical: 0.48`, and `clusterSpread: 1.14`. Physics retains buoyancy
+`1.22`, density loading `0.78`, vorticity `1.45`, velocity retention `0.992`,
+cooling `0.88`, smoke conversion `1.05`, and scalar retention `0.9997`.
+
+The retained ground-coupling values are radial impulse `0.18`, spread width
+`0.32`, height falloff `1.6`, horizontal retention `0.94`, vertical damping
+`0.8`, spread window `0.006–0.13`, angular variation `0.32`, asymmetry `0.22`,
+surface heat `0.54`, base dust `1.15`, transition lift `0.62`, and late ground
+drift `0.04`. Plume mode `3` uses expansion `0.012`, vortex `0.32`, persistence
+`0.72`, widening `0.045`, feed taper `0.46–0.70`, lateral jitter `0.4`, and
+turbulence blend `0.22`.
+
+Material/core values are soot absorption `1.18`, dust absorption `0.68`,
+warm/cool contrast `0.42`, interior depth `0.2`, detail boost `0`,
+`detailOctaveMode: 0`, highlight threshold `1.7`, sharpness `2.3`, structure
+blend `0.42`, and bloom gate `5.8`. The late tail uses `lateStart: 0.72`,
+`finalStart: 1.0`, `sourceTaperEnd: 1.0`, smoke floor `1.0`, dust floor
+`0.9998`, outward boost `0.02`, buoyancy falloff `0.25`, motion damping `0.5`,
+late velocity retention `0.9985`, curl `0.0015`, shear `0.001`, and phase rate
+`0.035`.
+
+Controlled A/B checks rejected a higher persistence-only pass and a
+motion-reduction pass: the former kept mass but still lost compact upper
+structure, while the latter weakened the mature t15 cap. The retained
+direction clearly improves the baseline's smooth cylinder and flat skirt, but
+the remaining specific defect is late-tail compactness: after approximately
+t19–t20 the cap/stem mass spreads into a low ground haze and the final frame
+does not retain a strong upper cloud. This remains a profile-specific artistic
+defect; no renderer-wide, camera, shockwave, wind, or quality change is
+indicated.
