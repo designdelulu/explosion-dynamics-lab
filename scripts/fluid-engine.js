@@ -347,13 +347,16 @@ const BASE_PROFILE = Object.freeze({
   // opt in independently. sootAbsorption/dustAbsorption give soot
   // and lofted dust independent optical-depth coefficients instead of one
   // shared density-to-alpha curve; detailBoost adds an energy-weighted third
-  // curl-detail octave; warmCoolContrast widens the lit/shadowed dynamic range.
+  // curl-detail octave; warmCoolContrast widens the lit/shadowed dynamic range;
+  // lowDensityVisibility can lift weak late particulate without brightening
+  // the dense plume or buying another texture sample.
   material: Object.freeze({
     mode: 0,
     sootAbsorption: 1,
     dustAbsorption: 1,
     detailBoost: 0,
     warmCoolContrast: 0,
+    lowDensityVisibility: 0,
     // Material absorption and color separation must not implicitly purchase
     // the expensive third curl-detail octave. Profiles opt into it explicitly.
     detailOctaveMode: 0,
@@ -566,6 +569,7 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
         dustAbsorption: 0.75,
         detailBoost: 0.15,
         warmCoolContrast: 0.42,
+        lowDensityVisibility: 0.22,
         detailOctaveMode: 0,
         interiorDepth: 0.28,
       },
@@ -2946,6 +2950,7 @@ uniform float uDomainDensityThreshold;
 // the two-octave cost of the original volume path.
 uniform float uMaterialMode;
 uniform vec4 uMaterialParams;
+uniform float uMaterialLowDensityVisibility;
 uniform float uDetailOctaveMode;
 // Ground Burst may use the already-sampled view-ray depth to separate front,
 // middle, and rear particulate layers without purchasing another detail
@@ -3510,8 +3515,12 @@ void main() {
     density = max(0.0,
       density - (1.0 - erosion) * radialWeight * 0.026 * uVolumeProfile1.y
     );
+    float lowDensityLift = uMaterialMode > 0.5
+      ? max(0.0, uMaterialLowDensityVisibility)
+      : 0.0;
+    float lowDensitySignal = 1.0 - smoothstep(0.035, 0.22, smoke);
     float opticalDepth = density * inverseSteps * 3.2 * uVolumeProfile0.y;
-    float alpha = 1.0 - exp(-opticalDepth);
+    float alpha = 1.0 - exp(-opticalDepth * (1.0 + lowDensityLift * lowDensitySignal));
 
     // One midpoint probe approximates extinction along the fire-to-smoke light
     // path. Combined with accumulated view-ray density, this gives inexpensive
@@ -5093,10 +5102,11 @@ export class ResearchFluidEngine {
       volume.emissionCurve,
     );
     this._uniform1f(program, 'uDomainDensityThreshold', this._domainState().densityThreshold);
-    const material = this.profile.material || { mode: 0, sootAbsorption: 1, dustAbsorption: 1, detailBoost: 0, warmCoolContrast: 0, detailOctaveMode: 0, interiorDepth: 0 };
+    const material = this.profile.material || { mode: 0, sootAbsorption: 1, dustAbsorption: 1, detailBoost: 0, warmCoolContrast: 0, lowDensityVisibility: 0, detailOctaveMode: 0, interiorDepth: 0 };
     this._uniform1f(program, 'uMaterialMode', material.mode > 0 ? 1 : 0);
     this._uniform1f(program, 'uDetailOctaveMode', material.detailOctaveMode > 0 ? 1 : 0);
     this._uniform1f(program, 'uMaterialInteriorDepth', finite(material.interiorDepth, 0));
+    this._uniform1f(program, 'uMaterialLowDensityVisibility', finite(material.lowDensityVisibility, 0));
     this._uniform4f(
       program,
       'uMaterialParams',

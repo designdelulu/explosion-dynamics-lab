@@ -466,7 +466,7 @@ for (const uniform of ["uPlumeMode", "uPlumeParams"]) {
 // --- Profile-gated smoke-material controls (2026-07) -------------------------
 for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
   assert.ok(profile.material && typeof profile.material === "object", `${presetId}: material config missing`);
-  for (const key of ["mode", "sootAbsorption", "dustAbsorption", "detailBoost", "warmCoolContrast", "detailOctaveMode", "interiorDepth"]) {
+  for (const key of ["mode", "sootAbsorption", "dustAbsorption", "detailBoost", "warmCoolContrast", "lowDensityVisibility", "detailOctaveMode", "interiorDepth"]) {
     assert.ok(Number.isFinite(profile.material[key]), `${presetId}: material.${key} must be finite`);
   }
   if (presetId === LOW_YIELD_ID) {
@@ -522,12 +522,15 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(profile.material.sootAbsorption > profile.material.dustAbsorption);
     assert.ok(profile.material.detailBoost >= 0 && profile.material.detailBoost < 0.5);
     assert.ok(profile.material.warmCoolContrast > 0);
+    assert.ok(profile.material.lowDensityVisibility > 0 && profile.material.lowDensityVisibility <= 0.4,
+      "Underground Detonation weak particulate visibility must remain a restrained profile-local lift");
     assert.equal(profile.material.detailOctaveMode, 0, "Underground Detonation must retain the two-octave detail path");
     assert.ok(profile.material.interiorDepth > 0);
   } else {
     assert.equal(profile.material.mode, 0, `${presetId}: smoke-material mode must remain neutral`);
     assert.equal(profile.material.sootAbsorption, 1, `${presetId}: default soot absorption must stay neutral`);
     assert.equal(profile.material.dustAbsorption, 1, `${presetId}: default dust absorption must stay neutral`);
+    assert.equal(profile.material.lowDensityVisibility, 0, `${presetId}: low-density visibility must stay neutral`);
     assert.equal(profile.material.detailOctaveMode, 0, `${presetId}: detail octave must stay neutral`);
     assert.equal(profile.material.interiorDepth, 0, `${presetId}: interior depth must stay neutral`);
   }
@@ -552,6 +555,11 @@ assert.match(
   RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
   /uniform\s+float\s+uMaterialInteriorDepth\b/,
   "uMaterialInteriorDepth: Ground-only depth separation uniform missing from the volume shader",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /uniform\s+float\s+uMaterialLowDensityVisibility\b/,
+  "uMaterialLowDensityVisibility: weak-particulate transfer uniform missing from the volume shader",
 );
 // Every new material term must be reachable only through the uMaterialMode
 // gate, and must algebraically collapse to the prior expression when it is 0.
@@ -580,6 +588,16 @@ assert.match(
   RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
   /density \*= 1\.0 \+ depthContrast \* \([\s\S]*?middleLayer[\s\S]*?frontLayer[\s\S]*?rearLayer/,
   "Ground material depth must add only bounded layer weighting, not another sample path",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /float lowDensitySignal = 1\.0 - smoothstep\(0\.035, 0\.22, smoke\);[\s\S]*?opticalDepth \* \(1\.0 \+ lowDensityLift \* lowDensitySignal\)/,
+  "Underground weak-particulate visibility must use a bounded low-density optical transfer",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /float lowDensityLift = uMaterialMode > 0\.5\s*\?[\s\S]*?uMaterialLowDensityVisibility[\s\S]*?:\s*0\.0;/,
+  "Weak-particulate visibility must remain gated to opt-in material profiles",
 );
 
 // --- Ground Burst wind/shear streaks (2026-08) -----------------------------
@@ -1012,7 +1030,7 @@ assert.match(shaders.tracerAdvectFragment, /center\s*-\s*direction\s*\*\s*abs\(r
 assert.match(shaders.tracerAdvectFragment, /uTracerType\s*==\s*4[\s\S]*position\.y\s*-=/, "Ash tracers need a settling approximation");
 assert.match(shaders.tracerVertex, /texelFetch\(uTracers/, "tracer display must use GPU state");
 assert.match(shaders.tracerVertex, /2\.4\s*\*\s*lifetimeScale[\s\S]*4\.8\s*\*\s*lifetimeScale/, "Tracer display and simulation lifetimes must agree");
-assert.match(shaders.volumeFragment, /1\.0\s*-\s*exp\(-opticalDepth\)/, "exponential opacity missing");
+assert.match(shaders.volumeFragment, /1\.0\s*-\s*exp\(-opticalDepth/, "exponential opacity missing");
 assert.match(shaders.volumeFragment, /heatRamp/, "temperature-driven color ramp missing");
 assert.match(shaders.volumeFragment, /heatRamp[\s\S]*uPaletteEmber[\s\S]*uPaletteFlame[\s\S]*uPaletteHot[\s\S]*uPaletteCore/, "Selected palette must drive the GPU temperature ramp");
 assert.match(shaders.volumeFragment, /darkParticulate[\s\S]*uPaletteSmoke[\s\S]*uPaletteDust/, "Smoke and dust palette colors must affect GPU volume density");
@@ -1491,7 +1509,7 @@ assert.doesNotMatch(
 );
 {
   const volume = RESEARCH_FLUID_SHADER_SOURCES.volumeFragment;
-  const depthIndex = volume.indexOf("float alpha = 1.0 - exp(-opticalDepth);");
+  const depthIndex = volume.indexOf("float alpha = 1.0 - exp(-opticalDepth");
   const accumulateIndex = volume.indexOf("accumulated += transmittance * alpha * layerColor;");
   const loopEnd = volume.indexOf("if (transmittance < 0.012) break;");
   assert.ok(depthIndex > 0 && accumulateIndex > depthIndex && loopEnd > accumulateIndex);
