@@ -20,8 +20,9 @@ const TSAR_ID = "tsar-bomba-scale-reference";
 const HIROSHIMA_ID = "hiroshima-scale-reference";
 const EARLY_FISSION_ID = "early-fission-test-scale";
 const UNDERGROUND_ID = "underground-detonation";
+const VOLCANIC_ID = "volcanic-eruption";
 const RESEARCH_MODE_IDS = new Set([LOW_YIELD_ID, GROUND_BURST_ID, TSAR_ID]);
-const GROUND_COUPLED_IDS = new Set([GROUND_BURST_ID, CASTLE_BRAVO_ID, EARLY_FISSION_ID, UNDERGROUND_ID]);
+const GROUND_COUPLED_IDS = new Set([GROUND_BURST_ID, CASTLE_BRAVO_ID, EARLY_FISSION_ID, UNDERGROUND_ID, VOLCANIC_ID]);
 
 const tiers = Object.values(RESEARCH_FLUID_TIERS);
 assert.deepEqual(tiers.map(({ id }) => id), ["mobile", "balanced", "high"]);
@@ -103,6 +104,7 @@ for (const preset of EVENT_PRESETS) {
 assert.deepEqual(usedPrimitives, new Set(Object.keys(RESEARCH_FLUID_SOURCE_PRIMITIVES)), "Every source primitive must be exercised");
 
 const flagshipProfile = RESEARCH_FLUID_PROFILES["low-yield-nuclear-airburst"];
+const volcanicProfile = RESEARCH_FLUID_PROFILES[VOLCANIC_ID];
 const flagshipPreset = EVENT_PRESETS.find(({ id }) => id === LOW_YIELD_ID);
 const groundBurstPreset = EVENT_PRESETS.find(({ id }) => id === GROUND_BURST_ID);
 const tsarPreset = EVENT_PRESETS.find(({ id }) => id === TSAR_ID);
@@ -120,6 +122,18 @@ assert.equal(groundBurstPreset?.researchModel?.mobilePortraitPullback, undefined
   "Ground Burst must retain neutral global mobile framing after the portrait fit audit");
 assert.equal(groundBurstPreset?.render?.atmosphericWash, 0.22,
   "Ground Burst must use an explicit local flash wash without changing other presets");
+assert.equal(volcanicProfile.source.sustainEnd, 1.25, "Volcanic Eruption source persistence must remain explicit");
+assert.deepEqual(
+  volcanicProfile.physics,
+  { buoyancy: 0.94, densityLoading: 1.25, windCoupling: 1.45, vorticity: 1.55, velocityRetention: 0.994, cooling: 0.82, smokeConversion: 1.12, scalarRetention: 0.9997 },
+  "Volcanic Eruption physics must remain profile-local and bounded",
+);
+assert.equal(volcanicProfile.volume.exposure, 0.88, "Volcanic Eruption exposure must retain the restrained readability lift");
+assert.deepEqual(
+  volcanicProfile.quality,
+  { grid: 1.04, pressure: 1.08, rays: 1.12, tracers: 1.38, detail: 1.2 },
+  "Volcanic Eruption quality multipliers must remain unchanged",
+);
 for (const preset of EVENT_PRESETS.filter(({ id }) => id !== GROUND_BURST_ID)) {
   assert.equal(preset.render?.atmosphericWash, undefined,
     `${preset.id}: atmospheric wash override must remain neutral`);
@@ -180,6 +194,13 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.equal(profile.domain.renderOverscan, 1.04, "Early Fission render overscan must remain profile-local");
     assert.equal(profile.domain.renderScale, 1, "Early Fission must retain the shared tier render scale");
     assert.deepEqual(profile.domain.renderExtent, { x: 1.12, y: 1.16 });
+    assert.ok(profile.domain.riskMargin > 0 && profile.domain.densityThreshold > 0);
+  } else if (presetId === VOLCANIC_ID) {
+    assert.equal(profile.domain.mode, 1, "Volcanic Eruption must reserve reusable vertical solver headroom");
+    assert.equal(profile.domain.padding, 0.10, "Volcanic Eruption padding must remain profile-local");
+    assert.equal(profile.domain.renderOverscan, 1.04, "Volcanic Eruption render overscan must remain profile-local");
+    assert.equal(profile.domain.renderScale, 1, "Volcanic Eruption must retain the shared tier render scale");
+    assert.deepEqual(profile.domain.renderExtent, { x: 1.12, y: 1.42 });
     assert.ok(profile.domain.riskMargin > 0 && profile.domain.densityThreshold > 0);
   } else {
     assert.equal(profile.domain.mode, 0, `${presetId}: domain path must remain neutral pending its own audit`);
@@ -340,6 +361,21 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(ground.angularVariation > 0 && ground.asymmetry > 0);
     assert.ok(ground.surfaceHeat > 0 && ground.baseDust > ground.surfaceHeat);
     assert.ok(ground.transitionLift > 0 && ground.lateGroundDrift > 0);
+  } else if (presetId === VOLCANIC_ID) {
+    assert.equal(ground.mode, 1, "Volcanic Eruption must report lower contact as physical ground interaction");
+    assert.equal(ground.radialImpulse, 0.18);
+    assert.equal(ground.spreadWidth, 0.36);
+    assert.equal(ground.heightFalloff, 1.8);
+    assert.equal(ground.horizontalRetention, 0.94);
+    assert.equal(ground.verticalDamping, 0.76);
+    assert.equal(ground.spreadStart, 0.008);
+    assert.equal(ground.spreadEnd, 0.18);
+    assert.equal(ground.angularVariation, 0.42);
+    assert.equal(ground.asymmetry, 0.28);
+    assert.equal(ground.surfaceHeat, 0.28);
+    assert.equal(ground.baseDust, 1.3);
+    assert.equal(ground.transitionLift, 0.70);
+    assert.equal(ground.lateGroundDrift, 0.05);
   } else {
     assert.equal(ground.mode, 0, `${presetId}: ground coupling must remain neutral`);
     assert.equal(ground.radialImpulse, 0);
@@ -422,6 +458,21 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.equal(profile.plume.feedTaperStart, 0.4);
     assert.equal(profile.plume.feedTaperEnd, 0.72);
     assert.ok(profile.plume.lateralJitter > 0 && profile.plume.turbulenceBlend > 0);
+  } else if (presetId === VOLCANIC_ID) {
+    assert.equal(profile.plume.mode, 3, "Volcanic Eruption must use the ground-aware plume mode");
+    assert.equal(profile.plume.expansion, 0.0025);
+    assert.equal(profile.plume.vortex, 0.08);
+    assert.equal(profile.plume.persistence, 0.74);
+    assert.equal(profile.plume.widen, 0.010);
+    assert.equal(profile.plume.feedTaperStart, 0.74);
+    assert.equal(profile.plume.feedTaperEnd, 1.02);
+    assert.equal(profile.plume.lateralJitter, 0.32);
+    assert.equal(profile.plume.turbulenceBlend, 0.36);
+    assert.ok(profile.source.vertical > profile.source.radial,
+      "Volcanic Eruption must retain a vertical vent bias");
+    assert.equal(profile.source.capScale, 0.82);
+    assert.equal(profile.source.capRoll, 0.45);
+    assert.equal(profile.source.capVertical, 0.36);
   } else if (presetId === CASTLE_BRAVO_ID) {
     assert.equal(profile.plume.mode, 3, "Castle Bravo must use the ground-coupled broad-plume mode");
     assert.ok(profile.plume.expansion > 0 && profile.plume.expansion < RESEARCH_FLUID_PROFILES[TSAR_ID].plume.expansion);
@@ -526,6 +577,16 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
       "Underground Detonation weak particulate visibility must remain a restrained profile-local lift");
     assert.equal(profile.material.detailOctaveMode, 0, "Underground Detonation must retain the two-octave detail path");
     assert.ok(profile.material.interiorDepth > 0);
+  } else if (presetId === VOLCANIC_ID) {
+    assert.equal(profile.material.mode, 1, "Volcanic Eruption must enable separated ash/soot material");
+    assert.equal(profile.material.sootAbsorption, 1.45);
+    assert.equal(profile.material.dustAbsorption, 0.72);
+    assert.equal(profile.material.detailBoost, 0.10);
+    assert.equal(profile.material.warmCoolContrast, 0.34);
+    assert.equal(profile.material.lowDensityVisibility, 0.16);
+    assert.equal(profile.material.detailOctaveMode, 0,
+      "Volcanic Eruption must retain the two-octave detail budget");
+    assert.equal(profile.material.interiorDepth, 0.38);
   } else {
     assert.equal(profile.material.mode, 0, `${presetId}: smoke-material mode must remain neutral`);
     assert.equal(profile.material.sootAbsorption, 1, `${presetId}: default soot absorption must stay neutral`);
@@ -1376,6 +1437,19 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.equal(p.feedTaperEnd, 0.72);
     assert.equal(p.lateralJitter, 0.46);
     assert.equal(p.turbulenceBlend, 0.32);
+  } else if (presetId === VOLCANIC_ID) {
+    const s = profile.shockwave;
+    assert.equal(s.mode, 0, "Volcanic Eruption must retain the neutral shockwave treatment");
+    for (const ringKey of ["ringB", "ringC", "ringD"]) {
+      assert.equal(s[ringKey].strength, 0, `Volcanic Eruption shockwave.${ringKey}.strength must stay neutral`);
+      assert.equal(s[ringKey].widthScale, 1, `Volcanic Eruption shockwave.${ringKey}.widthScale must stay neutral`);
+      assert.equal(s[ringKey].radiusOffset, 0, `Volcanic Eruption shockwave.${ringKey}.radiusOffset must stay neutral`);
+    }
+    const p = profile.plume;
+    assert.equal(p.feedTaperStart, 0.74);
+    assert.equal(p.feedTaperEnd, 1.02);
+    assert.equal(p.lateralJitter, 0.32);
+    assert.equal(p.turbulenceBlend, 0.36);
   } else {
     const s = profile.shockwave;
     assert.equal(s.mode, 0, `${presetId}: shockwave mode must remain neutral`);
