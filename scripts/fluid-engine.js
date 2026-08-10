@@ -565,7 +565,7 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
         sootAbsorption: 1.35,
         dustAbsorption: 0.75,
         detailBoost: 0.15,
-        warmCoolContrast: 0.34,
+        warmCoolContrast: 0.42,
         detailOctaveMode: 0,
         interiorDepth: 0.28,
       },
