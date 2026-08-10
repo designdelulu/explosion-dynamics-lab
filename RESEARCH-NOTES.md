@@ -1087,3 +1087,42 @@ ground coupling and plume controls to add sustained, irregular column motion,
 profile material controls for ash depth, and a gradual late tail. Camera,
 shockwave, shared renderer, quality budgets, and approved neighboring presets
 remain regression locks.
+
+## Volcanic Eruption retained refinement (2026-08)
+
+The first structure pass confirmed the baseline diagnosis without exposing a
+solver roof: top, left, and right edge density remained `0.000`, while lower
+contact was classified through the profile's ground-coupling mode. A broad
+plume experiment was narrowed after visual review because its early return flow
+read too much like an anvil. The retained profile uses the existing padded
+domain with `mode: 1`, `padding: 0.10`, `renderOverscan: 1.04`, and render
+extent `{ x: 1.12, y: 1.42 }`; it does not add an extinction mask or change the
+camera. Ground coupling is profile-local (`mode: 1`) with the original
+vertical-vent bias and bounded asymmetric surface interaction.
+
+The retained plume handoff is deliberately compact: mode `3`, expansion
+`0.0025`, vortex `0.08`, persistence `0.74`, widening `0.010`, feed taper
+`0.74–1.02`, lateral jitter `0.32`, and turbulence blend `0.36`. Source cap
+controls are `capScale: 0.82`, `capRoll: 0.45`, and `capVertical: 0.36`, which
+keep the upper vent irregular without forcing a classic mushroom or a wide
+horizontal anvil. The established source and physics values remain intact
+apart from these cap controls; shockwave, camera, overlays, and quality
+multipliers remain unchanged. The only retained volume change is the
+restrained exposure lift from `0.80` to `0.88`.
+
+Material mode `1` separates dense soot and lighter ash using soot absorption
+`1.45`, dust absorption `0.72`, detail boost `0.10`, warm/cool contrast `0.34`,
+interior depth `0.38`, and `detailOctaveMode: 0`. `lowDensityVisibility: 0.16`
+provides a bounded weak-particulate lift for thin upper haze without globally
+brightening or outlining the plume. The late-dissipation experiment was
+reverted: it cleared the upper cloud too aggressively and did not meet the
+late-structure target. Volcanic therefore retains its neutral dissipation path
+and the existing natural fade.
+
+The final candidate remains a compact, ground-originating ash column with a
+visible asymmetric upper vent, rather than a conventional mushroom. Desktop,
+tablet, and Mobile readbacks remained GPU/WebGL2 with no fallback, no GL or
+application errors, unchanged ray/slice/tracer budgets, and no top/side
+computational boundary. The remaining aesthetic question is human review of
+the final upper haze against the dawn mountain background; no further
+autonomous tuning is justified without a new specific defect.
