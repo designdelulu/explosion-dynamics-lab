@@ -311,6 +311,11 @@ const BASE_PROFILE = Object.freeze({
     mode: 0, expansion: 0, vortex: 0, persistence: 0, widen: 0,
     feedTaperStart: 0.85, feedTaperEnd: 1.05, lateralJitter: 0, turbulenceBlend: 0,
   }),
+  // Upper return strength scales only the lateral ceiling turn and outer
+  // umbrella roll. The vertical ceiling brake remains active for solver
+  // safety. 1 preserves the established behavior for profiles without an
+  // explicit override.
+  ceilingReturnStrength: 1,
   // Shockwave shell-layering research controls. mode 0 is inert, mode 1 keeps
   // the established three explicit Tsar bands, and mode 2 selects the compact
   // deterministic contour family used only by low-yield. The dense family is
@@ -630,10 +635,60 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       eventFamilyId: 'volcanic', eventFamily: 'Volcanic eruption', profileKind: 7,
       tracerType: 'ash',
       sourcePrimitives: ['pulsed-column', 'vertical-jet', 'turbulent-source-cluster', 'ground-sheet'],
-      source: { centerY: 0.2, groundLevel: 0.18, radius: 0.052, aspectX: 0.72, aspectY: 1.58, onsetEnd: 0.14, sustainEnd: 1.25, pulseFrequency: 5.4, radial: 0.18, vertical: 1.42, turbulence: 1.5, heat: 0.48, smoke: 1.72, incandescent: 0.38, dust: 1.65, clusterSpread: 1.15 },
+      source: { centerY: 0.2, groundLevel: 0.18, radius: 0.052, aspectX: 0.72, aspectY: 1.58, onsetEnd: 0.14, sustainEnd: 1.25, pulseFrequency: 5.4, radial: 0.18, vertical: 1.42, turbulence: 1.5, heat: 0.48, smoke: 1.72, incandescent: 0.38, dust: 1.65, clusterSpread: 1.15, capScale: 0.82, capRoll: 0.45, capVertical: 0.36 },
       physics: { buoyancy: 0.94, densityLoading: 1.25, windCoupling: 1.45, vorticity: 1.55, velocityRetention: 0.994, cooling: 0.82, smokeConversion: 1.12, scalarRetention: 0.9997 },
-      volume: { scaleX: 1.3, scaleY: 1.34, depth: 1.2, opacity: 1.5, shadow: 1.62, bloom: 0.42, distortion: 0.55, erosion: 0.88, noiseScale: 1.18, dustVisibility: 1.55, exposure: 0.8, toneMap: 0.3, backgroundIllumination: 0.06, emissionCurve: 1.1 },
+      volume: { scaleX: 1.3, scaleY: 1.34, depth: 1.2, opacity: 1.5, shadow: 1.62, bloom: 0.42, distortion: 0.55, erosion: 0.88, noiseScale: 1.18, dustVisibility: 1.55, exposure: 0.88, toneMap: 0.3, backgroundIllumination: 0.06, emissionCurve: 1.1 },
       quality: { grid: 1.04, pressure: 1.08, rays: 1.12, tracers: 1.38, detail: 1.2 },
+      domain: {
+        mode: 1,
+        padding: 0.10,
+        renderOverscan: 1.04,
+        renderScale: 1,
+        renderExtent: { x: 1.12, y: 1.42 },
+        riskMargin: 0.07,
+        densityThreshold: 0.14,
+      },
+      groundCoupling: {
+        mode: 1,
+        radialImpulse: 0.18,
+        spreadWidth: 0.36,
+        heightFalloff: 1.8,
+        horizontalRetention: 0.94,
+        verticalDamping: 0.76,
+        spreadStart: 0.008,
+        spreadEnd: 0.18,
+        angularVariation: 0.42,
+        asymmetry: 0.28,
+        surfaceHeat: 0.28,
+        baseDust: 1.3,
+        transitionLift: 0.70,
+        lateGroundDrift: 0.05,
+      },
+      plume: {
+        mode: 3,
+        expansion: 0.0025,
+        vortex: 0.08,
+        persistence: 0.74,
+        widen: 0.010,
+        feedTaperStart: 0.74,
+        feedTaperEnd: 1.02,
+        lateralJitter: 0.32,
+        turbulenceBlend: 0.36,
+      },
+      ceilingReturnStrength: 0.35,
+      // Volcanic particulate is dense but not a single opaque soot layer.
+      // Keep the existing two-octave budget while separating dark smoke from
+      // lighter ash and preserving low-density outer wisps.
+      material: {
+        mode: 1,
+        sootAbsorption: 1.45,
+        dustAbsorption: 0.72,
+        detailBoost: 0.10,
+        warmCoolContrast: 0.34,
+        lowDensityVisibility: 0.16,
+        detailOctaveMode: 0,
+        interiorDepth: 0.38,
+      },
     },
   ),
   'fictional-plasma-burst': defineFluidProfile(
@@ -1548,7 +1603,8 @@ uniform vec4 uSeedOffsetsA;
 uniform vec4 uSeedOffsetsB;
 uniform vec4 uProfilePhysics;
 uniform vec4 uProfileDecay;
-// Profile-specific cap controls packed as (capScale, capRoll, reserved, capVertical).
+// Profile-specific cap/return controls packed as
+// (capScale, capRoll, ceilingReturnStrength, capVertical).
 uniform vec4 uProfileAux;
 // The active scalar region may occupy the padded center of the fixed solver
 // texture. 1.0 keeps legacy coordinates; smaller values preserve visible
@@ -2107,16 +2163,17 @@ void main() {
     0.5 + (0.88 - 0.5) * uDomainActiveScale + ceilingJitter,
     vUv.y
   );
+  float ceilingReturnStrength = clamp(uProfileAux.z, 0.0, 1.0);
   float upflow = max(velocity.y, 0.0);
   float ceilingRelax = min(1.0, 2.8 * uDt);
   velocity.y -= upflow * ceiling * ceilingRelax;
   velocity.x += sign(vUv.x - uSourceCenter.x + uSeedOffsetsA.y * 0.03 * uDomainActiveScale)
-    * upflow * ceiling * 0.5 * ceilingRelax;
+    * upflow * ceiling * 0.5 * ceilingRelax * ceilingReturnStrength;
   // Outer umbrella roll: spread material at the stable ceiling curls gently
   // downward away from the stem, rounding the crown into cap vortices.
   float rimDistance = abs(vUv.x - uSourceCenter.x);
   velocity.y -= ceiling * smoothstep(0.09 * uDomainActiveScale, 0.26 * uDomainActiveScale, rimDistance)
-    * (smoke + dust * 0.6) * 0.55 * uProfileAux.y * uDt;
+    * (smoke + dust * 0.6) * 0.55 * uProfileAux.y * uDt * ceilingReturnStrength;
 
   // ---- Profile-gated broad turbulent plume (research mechanism) ----
   // Inert unless uPlumeMode is set. Low-yield and Tsar opt in with separate
@@ -4954,7 +5011,7 @@ export class ResearchFluidEngine {
       profileAux: [
         source.capScale * clamp(finite(this.settings.capWidthBoost, 1), 0.6, 1.6),
         finite(source.capRoll, 1),
-        0,
+        clamp(finite(this.profile.ceilingReturnStrength, 1), 0, 1),
         finite(source.capVertical, 0.43),
       ],
     };

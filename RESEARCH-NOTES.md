@@ -1046,3 +1046,101 @@ vertical vent, soot/dust depth, and subordinate upper haze. The remaining
 visual judgment is whether the final upper remnant has enough contrast on
 Mobile; no further autonomous browser tuning is justified without a human
 visual decision.
+
+## Volcanic Eruption visual diagnosis (2026-08)
+
+The deterministic seed-1842 Cinematic baseline ends at `34 s` and was captured
+through one GPU-enabled Chrome session at 1440 × 900 Balanced/High, 768 × 1024
+Balanced, 1024 × 768 Balanced, and 390 × 844 Mobile. Every capture reported
+WebGL2, GPU FLUID, no fallback, no GL error, and no application error. The
+profile currently uses the generic legacy fluid path: `domain.mode: 0`, zero
+padding/overscan/extent, `groundCoupling.mode: 0`, `plume.mode: 0`,
+`material.mode: 0`, `core.mode: 0`, `dissipation.mode: 0`, `edge.mode: 0`, and
+the neutral shockwave path. Its source is a sustained pulsed vertical column
+(`vertical: 1.42`, `turbulence: 1.5`, `dust: 1.65`, `sustainEnd: 1.25`), but no
+profile-local plume handoff or material depth system is active.
+
+The per-edge readback kept top, left, and right density at `0.000` at all
+requested checkpoints. Late bottom density reached approximately `0.706` in
+tablet portrait, `0.486` in desktop High/tablet landscape, and `0.424` on
+Mobile. This is lower vent/ground contact, but because Volcanic still has
+neutral ground semantics it is currently reported as aggregate computational
+edge density rather than separately as physical ground contact. No screenshot
+showed a flat solver roof, hard side wall, capsule, or rectangular slab. Mature
+desktop/tablet frames do crop the upper column at the viewport; this is a
+composition/headroom issue, not top-edge solver contact. Mobile preserves the
+vent origin but loses the upper column earlier and leaves a low, dark haze.
+
+Visually, the baseline reads as a smooth dark pillar with a narrow bright feed,
+not sustained volcanic venting. The source is vertically biased and
+particulate-heavy, but neutral plume motion leaves it too cylindrical: there is
+little widening, meander, entrainment, or irregular breakup. Neutral material
+shading (`opacity: 1.5`, `shadow: 1.62`, `exposure: 0.8`) compresses ash depth
+into a dark homogeneous wall and lower sheet. At `t15` the upper material is
+already weak and at `t30`/final the scene is dominated by low ground haze; the
+late failure is material/flow persistence rather than top-boundary extinction.
+
+The smallest existing-system path is profile-local: first reserve modest
+vertical solver/render headroom and activate the existing ground-contact
+diagnostic semantics without masking or shrinking the event; then use restrained
+ground coupling and plume controls to add sustained, irregular column motion,
+profile material controls for ash depth, and a gradual late tail. Camera,
+shockwave, shared renderer, quality budgets, and approved neighboring presets
+remain regression locks.
+
+## Volcanic Eruption retained refinement (2026-08)
+
+The first structure pass confirmed the baseline diagnosis without exposing a
+solver roof: top, left, and right edge density remained `0.000`, while lower
+contact was classified through the profile's ground-coupling mode. A broad
+plume experiment was narrowed after visual review because its early return flow
+read too much like an anvil. The retained profile uses the existing padded
+domain with `mode: 1`, `padding: 0.10`, `renderOverscan: 1.04`, and render
+extent `{ x: 1.12, y: 1.42 }`; it does not add an extinction mask or change the
+camera. Ground coupling is profile-local (`mode: 1`) with the original
+vertical-vent bias and bounded asymmetric surface interaction.
+
+The retained plume handoff is deliberately compact: mode `3`, expansion
+`0.0025`, vortex `0.08`, persistence `0.74`, widening `0.010`, feed taper
+`0.74–1.02`, lateral jitter `0.32`, and turbulence blend `0.36`. Source cap
+controls are `capScale: 0.82`, `capRoll: 0.45`, and `capVertical: 0.36`, which
+keep the upper vent irregular without forcing a classic mushroom or a wide
+horizontal anvil. The established source and physics values remain intact
+apart from these cap controls; shockwave, camera, overlays, and quality
+multipliers remain unchanged. The only retained volume change is the
+restrained exposure lift from `0.80` to `0.88`.
+
+Material mode `1` separates dense soot and lighter ash using soot absorption
+`1.45`, dust absorption `0.72`, detail boost `0.10`, warm/cool contrast `0.34`,
+interior depth `0.38`, and `detailOctaveMode: 0`. `lowDensityVisibility: 0.16`
+provides a bounded weak-particulate lift for thin upper haze without globally
+brightening or outlining the plume. The late-dissipation experiment was
+reverted: it cleared the upper cloud too aggressively and did not meet the
+late-structure target. Volcanic therefore retains its neutral dissipation path
+and the existing natural fade.
+
+The final candidate remains a compact, ground-originating ash column with a
+visible asymmetric upper vent, rather than a conventional mushroom. Desktop,
+tablet, and Mobile readbacks remained GPU/WebGL2 with no fallback, no GL or
+application errors, unchanged ray/slice/tracer budgets, and no top/side
+computational boundary. The remaining aesthetic question is human review of
+the final upper haze against the dawn mountain background; no further
+autonomous tuning is justified without a new specific defect.
+
+## Volcanic Eruption ceiling-return refinement (2026-08)
+
+The mature shelf was traced to the shared force shader's normalized solver-space
+ceiling block. Its existing upward brake remains active for solver safety, while
+the lateral turn and outer umbrella roll now share the profile-local
+`ceilingReturnStrength` scalar. The neutral value is `1`, preserving the prior
+behavior for every profile without an override; the value is packed through the
+existing `uProfileAux.z` component, so no pass, texture read, or quality budget
+changes are introduced.
+
+Bounded Volcanic trials at `0.80`, `0.65`, `0.50`, and `0.35` kept the top,
+left, and right computational edges clean. The retained `0.35` value was the
+smallest tested reduction that materially narrowed the horizontal shelf while
+preserving lateral spread, a stronger center-column connection, irregular
+lobes, and sustained volcanic recirculation. Late bottom contact remains the
+expected physical ground interaction. Domain, camera, material, shockwave,
+quality budgets, and all non-Volcanic default paths remain unchanged.
