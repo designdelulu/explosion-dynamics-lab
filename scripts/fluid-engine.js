@@ -347,13 +347,16 @@ const BASE_PROFILE = Object.freeze({
   // opt in independently. sootAbsorption/dustAbsorption give soot
   // and lofted dust independent optical-depth coefficients instead of one
   // shared density-to-alpha curve; detailBoost adds an energy-weighted third
-  // curl-detail octave; warmCoolContrast widens the lit/shadowed dynamic range.
+  // curl-detail octave; warmCoolContrast widens the lit/shadowed dynamic range;
+  // lowDensityVisibility can lift weak late particulate without brightening
+  // the dense plume or buying another texture sample.
   material: Object.freeze({
     mode: 0,
     sootAbsorption: 1,
     dustAbsorption: 1,
     detailBoost: 0,
     warmCoolContrast: 0,
+    lowDensityVisibility: 0,
     // Material absorption and color separation must not implicitly purchase
     // the expensive third curl-detail octave. Profiles opt into it explicitly.
     detailOctaveMode: 0,
@@ -529,10 +532,69 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       eventFamilyId: 'ground-coupled', eventFamily: 'Ground-coupled · underground', profileKind: 4,
       tracerType: 'particulate',
       sourcePrimitives: ['vertical-jet', 'ground-sheet', 'ejecta-curtain', 'multiple-offset-kernels', 'turbulent-source-cluster'],
-      source: { centerY: 0.14, groundLevel: 0.18, radius: 0.055, aspectX: 1.25, aspectY: 0.62, onsetEnd: 0.075, sustainEnd: 0.52, radial: 0.75, vertical: 1.55, turbulence: 1.42, heat: 0.38, smoke: 0.92, incandescent: 0.25, dust: 2.25, ejecta: 1.65, clusterSpread: 1.2 },
-      physics: { buoyancy: 0.78, densityLoading: 1.55, windCoupling: 0.68, vorticity: 1.52, velocityRetention: 0.982, cooling: 1.24, smokeConversion: 1.05, scalarRetention: 0.998 },
-      volume: { scaleX: 1.08, scaleY: 1.25, depth: 1.08, opacity: 1.55, shadow: 1.55, bloom: 0.38, distortion: 0.46, erosion: 1.15, noiseScale: 1.38, dustVisibility: 2, exposure: 0.78, toneMap: 0.25, backgroundIllumination: 0.04, emissionCurve: 1.15 },
+      source: { centerY: 0.14, groundLevel: 0.18, radius: 0.055, aspectX: 1.25, aspectY: 0.62, onsetEnd: 0.075, sustainEnd: 0.64, radial: 0.75, vertical: 1.55, turbulence: 1.42, heat: 0.38, smoke: 0.92, incandescent: 0.25, dust: 2.25, ejecta: 1.65, clusterSpread: 1.2 },
+      physics: { buoyancy: 0.82, densityLoading: 1.48, windCoupling: 0.72, vorticity: 1.58, velocityRetention: 0.985, cooling: 1.16, smokeConversion: 1.08, scalarRetention: 0.998 },
+      volume: { scaleX: 1.06, scaleY: 1.22, depth: 1.14, opacity: 1.28, shadow: 1.38, bloom: 0.46, distortion: 0.58, erosion: 1.22, noiseScale: 1.3, dustVisibility: 1.55, exposure: 0.88, toneMap: 0.25, backgroundIllumination: 0.06, emissionCurve: 1.08 },
       quality: { grid: 0.94, pressure: 1, rays: 1, tracers: 1.28, detail: 1.08 },
+      groundCoupling: {
+        mode: 1,
+        radialImpulse: 0.26,
+        spreadWidth: 0.34,
+        heightFalloff: 1.8,
+        horizontalRetention: 0.93,
+        verticalDamping: 0.76,
+        spreadStart: 0.008,
+        spreadEnd: 0.16,
+        angularVariation: 0.48,
+        asymmetry: 0.38,
+        surfaceHeat: 0.36,
+        baseDust: 1.4,
+        transitionLift: 0.74,
+        lateGroundDrift: 0.08,
+      },
+      plume: {
+        mode: 3,
+        expansion: 0.008,
+        vortex: 0.42,
+        persistence: 0.82,
+        widen: 0.028,
+        feedTaperStart: 0.4,
+        feedTaperEnd: 0.72,
+        lateralJitter: 0.46,
+        turbulenceBlend: 0.32,
+      },
+      material: {
+        mode: 1,
+        sootAbsorption: 1.35,
+        dustAbsorption: 0.75,
+        detailBoost: 0.15,
+        warmCoolContrast: 0.42,
+        lowDensityVisibility: 0.22,
+        detailOctaveMode: 0,
+        interiorDepth: 0.28,
+      },
+      core: {
+        mode: 1,
+        highlightThreshold: 0.42,
+        highlightSharpness: 1.9,
+        structureBlend: 0.62,
+        bloomGateScale: 5.2,
+      },
+      dissipation: {
+        mode: 1,
+        lateStart: 0.60,
+        finalStart: 0.96,
+        sourceTaperEnd: 0.72,
+        retentionFloorSmoke: 0.998,
+        retentionFloorDust: 0.994,
+        outwardBoost: 0.02,
+        buoyancyFalloff: 0.2,
+        motionDamp: 0.38,
+        lateVelocityRetention: 0.995,
+        lateCurl: 0.006,
+        lateShear: 0.004,
+        latePhaseRate: 0.045,
+      },
     },
   ),
   'meteor-airburst': defineFluidProfile(
@@ -2888,6 +2950,7 @@ uniform float uDomainDensityThreshold;
 // the two-octave cost of the original volume path.
 uniform float uMaterialMode;
 uniform vec4 uMaterialParams;
+uniform float uMaterialLowDensityVisibility;
 uniform float uDetailOctaveMode;
 // Ground Burst may use the already-sampled view-ray depth to separate front,
 // middle, and rear particulate layers without purchasing another detail
@@ -3452,8 +3515,12 @@ void main() {
     density = max(0.0,
       density - (1.0 - erosion) * radialWeight * 0.026 * uVolumeProfile1.y
     );
+    float lowDensityLift = uMaterialMode > 0.5
+      ? max(0.0, uMaterialLowDensityVisibility)
+      : 0.0;
+    float lowDensitySignal = 1.0 - smoothstep(0.035, 0.22, smoke);
     float opticalDepth = density * inverseSteps * 3.2 * uVolumeProfile0.y;
-    float alpha = 1.0 - exp(-opticalDepth);
+    float alpha = 1.0 - exp(-opticalDepth * (1.0 + lowDensityLift * lowDensitySignal));
 
     // One midpoint probe approximates extinction along the fire-to-smoke light
     // path. Combined with accumulated view-ray density, this gives inexpensive
@@ -5035,10 +5102,11 @@ export class ResearchFluidEngine {
       volume.emissionCurve,
     );
     this._uniform1f(program, 'uDomainDensityThreshold', this._domainState().densityThreshold);
-    const material = this.profile.material || { mode: 0, sootAbsorption: 1, dustAbsorption: 1, detailBoost: 0, warmCoolContrast: 0, detailOctaveMode: 0, interiorDepth: 0 };
+    const material = this.profile.material || { mode: 0, sootAbsorption: 1, dustAbsorption: 1, detailBoost: 0, warmCoolContrast: 0, lowDensityVisibility: 0, detailOctaveMode: 0, interiorDepth: 0 };
     this._uniform1f(program, 'uMaterialMode', material.mode > 0 ? 1 : 0);
     this._uniform1f(program, 'uDetailOctaveMode', material.detailOctaveMode > 0 ? 1 : 0);
     this._uniform1f(program, 'uMaterialInteriorDepth', finite(material.interiorDepth, 0));
+    this._uniform1f(program, 'uMaterialLowDensityVisibility', finite(material.lowDensityVisibility, 0));
     this._uniform4f(
       program,
       'uMaterialParams',
