@@ -103,6 +103,31 @@ for (const preset of EVENT_PRESETS) {
 }
 assert.deepEqual(usedPrimitives, new Set(Object.keys(RESEARCH_FLUID_SOURCE_PRIMITIVES)), "Every source primitive must be exercised");
 
+// Ceiling return is a reusable force control. The neutral value must remain
+// explicit for every profile so the shared force path is regression-equivalent
+// unless a profile opts into a bounded reduction.
+for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
+  assert.ok(Number.isFinite(profile.ceilingReturnStrength), `${presetId}: ceilingReturnStrength must be finite`);
+  assert.ok(profile.ceilingReturnStrength >= 0 && profile.ceilingReturnStrength <= 1,
+    `${presetId}: ceilingReturnStrength must stay in [0, 1]`);
+  if (presetId === VOLCANIC_ID) {
+    assert.equal(profile.ceilingReturnStrength, 0.35,
+      "Volcanic Eruption must retain the approved reduced ceiling return");
+  } else {
+    assert.equal(profile.ceilingReturnStrength, 1,
+      `${presetId}: profiles without an override must preserve the default ceiling return`);
+  }
+}
+assert.deepEqual(
+  tiers.map(({ id, raySteps, tracerCount, detailResolution }) => ({ id, raySteps, tracerCount, detailResolution })),
+  [
+    { id: "mobile", raySteps: 16, tracerCount: 256, detailResolution: 16 },
+    { id: "balanced", raySteps: 26, tracerCount: 512, detailResolution: 24 },
+    { id: "high", raySteps: 38, tracerCount: 1024, detailResolution: 32 },
+  ],
+  "Ceiling-return control must not alter shared quality budgets",
+);
+
 const flagshipProfile = RESEARCH_FLUID_PROFILES["low-yield-nuclear-airburst"];
 const volcanicProfile = RESEARCH_FLUID_PROFILES[VOLCANIC_ID];
 const flagshipPreset = EVENT_PRESETS.find(({ id }) => id === LOW_YIELD_ID);
@@ -1043,6 +1068,31 @@ assert.match(engineSource, /profile\.quality\.pressure|quality\.pressure/, "Per-
 assert.match(engineSource, /profile\.quality\.rays|quality\.rays/, "Per-profile volume-slice multiplier is not consumed");
 assert.match(engineSource, /profile\.quality\.tracers|quality\.tracers/, "Per-profile tracer multiplier is not consumed");
 assert.match(engineSource, /profile\.quality\.detail|quality\.detail/, "Per-profile detail multiplier is not consumed");
+assert.match(
+  shaders.forceFragment,
+  /float ceilingReturnStrength = clamp\(uProfileAux\.z, 0\.0, 1\.0\);/,
+  "Ceiling return must be driven by the bounded profile scalar",
+);
+assert.match(
+  shaders.forceFragment,
+  /velocity\.y -= upflow \* ceiling \* ceilingRelax;/,
+  "Ceiling return must preserve the vertical safety brake",
+);
+assert.match(
+  shaders.forceFragment,
+  /velocity\.x \+= sign\([\s\S]*?ceiling \* 0\.5 \* ceilingRelax \* ceilingReturnStrength;/,
+  "Ceiling return strength must scale the lateral upper-field turn",
+);
+assert.match(
+  shaders.forceFragment,
+  /\(smoke \+ dust \* 0\.6\) \* 0\.55 \* uProfileAux\.y \* uDt \* ceilingReturnStrength;/,
+  "Ceiling return strength must scale the outer umbrella roll",
+);
+assert.match(
+  engineSource,
+  /clamp\(finite\(this\.profile\.ceilingReturnStrength, 1\), 0, 1\)/,
+  "Missing or invalid ceiling return values must fall back to the neutral scalar",
+);
 assert.match(shaders.advectFragment, /previous\s*=\s*vUv\s*-\s*velocity\s*\*\s*uDt/, "semi-Lagrangian backtrace missing");
 assert.match(shaders.forceFragment, /temperature\s*\*\s*uBuoyancy/, "temperature buoyancy missing");
 assert.match(shaders.forceFragment, /smoke\s*\*\s*uDensityLoading/, "density loading missing");
@@ -1149,6 +1199,25 @@ assert.equal(unavailableStats.currentVorticityMagnitude, 0);
 assert.equal(unavailableStats.lastGlError, null);
 unavailableEngine.destroy();
 assert.equal(unavailableEngine.destroyed, true);
+
+// Exercise the JS-side packing fallback directly as well as the source-level
+// assertion above: omitted/NaN values stay neutral and out-of-range values are
+// clamped before reaching uProfileAux.z.
+const ceilingReturnProbe = new ResearchFluidEngine({
+  presetId: "compact-conventional",
+  profileId: "compact-conventional-fluid-v1",
+  tier: "balanced",
+  seed: 1842,
+});
+ceilingReturnProbe.profile = { ...ceilingReturnProbe.profile, ceilingReturnStrength: undefined };
+assert.equal(ceilingReturnProbe._sourceUniformState().profileAux[2], 1);
+ceilingReturnProbe.profile = { ...ceilingReturnProbe.profile, ceilingReturnStrength: Number.NaN };
+assert.equal(ceilingReturnProbe._sourceUniformState().profileAux[2], 1);
+ceilingReturnProbe.profile = { ...ceilingReturnProbe.profile, ceilingReturnStrength: -0.5 };
+assert.equal(ceilingReturnProbe._sourceUniformState().profileAux[2], 0);
+ceilingReturnProbe.profile = { ...ceilingReturnProbe.profile, ceilingReturnStrength: 1.5 };
+assert.equal(ceilingReturnProbe._sourceUniformState().profileAux[2], 1);
+ceilingReturnProbe.destroy();
 
 assert.throws(
   () => new ResearchFluidEngine({ presetId: "unknown-event-profile" }),
