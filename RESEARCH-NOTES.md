@@ -1126,3 +1126,21 @@ application errors, unchanged ray/slice/tracer budgets, and no top/side
 computational boundary. The remaining aesthetic question is human review of
 the final upper haze against the dawn mountain background; no further
 autonomous tuning is justified without a new specific defect.
+
+## Volcanic Eruption ceiling-return refinement (2026-08)
+
+The mature shelf was traced to the shared force shader's normalized solver-space
+ceiling block. Its existing upward brake remains active for solver safety, while
+the lateral turn and outer umbrella roll now share the profile-local
+`ceilingReturnStrength` scalar. The neutral value is `1`, preserving the prior
+behavior for every profile without an override; the value is packed through the
+existing `uProfileAux.z` component, so no pass, texture read, or quality budget
+changes are introduced.
+
+Bounded Volcanic trials at `0.80`, `0.65`, `0.50`, and `0.35` kept the top,
+left, and right computational edges clean. The retained `0.35` value was the
+smallest tested reduction that materially narrowed the horizontal shelf while
+preserving lateral spread, a stronger center-column connection, irregular
+lobes, and sustained volcanic recirculation. Late bottom contact remains the
+expected physical ground interaction. Domain, camera, material, shockwave,
+quality budgets, and all non-Volcanic default paths remain unchanged.

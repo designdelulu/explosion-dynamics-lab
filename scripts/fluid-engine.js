@@ -311,6 +311,11 @@ const BASE_PROFILE = Object.freeze({
     mode: 0, expansion: 0, vortex: 0, persistence: 0, widen: 0,
     feedTaperStart: 0.85, feedTaperEnd: 1.05, lateralJitter: 0, turbulenceBlend: 0,
   }),
+  // Upper return strength scales only the lateral ceiling turn and outer
+  // umbrella roll. The vertical ceiling brake remains active for solver
+  // safety. 1 preserves the established behavior for profiles without an
+  // explicit override.
+  ceilingReturnStrength: 1,
   // Shockwave shell-layering research controls. mode 0 is inert, mode 1 keeps
   // the established three explicit Tsar bands, and mode 2 selects the compact
   // deterministic contour family used only by low-yield. The dense family is
@@ -670,6 +675,7 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
         lateralJitter: 0.32,
         turbulenceBlend: 0.36,
       },
+      ceilingReturnStrength: 0.35,
       // Volcanic particulate is dense but not a single opaque soot layer.
       // Keep the existing two-octave budget while separating dark smoke from
       // lighter ash and preserving low-density outer wisps.
@@ -1597,7 +1603,8 @@ uniform vec4 uSeedOffsetsA;
 uniform vec4 uSeedOffsetsB;
 uniform vec4 uProfilePhysics;
 uniform vec4 uProfileDecay;
-// Profile-specific cap controls packed as (capScale, capRoll, reserved, capVertical).
+// Profile-specific cap/return controls packed as
+// (capScale, capRoll, ceilingReturnStrength, capVertical).
 uniform vec4 uProfileAux;
 // The active scalar region may occupy the padded center of the fixed solver
 // texture. 1.0 keeps legacy coordinates; smaller values preserve visible
@@ -2156,16 +2163,17 @@ void main() {
     0.5 + (0.88 - 0.5) * uDomainActiveScale + ceilingJitter,
     vUv.y
   );
+  float ceilingReturnStrength = clamp(uProfileAux.z, 0.0, 1.0);
   float upflow = max(velocity.y, 0.0);
   float ceilingRelax = min(1.0, 2.8 * uDt);
   velocity.y -= upflow * ceiling * ceilingRelax;
   velocity.x += sign(vUv.x - uSourceCenter.x + uSeedOffsetsA.y * 0.03 * uDomainActiveScale)
-    * upflow * ceiling * 0.5 * ceilingRelax;
+    * upflow * ceiling * 0.5 * ceilingRelax * ceilingReturnStrength;
   // Outer umbrella roll: spread material at the stable ceiling curls gently
   // downward away from the stem, rounding the crown into cap vortices.
   float rimDistance = abs(vUv.x - uSourceCenter.x);
   velocity.y -= ceiling * smoothstep(0.09 * uDomainActiveScale, 0.26 * uDomainActiveScale, rimDistance)
-    * (smoke + dust * 0.6) * 0.55 * uProfileAux.y * uDt;
+    * (smoke + dust * 0.6) * 0.55 * uProfileAux.y * uDt * ceilingReturnStrength;
 
   // ---- Profile-gated broad turbulent plume (research mechanism) ----
   // Inert unless uPlumeMode is set. Low-yield and Tsar opt in with separate
@@ -5003,7 +5011,7 @@ export class ResearchFluidEngine {
       profileAux: [
         source.capScale * clamp(finite(this.settings.capWidthBoost, 1), 0.6, 1.6),
         finite(source.capRoll, 1),
-        0,
+        clamp(finite(this.profile.ceilingReturnStrength, 1), 0, 1),
         finite(source.capVertical, 0.43),
       ],
     };
