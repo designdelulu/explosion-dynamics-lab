@@ -1046,3 +1046,44 @@ vertical vent, soot/dust depth, and subordinate upper haze. The remaining
 visual judgment is whether the final upper remnant has enough contrast on
 Mobile; no further autonomous browser tuning is justified without a human
 visual decision.
+
+## Volcanic Eruption visual diagnosis (2026-08)
+
+The deterministic seed-1842 Cinematic baseline ends at `34 s` and was captured
+through one GPU-enabled Chrome session at 1440 × 900 Balanced/High, 768 × 1024
+Balanced, 1024 × 768 Balanced, and 390 × 844 Mobile. Every capture reported
+WebGL2, GPU FLUID, no fallback, no GL error, and no application error. The
+profile currently uses the generic legacy fluid path: `domain.mode: 0`, zero
+padding/overscan/extent, `groundCoupling.mode: 0`, `plume.mode: 0`,
+`material.mode: 0`, `core.mode: 0`, `dissipation.mode: 0`, `edge.mode: 0`, and
+the neutral shockwave path. Its source is a sustained pulsed vertical column
+(`vertical: 1.42`, `turbulence: 1.5`, `dust: 1.65`, `sustainEnd: 1.25`), but no
+profile-local plume handoff or material depth system is active.
+
+The per-edge readback kept top, left, and right density at `0.000` at all
+requested checkpoints. Late bottom density reached approximately `0.706` in
+tablet portrait, `0.486` in desktop High/tablet landscape, and `0.424` on
+Mobile. This is lower vent/ground contact, but because Volcanic still has
+neutral ground semantics it is currently reported as aggregate computational
+edge density rather than separately as physical ground contact. No screenshot
+showed a flat solver roof, hard side wall, capsule, or rectangular slab. Mature
+desktop/tablet frames do crop the upper column at the viewport; this is a
+composition/headroom issue, not top-edge solver contact. Mobile preserves the
+vent origin but loses the upper column earlier and leaves a low, dark haze.
+
+Visually, the baseline reads as a smooth dark pillar with a narrow bright feed,
+not sustained volcanic venting. The source is vertically biased and
+particulate-heavy, but neutral plume motion leaves it too cylindrical: there is
+little widening, meander, entrainment, or irregular breakup. Neutral material
+shading (`opacity: 1.5`, `shadow: 1.62`, `exposure: 0.8`) compresses ash depth
+into a dark homogeneous wall and lower sheet. At `t15` the upper material is
+already weak and at `t30`/final the scene is dominated by low ground haze; the
+late failure is material/flow persistence rather than top-boundary extinction.
+
+The smallest existing-system path is profile-local: first reserve modest
+vertical solver/render headroom and activate the existing ground-contact
+diagnostic semantics without masking or shrinking the event; then use restrained
+ground coupling and plume controls to add sustained, irregular column motion,
+profile material controls for ash depth, and a gradual late tail. Camera,
+shockwave, shared renderer, quality budgets, and approved neighboring presets
+remain regression locks.
