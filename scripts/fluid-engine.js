@@ -550,7 +550,7 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
           roll: 1.15,
           drift: 0.85,
           asymmetry: 0.36,
-          lobeScale: 1.08,
+          lobeScale: 0.96,
           liftSuppression: 0.76,
           breakup: 0.82,
         },
@@ -1829,7 +1829,7 @@ float profileFuelAirClusterKernel(vec2 uv) {
     uv - profileSourceCenter(),
     uSourceShape.x * 1.12,
     vec2(1.9 * mix(1.0, 1.3, uFuelAirPortrait), 1.12 * mix(1.0, 0.86, uFuelAirPortrait))
-  ) * 0.42;
+  ) * 0.26;
   return clamp(a + b + c + d + bridge, 0.0, 2.4);
 }
 

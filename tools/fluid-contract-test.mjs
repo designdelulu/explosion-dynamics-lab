@@ -485,7 +485,7 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
         roll: 1.15,
         drift: 0.85,
         asymmetry: 0.36,
-        lobeScale: 1.08,
+        lobeScale: 0.96,
         liftSuppression: 0.76,
         breakup: 0.82,
       },
