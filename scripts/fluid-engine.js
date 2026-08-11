@@ -1000,10 +1000,75 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       eventFamilyId: 'nuclear-scale', eventFamily: 'Nuclear scale · extreme historical', profileKind: 11,
       tracerType: 'atmospheric',
       sourcePrimitives: ['radial-impulse', 'ring-source', 'vertical-jet', 'multiple-offset-kernels', 'paired-cap-vortices'],
-      source: { centerY: 0.37, radius: 0.092, aspectX: 1.15, aspectY: 0.92, onsetEnd: 0.055, sustainEnd: 0.78, pulseFrequency: 1.4, radial: 1.22, vertical: 1.38, turbulence: 1.48, heat: 1.42, smoke: 1.45, incandescent: 1.3, dust: 0.75, ringRadius: 1.75, clusterSpread: 1.62, capScale: 1.32 },
-      physics: { buoyancy: 0.98, densityLoading: 1.12, windCoupling: 1.42, vorticity: 1.5, velocityRetention: 0.996, cooling: 0.68, smokeConversion: 1.08, scalarRetention: 0.9997 },
-      volume: { scaleX: 1.34, scaleY: 1.4, depth: 1.42, opacity: 1.34, shadow: 1.5, bloom: 1.52, distortion: 1.28, erosion: 0.88, noiseScale: 0.92, dustVisibility: 1, exposure: 1.18, toneMap: 0.08, backgroundIllumination: 0.44, emissionCurve: 0.78 },
+      source: { centerY: 0.4, radius: 0.1, aspectX: 1.26, aspectY: 1.0, onsetEnd: 0.055, sustainEnd: 0.84, pulseFrequency: 1.4, radial: 1.26, vertical: 1.32, turbulence: 1.65, heat: 1.16, smoke: 1.62, incandescent: 1.02, dust: 0.48, ringRadius: 1.92, clusterSpread: 1.92, capScale: 1.52, capRoll: 1.62, capVertical: 0.54 },
+      physics: { buoyancy: 0.98, densityLoading: 0.15, windCoupling: 1.42, vorticity: 1.5, velocityRetention: 0.996, cooling: 0.68, smokeConversion: 1.08, scalarRetention: 0.9997 },
+      volume: { scaleX: 1.34, scaleY: 1.4, depth: 1.42, opacity: 1.3, shadow: 1.28, bloom: 1.16, distortion: 1.28, erosion: 0.88, noiseScale: 0.92, dustVisibility: 0.92, exposure: 1.04, toneMap: 0.2, backgroundIllumination: 0.4, emissionCurve: 0.84 },
       quality: { grid: 1.12, pressure: 1.16, rays: 1.18, tracers: 1.42, detail: 1.25 },
+      // Extreme scale previously used the legacy full-field mapping and hit
+      // both solver roof and floor during the same event. Reserve a broad
+      // profile-local active margin while keeping the render extent large;
+      // this is the reusable padded-domain transform, not a silhouette mask
+      // or a reduction of the source physics.
+      domain: {
+        mode: 1,
+        padding: 0.3,
+        renderOverscan: 1.3,
+        renderScale: { mobile: 1, balanced: 0.8, high: 0.9 },
+        renderExtent: { x: 1.2, y: 1.06 },
+        riskMargin: 0.07,
+        densityThreshold: 0.14,
+      },
+      // The extreme profile uses the existing broad historical plume path,
+      // with more lateral exchange and stem breakup than the cohesive Tsar
+      // reference. The source primitives remain profile-gated and all values
+      // are normalized visual controls.
+      plume: {
+        mode: 1,
+        expansion: 0.18,
+        vortex: 0.9,
+        persistence: 0.92,
+        widen: 0.2,
+        feedTaperStart: 0.38,
+        feedTaperEnd: 0.68,
+        lateralJitter: 0.5,
+        turbulenceBlend: 0.28,
+      },
+      // Reduce the generic ceiling's lateral shelf return while retaining
+      // the shared vertical safety brake; the padded domain handles the
+      // actual solver boundary clearance.
+      ceilingReturnStrength: 0.5,
+      material: {
+        mode: 1,
+        sootAbsorption: 1.3,
+        dustAbsorption: 0.52,
+        detailBoost: 0.7,
+        warmCoolContrast: 0.72,
+        lowDensityVisibility: 0.75,
+        detailOctaveMode: 0,
+        interiorDepth: 0.5,
+      },
+      core: {
+        mode: 1,
+        highlightThreshold: 2.45,
+        highlightSharpness: 3.2,
+        structureBlend: 0.82,
+        bloomGateScale: 12,
+      },
+      dissipation: {
+        mode: 1,
+        lateStart: 0.62,
+        finalStart: 1,
+        sourceTaperEnd: 0.9,
+        retentionFloorSmoke: 0.9992,
+        retentionFloorDust: 0.9985,
+        outwardBoost: 0.02,
+        buoyancyFalloff: 0,
+        motionDamp: 0.35,
+        lateVelocityRetention: 0.998,
+        lateCurl: 0.006,
+        lateShear: 0.0045,
+        latePhaseRate: 0.05,
+      },
     },
   ),
   // Historical visual-reference profiles. Each uses only broad public visual
