@@ -379,6 +379,7 @@ function resolveBehavior(preset, id) {
   result.fireball = numericOverride(sources, ['fireball', 'fireballRadius', 'fireballScale', 'fireballStrength'], base.fireball);
   result.fireGrowth = numericOverride(sources, ['fireballGrowth', 'fireGrowth'], 1);
   result.shock = numericOverride(sources, ['shock', 'shockRadius', 'shockScale', 'shockStrength'], base.shock);
+  result.shockOpacity = numericOverride(sources, ['shockOpacity'], 1);
   result.shockThickness = numericOverride(sources, ['shockThickness'], 0.7);
   result.surface = numericOverride(sources, ['surfaceInteraction', 'surface'], base.dust);
   result.dust = numericOverride(sources, ['dust', 'dustAmount', 'surfaceDust'], base.dust);
@@ -1490,7 +1491,6 @@ export class ExplosionRenderer {
     // and freshly-reset framing is bit-for-bit unchanged.
     const angleOffset = (this.settings.cameraAngle / 45) * width * 0.056;
     const originX = this._origin.x * width + angleOffset;
-    const surfaceY = clamp(this._origin.y * height + (this.settings.cameraAngle / 45) * height * 0.04, height * 0.58, height * 0.88);
     const burst = String(this.settings.burst).toLowerCase();
     const normalizedAltitude = Math.abs(this.settings.altitude) <= 1
       ? this.settings.altitude
@@ -1499,6 +1499,10 @@ export class ExplosionRenderer {
       || burst.includes('atmos')
       || burst.includes('hover')
       || ['meteorAir', 'nuclearAir', 'extreme', 'plasma'].includes(this._behavior.key);
+    const portraitOriginY = mobilePortrait
+      ? clamp(finite(this._preset?.mobilePortraitOriginY, this._origin.y), 0.4, 0.82)
+      : this._origin.y;
+    const surfaceY = clamp(portraitOriginY * height + (this.settings.cameraAngle / 45) * height * 0.04, height * 0.58, height * 0.88);
     const buried = burst.includes('under')
       || burst.includes('subsurface')
       || normalizedAltitude < -0.04
@@ -2174,7 +2178,8 @@ export class ExplosionRenderer {
     const progress = phase.shockProgress;
     const maxRadius = layout.min * (0.58 + behavior.shock * 0.16) * layout.energyScale;
     const radius = Math.max(2, maxRadius * progress);
-    const baseAlpha = saturate(phase.shockAlpha * clamp(behavior.shock, 0.2, 2.2))
+    const baseAlpha = saturate(phase.shockAlpha * clamp(behavior.shock, 0.2, 2.2)
+      * clamp(behavior.shockOpacity, 0, 1.5))
       * clamp(profile.opacity * tuning.shockOpacity, 0, 2);
     if (baseAlpha <= 0.004) return;
     const aspect = layout.elevated && !profile.spectral

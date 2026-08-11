@@ -17,6 +17,7 @@ const LOW_YIELD_ID = "low-yield-nuclear-airburst";
 const GROUND_BURST_ID = "nuclear-ground-burst";
 const CASTLE_BRAVO_ID = "castle-bravo-scale-reference";
 const TSAR_ID = "tsar-bomba-scale-reference";
+const FUEL_AIR_ID = "fuel-air-visual-archetype";
 const HIROSHIMA_ID = "hiroshima-scale-reference";
 const EARLY_FISSION_ID = "early-fission-test-scale";
 const UNDERGROUND_ID = "underground-detonation";
@@ -113,6 +114,9 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
   if (presetId === VOLCANIC_ID) {
     assert.equal(profile.ceilingReturnStrength, 0.35,
       "Volcanic Eruption must retain the approved reduced ceiling return");
+  } else if (presetId === FUEL_AIR_ID) {
+    assert.equal(profile.ceilingReturnStrength, 0.58,
+      "Fuel-Air must retain its profile-local reduced ceiling return");
   } else {
     assert.equal(profile.ceilingReturnStrength, 1,
       `${presetId}: profiles without an override must preserve the default ceiling return`);
@@ -133,6 +137,7 @@ const volcanicProfile = RESEARCH_FLUID_PROFILES[VOLCANIC_ID];
 const flagshipPreset = EVENT_PRESETS.find(({ id }) => id === LOW_YIELD_ID);
 const groundBurstPreset = EVENT_PRESETS.find(({ id }) => id === GROUND_BURST_ID);
 const tsarPreset = EVENT_PRESETS.find(({ id }) => id === TSAR_ID);
+const fuelAirPreset = EVENT_PRESETS.find(({ id }) => id === FUEL_AIR_ID);
 assert.equal(flagshipProfile.profileId, "nuclear-airburst-fluid-v1");
 assert.equal(flagshipProfile.profileKind, 9);
 assert.equal(flagshipProfile.preserveResearchSource, true);
@@ -165,6 +170,8 @@ for (const preset of EVENT_PRESETS.filter(({ id }) => id !== GROUND_BURST_ID)) {
 }
 assert.equal(tsarPreset?.researchModel?.mobilePortraitPullback, undefined,
   "Tsar mobile framing must remain unchanged");
+assert.equal(fuelAirPreset?.mobilePortraitOriginY, 0.59,
+  "Fuel-Air mobile portrait composition must retain its profile-local origin");
 assert.equal(
   EVENT_PRESETS.filter(({ researchModel }) => researchModel?.mobilePortraitPullback !== undefined).length,
   1,
@@ -186,6 +193,12 @@ assert.equal(RESEARCH_FLUID_DIAGNOSTICS.vorticity, 7);
 assert.equal(RESEARCH_FLUID_DIAGNOSTICS.tracers, 8);
 assert.equal(RESEARCH_FLUID_DEFAULTS.presetId, "low-yield-nuclear-airburst");
 assert.equal(RESEARCH_FLUID_DEFAULTS.tier, "balanced");
+const fuelAirProfile = RESEARCH_FLUID_PROFILES[FUEL_AIR_ID];
+assert.deepEqual(fuelAirProfile.quality,
+  { grid: 0.98, pressure: 0.94, rays: 1.04, tracers: 1.04, detail: 1 },
+  "Fuel-Air must retain the shared balanced/high quality budget multipliers");
+assert.equal(fuelAirProfile.material.detailOctaveMode, 0,
+  "Fuel-Air must retain detailOctaveMode 0");
 
 // --- Reusable padded-domain contract (2026-07) ------------------------------
 for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
@@ -226,6 +239,13 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.equal(profile.domain.renderOverscan, 1.04, "Volcanic Eruption render overscan must remain profile-local");
     assert.equal(profile.domain.renderScale, 1, "Volcanic Eruption must retain the shared tier render scale");
     assert.deepEqual(profile.domain.renderExtent, { x: 1.12, y: 1.42 });
+    assert.ok(profile.domain.riskMargin > 0 && profile.domain.densityThreshold > 0);
+  } else if (presetId === FUEL_AIR_ID) {
+    assert.equal(profile.domain.mode, 1, "Fuel-Air must use the reusable padded-domain path");
+    assert.equal(profile.domain.padding, 0.16, "Fuel-Air padding must remain profile-local");
+    assert.equal(profile.domain.renderOverscan, 1.16, "Fuel-Air overscan must remain profile-local");
+    assert.equal(profile.domain.renderScale, 1, "Fuel-Air must retain the shared tier render scale");
+    assert.deepEqual(profile.domain.renderExtent, { x: 1.24, y: 1.02 });
     assert.ok(profile.domain.riskMargin > 0 && profile.domain.densityThreshold > 0);
   } else {
     assert.equal(profile.domain.mode, 0, `${presetId}: domain path must remain neutral pending its own audit`);
@@ -269,6 +289,10 @@ const rendererBoundarySource = readFileSync(new URL("../scripts/renderer.js", im
 assert.match(rendererBoundarySource, /getRenderResolutionScale\?\.\(\)/, "Profile render-resolution scale is not consumed by the renderer");
 assert.match(rendererBoundarySource, /outputWidth = Math\.max\(1, Math\.round\(width \* dpr \* outputScale\)\)/, "Fluid output scale must be tier/profile aware");
 assert.match(rendererBoundarySource, /renderDomain\?\.volumeScale[\s\S]*?renderDomain\?\.sourceCenter/, "Developer stats must retain render-domain geometry for alignment diagnostics");
+assert.match(rendererBoundarySource, /result\.shockOpacity = numericOverride\(sources, \['shockOpacity'\], 1\)/,
+  "Fuel-Air analytical shock opacity must remain a profile-local override");
+assert.match(rendererBoundarySource, /mobilePortraitOriginY[\s\S]*?portraitOriginY/,
+  "Fuel-Air portrait composition must use a profile-local layout value");
 const engineBoundarySource = readFileSync(new URL("../scripts/fluid-engine.js", import.meta.url), "utf8");
 assert.match(engineBoundarySource, /activeDensityBounds = activeCells > 0/, "Occupancy bounds must be computed from active scalar cells");
 assert.match(engineBoundarySource, /maxDensityAtEdge\s*[=:][\s\S]*?touchesMediumDensity\s*[=:]/, "Boundary diagnostics must distinguish edge density from camera cropping");
@@ -443,7 +467,34 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
   for (const key of ["mode", "expansion", "vortex", "persistence", "widen"]) {
     assert.ok(Number.isFinite(profile.plume[key]), `${presetId}: plume.${key} must be finite`);
   }
-  if (presetId === LOW_YIELD_ID) {
+  for (const key of ["clusterSpread", "verticalSpan", "roll", "drift", "asymmetry", "lobeScale", "liftSuppression", "breakup"]) {
+    assert.ok(Number.isFinite(profile.plume.fuelAir?.[key]), `${presetId}: plume.fuelAir.${key} must be finite`);
+  }
+  if (presetId === FUEL_AIR_ID) {
+    assert.equal(profile.plume.mode, 4, "Fuel-Air must use the dedicated multi-lobe plume mode");
+    assert.deepEqual(
+      profile.sourcePrimitives,
+      ["sustained-combustion-region", "multiple-offset-kernels", "turbulent-source-cluster"],
+      "Fuel-Air source must omit the legacy ring primitive",
+    );
+    assert.deepEqual(
+      profile.plume.fuelAir,
+      {
+        clusterSpread: 2.8,
+        verticalSpan: 1.1,
+        roll: 1.15,
+        drift: 0.85,
+        asymmetry: 0.36,
+        lobeScale: 0.96,
+        liftSuppression: 0.76,
+        breakup: 0.82,
+      },
+      "Fuel-Air multi-lobe controls must retain the approved profile-local values",
+    );
+    assert.ok(profile.source.radial > profile.source.vertical, "Fuel-Air must lead with outward expansion");
+    assert.ok(profile.source.smoke > profile.source.heat, "Fuel-Air source must favor smoke over uniform heat");
+    assert.equal(profile.groundCoupling.mode, 0, "Fuel-Air must not claim a physical ground-contact exemption");
+  } else if (presetId === LOW_YIELD_ID) {
     assert.equal(profile.plume.mode, 2, "Low-yield must enable its separate mode 2 with standard absorbing boundaries");
     assert.ok(profile.plume.expansion > 0 && profile.plume.expansion < RESEARCH_FLUID_PROFILES[TSAR_ID].plume.expansion);
     assert.ok(profile.plume.vortex > 0 && profile.plume.vortex < RESEARCH_FLUID_PROFILES[TSAR_ID].plume.vortex);
@@ -529,15 +580,52 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
   } else {
     assert.equal(profile.plume.mode, 0, `${presetId}: broad-plume mode must remain neutral`);
   }
+  if (presetId !== FUEL_AIR_ID) {
+    assert.equal(profile.plume.mode <= 3, true, `${presetId}: only Fuel-Air may use plume mode 4`);
+    assert.deepEqual(
+      profile.plume.fuelAir,
+      {
+        clusterSpread: 1,
+        verticalSpan: 0.5,
+        roll: 0,
+        drift: 0,
+        asymmetry: 0,
+        lobeScale: 1,
+        liftSuppression: 0,
+        breakup: 0,
+      },
+      `${presetId}: Fuel-Air controls must remain neutral outside the target profile`,
+    );
+  }
 }
 // The shaders and engine bindings must carry the plume uniforms.
-for (const uniform of ["uPlumeMode", "uPlumeParams"]) {
+for (const uniform of ["uPlumeMode", "uPlumeParams", "uFuelAirParams", "uFuelAirParams2", "uFuelAirPortrait"]) {
   assert.match(
     `${RESEARCH_FLUID_SHADER_SOURCES.forceFragment}\n${RESEARCH_FLUID_SHADER_SOURCES.scalarFragment}`,
     new RegExp(`uniform[^;]*\\b${uniform}\\b`),
     `${uniform}: plume uniform missing from shaders`,
   );
 }
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.forceFragment,
+  /float\s+profileFuelAirClusterKernel\(vec2 uv\)/,
+  "Fuel-Air source cluster kernel must remain explicit",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.forceFragment,
+  /if \(uPlumeMode > 3\.5\) \{[\s\S]*?Fuel-Air cloud mode[\s\S]*?There is intentionally no[\s\S]*?coreBand[\s\S]*?fuelAirLobeMotion/,
+  "Fuel-Air force path must be a distinct multi-lobe branch without nuclear stem assumptions",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.scalarFragment,
+  /if \(uPlumeMode > 3\.5\) \{[\s\S]*?fuelAirPockets[\s\S]*?fuelAirMatter/,
+  "Fuel-Air scalar path must keep layered hot pockets and particulate material profile-local",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.forceFragment,
+  /fuelAirPortraitDensity[\s\S]*?mix\(1\.0, 0\.72, uFuelAirPortrait\)/,
+  "Fuel-Air portrait density loading must be profile-gated",
+);
 
 // --- Profile-gated smoke-material controls (2026-07) -------------------------
 for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
@@ -612,6 +700,15 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.equal(profile.material.detailOctaveMode, 0,
       "Volcanic Eruption must retain the two-octave detail budget");
     assert.equal(profile.material.interiorDepth, 0.38);
+  } else if (presetId === FUEL_AIR_ID) {
+    assert.equal(profile.material.mode, 1, "Fuel-Air must enable layered soot/dust material");
+    assert.equal(profile.material.sootAbsorption, 1.6);
+    assert.equal(profile.material.dustAbsorption, 0.7);
+    assert.equal(profile.material.warmCoolContrast, 0.74);
+    assert.equal(profile.material.lowDensityVisibility, 0.38);
+    assert.equal(profile.material.detailOctaveMode, 0,
+      "Fuel-Air must retain the two-octave detail budget");
+    assert.equal(profile.material.interiorDepth, 0.56);
   } else {
     assert.equal(profile.material.mode, 0, `${presetId}: smoke-material mode must remain neutral`);
     assert.equal(profile.material.sootAbsorption, 1, `${presetId}: default soot absorption must stay neutral`);
@@ -804,6 +901,17 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(d.outwardBoost > 0 && d.buoyancyFalloff > 0 && d.motionDamp > 0);
     assert.ok(d.lateVelocityRetention > profile.physics.velocityRetention && d.lateVelocityRetention < 1);
     assert.ok(d.lateCurl > 0 && d.lateShear > 0 && d.latePhaseRate > 0);
+  } else if (presetId === FUEL_AIR_ID) {
+    const d = profile.dissipation;
+    assert.equal(d.mode, 1, "Fuel-Air must enable its profile-local late-motion tail");
+    assert.equal(d.lateStart, 0.4);
+    assert.equal(d.finalStart, 0.96);
+    assert.equal(d.sourceTaperEnd, 0.7);
+    assert.ok(d.retentionFloorSmoke < 1 && d.retentionFloorSmoke > 0.99);
+    assert.ok(d.retentionFloorDust < d.retentionFloorSmoke && d.retentionFloorDust > 0.99);
+    assert.ok(d.outwardBoost > 0 && d.buoyancyFalloff > 0 && d.motionDamp > 0);
+    assert.ok(d.lateVelocityRetention > profile.physics.velocityRetention && d.lateVelocityRetention < 1);
+    assert.ok(d.lateCurl > 0 && d.lateShear > 0 && d.latePhaseRate > 0);
   } else {
     const d = profile.dissipation;
     assert.equal(d.mode, 0, `${presetId}: late-dissipation mode must remain off for non-target presets`);
@@ -843,6 +951,7 @@ for (const gatedTerm of [
   /float retainedVelocity = dissipationVelocityRetention\(\);/,
   /if \(uGroundCouplingMode > 0\.5\)[\s\S]*?velocity\.x \*= pow\(clamp\(horizontalRetention, 0\.9, 1\.0\), uDt \* 60\.0\);/,
   /velocity \+= broadCurl \* uDissipationParams3\.y/,
+  /vec2 lateOutwardDir = uPlumeMode > 3\.5[\s\S]*?velocity\.y \*= mix\(1\.0, 0\.12, outwardProgress\)/,
   /float tracerDissipation = uDissipationMode > 0\.5 \? mix\(1\.0, 0\.35, dissipationProgress\(\)\) : 1\.0;/,
 ]) {
   assert.match(
@@ -1371,6 +1480,16 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
         feedTaperEnd: 0.24,
         lateralJitter: 0.32,
         turbulenceBlend: 0.15,
+        fuelAir: {
+          clusterSpread: 1,
+          verticalSpan: 0.5,
+          roll: 0,
+          drift: 0,
+          asymmetry: 0,
+          lobeScale: 1,
+          liftSuppression: 0,
+          breakup: 0,
+        },
       },
       "Low-yield stem and plume controls must retain the approved final-pass values",
     );

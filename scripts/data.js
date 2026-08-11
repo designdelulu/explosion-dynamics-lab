@@ -239,7 +239,7 @@ export const EVENT_RENDERER_MODELS = deepFreeze({
     familyId: "industrial-combustion",
     family: "Industrial · expansive fireball",
     profileId: "fuel-air-style-fluid-v1",
-    sourcePrimitives: ["sustained-combustion-region", "ring-source", "multiple-offset-kernels", "turbulent-source-cluster"]
+    sourcePrimitives: ["sustained-combustion-region", "multiple-offset-kernels", "turbulent-source-cluster"]
   },
   "underground-detonation": {
     familyId: "ground-coupled",
@@ -613,7 +613,7 @@ export const EVENT_PRESETS = deepFreeze([
   }),
   createPreset({
     id: "fuel-air-visual-archetype",
-    name: "Fuel-Air-Style Visual Archetype",
+    name: "Fuel-Air Visual Archetype",
     shortName: "Expansive Fireball",
     category: "atmospheric-archetype",
     burstType: "low-air",
@@ -624,12 +624,13 @@ export const EVENT_PRESETS = deepFreeze([
     energyLabel: "Broad atmospheric scale",
     energyRange: [0.7, 1.25],
     duration: 14.6,
+    mobilePortraitOriginY: 0.59,
     defaultEnvironmentId: "desert",
     defaultTimeId: "dusk",
     defaultPaletteId: "amber-smoke",
     defaultAltitude: 0.12,
     particleBudget: { low: 680, balanced: 1480, high: 2860 },
-    render: { flash: 0.58, fireballRadius: 1.28, fireballGrowth: 0.78, shockRadius: 1.26, shockThickness: 1.16, surfaceInteraction: 0.46, debris: 0.2, dust: 0.58, smoke: 0.96, columnRise: 0.72, cloudSpread: 1.08, turbulence: 0.82, windResponse: 0.72, atmosphericLight: 0.9, heatDistortion: 1.02, cameraShake: 0.56 },
+    render: { flash: 0.58, fireballRadius: 1.28, fireballGrowth: 0.78, shockRadius: 1.26, shockOpacity: 0.34, shockThickness: 0.78, surfaceInteraction: 0.46, debris: 0.2, dust: 0.58, smoke: 0.96, columnRise: 0.72, cloudSpread: 1.08, turbulence: 0.82, windResponse: 0.72, atmosphericLight: 0.9, heatDistortion: 1.02, cameraShake: 0.56 },
     overview: { luminous: 1.02, innerWave: 1.08, outerWave: 1.34, particulate: 0.72 },
     phases: phaseList([
       ["detonation", 0, 0.3, 0.8, "outExpo"],
