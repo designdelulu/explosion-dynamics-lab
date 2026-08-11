@@ -299,9 +299,9 @@ const BASE_PROFILE = Object.freeze({
   }),
   // Broad-plume research controls. mode 0 keeps a preset on its exact prior
   // behavior; mode 1 is the existing historical-scale Tsar path, mode 2 gives
-  // low-yield its compact shaping path, and mode 3 identifies the separately
-  // balanced ground-coupled path. All enabled modes share the generic force
-  // mechanism but retain independent immutable values.
+  // low-yield its compact shaping path, mode 3 identifies the separately
+  // balanced ground-coupled path, and mode 4 is the dedicated Fuel-Air
+  // multi-lobe path. All enabled modes retain independent immutable values.
   // feedTaperStart/feedTaperEnd/lateralJitter/turbulenceBlend are the central
   // -stem taper/breakup controls (2026-07 shockwave/stem/performance pass);
   // feedTaperStart/End default to the original hardcoded coreBand taper
@@ -310,6 +310,16 @@ const BASE_PROFILE = Object.freeze({
   plume: Object.freeze({
     mode: 0, expansion: 0, vortex: 0, persistence: 0, widen: 0,
     feedTaperStart: 0.85, feedTaperEnd: 1.05, lateralJitter: 0, turbulenceBlend: 0,
+    fuelAir: Object.freeze({
+      clusterSpread: 1,
+      verticalSpan: 0.5,
+      roll: 0,
+      drift: 0,
+      asymmetry: 0,
+      lobeScale: 1,
+      liftSuppression: 0,
+      breakup: 0,
+    }),
   }),
   // Upper return strength scales only the lateral ceiling turn and outer
   // umbrella roll. The vertical ceiling brake remains active for solver
@@ -455,7 +465,14 @@ function defineFluidProfile(presetId, profileId, overrides = {}) {
     quality: { ...BASE_PROFILE.quality, ...(overrides.quality || {}) },
     domain: { ...BASE_PROFILE.domain, ...(overrides.domain || {}) },
     groundCoupling: { ...BASE_PROFILE.groundCoupling, ...(overrides.groundCoupling || {}) },
-    plume: { ...BASE_PROFILE.plume, ...(overrides.plume || {}) },
+    plume: {
+      ...BASE_PROFILE.plume,
+      ...(overrides.plume || {}),
+      fuelAir: {
+        ...BASE_PROFILE.plume.fuelAir,
+        ...(overrides.plume?.fuelAir || {}),
+      },
+    },
     shockwave: {
       ...BASE_PROFILE.shockwave,
       ...(overrides.shockwave || {}),
@@ -523,11 +540,42 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
     {
       eventFamilyId: 'industrial-combustion', eventFamily: 'Industrial · expansive fireball', profileKind: 3,
       tracerType: 'ember',
-      sourcePrimitives: ['sustained-combustion-region', 'ring-source', 'multiple-offset-kernels', 'turbulent-source-cluster'],
-      source: { centerY: 0.27, radius: 0.082, aspectX: 1.62, aspectY: 0.76, onsetEnd: 0.1, sustainEnd: 0.6, pulseFrequency: 1.75, radial: 0.82, vertical: 0.65, turbulence: 1.25, heat: 1.18, smoke: 1.15, incandescent: 1.32, dust: 0.55, ringRadius: 1.55, clusterSpread: 1.62 },
-      physics: { buoyancy: 1.02, densityLoading: 1.02, windCoupling: 0.82, vorticity: 1.35, velocityRetention: 0.99, cooling: 0.72, smokeConversion: 1.3, scalarRetention: 0.998 },
-      volume: { scaleX: 1.24, scaleY: 0.92, depth: 1.22, opacity: 1.18, shadow: 1.18, bloom: 1.25, distortion: 1.2, erosion: 0.92, noiseScale: 1.08, dustVisibility: 0.68, exposure: 1.06, backgroundIllumination: 0.24, emissionCurve: 0.76 },
+      sourcePrimitives: ['sustained-combustion-region', 'multiple-offset-kernels', 'turbulent-source-cluster'],
+      source: { centerY: 0.38, radius: 0.078, aspectX: 1.24, aspectY: 1.2, onsetEnd: 0.1, sustainEnd: 0.52, pulseFrequency: 1.75, radial: 0.82, vertical: 0.3, turbulence: 1.35, heat: 0.66, smoke: 1.02, incandescent: 0.52, dust: 0.78, clusterSpread: 1.25 },
+      plume: {
+        mode: 4,
+        fuelAir: {
+          clusterSpread: 2.8,
+          verticalSpan: 1.1,
+          roll: 1.15,
+          drift: 0.85,
+          asymmetry: 0.36,
+          lobeScale: 1.08,
+          liftSuppression: 0.76,
+          breakup: 0.82,
+        },
+      },
+      physics: { buoyancy: 0.42, densityLoading: 0.78, windCoupling: 0.78, vorticity: 1.62, velocityRetention: 0.991, cooling: 0.92, smokeConversion: 1.16, scalarRetention: 0.998 },
+      volume: { scaleX: 1.24, scaleY: 1.02, depth: 1.26, opacity: 0.68, shadow: 1.42, bloom: 0.34, distortion: 1.1, erosion: 1.16, noiseScale: 1.08, dustVisibility: 0.9, exposure: 0.7, backgroundIllumination: 0.18, emissionCurve: 1.16 },
       quality: { grid: 0.98, pressure: 0.94, rays: 1.04, tracers: 1.04, detail: 1 },
+      domain: { mode: 1, padding: 0.16, renderOverscan: 1.16, renderExtent: { x: 1.24, y: 1.02 }, riskMargin: 0.06, densityThreshold: 0.14 },
+      ceilingReturnStrength: 0.58,
+      material: { mode: 1, sootAbsorption: 1.6, dustAbsorption: 0.7, detailBoost: 0, warmCoolContrast: 0.74, lowDensityVisibility: 0.38, detailOctaveMode: 0, interiorDepth: 0.56 },
+      dissipation: {
+        mode: 1,
+        lateStart: 0.4,
+        finalStart: 0.96,
+        sourceTaperEnd: 0.7,
+        retentionFloorSmoke: 0.9992,
+        retentionFloorDust: 0.998,
+        outwardBoost: 0.016,
+        buoyancyFalloff: 0.5,
+        motionDamp: 0.55,
+        lateVelocityRetention: 0.993,
+        lateCurl: 0.008,
+        lateShear: 0.0015,
+        latePhaseRate: 0.05,
+      },
     },
   ),
   'underground-detonation': defineFluidProfile(
@@ -1622,7 +1670,8 @@ uniform vec4 uGroundCouplingB;
 uniform vec4 uGroundCouplingC;
 // Profile-gated broad-plume research controls. uPlumeMode 0 is inert, mode 1
 // is the historical-scale variant, mode 2 is the compact low-yield variant,
-// and mode 3 is the independently balanced ground-coupled variant.
+// mode 3 is the independently balanced ground-coupled variant, and mode 4 is
+// the dedicated Fuel-Air multi-lobe variant.
 // uPlumeParams packs
 // (expansion, vortexStrength, persistence, columnWiden).
 uniform float uPlumeMode;
@@ -1632,6 +1681,12 @@ uniform vec4 uPlumeParams;
 // feedTaperEnd, lateralJitter, turbulenceBlend) — see the coreBand/
 // stemBreakup usage in FORCE_FRAGMENT for what each term does.
 uniform vec4 uPlumeStemParams;
+// Dedicated Fuel-Air cloud controls, inert unless uPlumeMode is 4. Packs
+// (clusterSpread, verticalSpan, roll, drift) and
+// (asymmetry, lobeScale, liftSuppression, breakup).
+uniform vec4 uFuelAirParams;
+uniform vec4 uFuelAirParams2;
+uniform float uFuelAirPortrait;
 // Tsar-scale late-dissipation research controls. uDissipationMode is 0 for
 // every shipped preset except the Tsar historical reference, so this block is
 // inert (byte-identical behavior) for all other events. uDissipationParams
@@ -1702,6 +1757,91 @@ float profileMultiKernel(vec2 uv) {
   float c = ellipticalKernel(uv - center - uSeedOffsetsB.xy * spread, radius * 0.72, vec2(1.3, 0.66));
   float d = ellipticalKernel(uv - center - uSeedOffsetsB.zw * spread, radius * 0.58, vec2(0.8, 1.2));
   return clamp(a * 0.82 + b * 0.68 + c * 0.58 + d * 0.44, 0.0, 1.65);
+}
+
+// Fuel-Air uses a low, connected population of unequal horizontal lobes. The
+// offsets are deterministic and deliberately overlap: the visual target is a
+// single turbulent body with internal folds, not a row of separate fireballs.
+vec2 fuelAirLobeCenter(int index) {
+  vec2 offset = vec2(0.0);
+  if (index == 0) offset = vec2(-0.62, -0.10);
+  else if (index == 1) offset = vec2(0.50, 0.08);
+  else if (index == 2) offset = vec2(-0.16, 0.20);
+  else if (index == 3) offset = vec2(0.18, -0.18);
+  else offset = vec2(0.62, 0.14);
+
+  float seedX = index == 0 ? uSeedOffsetsA.x
+    : index == 1 ? uSeedOffsetsA.z
+    : index == 2 ? uSeedOffsetsB.x
+    : index == 3 ? uSeedOffsetsB.z
+    : uSeedOffsetsB.w;
+  float seedY = index == 0 ? uSeedOffsetsA.y
+    : index == 1 ? uSeedOffsetsA.w
+    : index == 2 ? uSeedOffsetsB.y
+    : index == 3 ? uSeedOffsetsB.w
+    : uSeedOffsetsA.z;
+  float development = smoothstep(0.025, 0.58, uNormalizedTime);
+  float phase = uNormalizedTime * 6.28318530718;
+  float phaseOffset = float(index) * 1.37 + seedY * 3.2;
+  offset.x += seedX * uFuelAirParams2.x * 0.18;
+  offset.y += seedY * uFuelAirParams2.x * 0.1;
+  offset.x += sin(phase * 0.72 + phaseOffset) * uFuelAirParams.w * 0.18 * development;
+  offset.y += cos(phase * 0.61 - phaseOffset) * uFuelAirParams.w * 0.06 * development;
+
+  vec2 center = profileSourceCenter();
+  float horizontalSpread = uSourceShape.x * max(0.45, uFuelAirParams.x);
+  float verticalSpread = uSourceShape.x * max(0.18, uFuelAirParams.y);
+  float portraitStretch = mix(1.0, 1.55, uFuelAirPortrait);
+  float portraitFlatten = mix(1.0, 0.76, uFuelAirPortrait);
+  return center + vec2(
+    offset.x * horizontalSpread * portraitStretch,
+    offset.y * verticalSpread * portraitFlatten
+  );
+}
+
+float fuelAirLobeKernel(vec2 uv, int index) {
+  vec2 center = fuelAirLobeCenter(index);
+  float lobeRadius = uSourceShape.x * max(0.54, uFuelAirParams2.y);
+  float radiusScale = index == 0 ? 1.05
+    : index == 1 ? 0.92
+    : index == 2 ? 0.78
+    : index == 3 ? 0.72
+    : 0.62;
+  float verticalAspect = mix(0.96, 1.45, smoothstep(0.42, 1.1, uFuelAirParams.y));
+  float portraitAspectX = mix(1.0, 1.42, uFuelAirPortrait);
+  float portraitAspectY = mix(1.0, 0.88, uFuelAirPortrait);
+  vec2 aspect = index == 2 ? vec2(1.18 * portraitAspectX, verticalAspect * 0.96 * portraitAspectY)
+    : index == 3 ? vec2(1.28 * portraitAspectX, verticalAspect * 0.88 * portraitAspectY)
+    : vec2(1.42 * portraitAspectX, verticalAspect * portraitAspectY);
+  return ellipticalKernel(uv - center, lobeRadius * radiusScale, aspect);
+}
+
+float profileFuelAirClusterKernel(vec2 uv) {
+  if (uPlumeMode < 3.5) return 0.0;
+  float a = fuelAirLobeKernel(uv, 0) * 0.92;
+  float b = fuelAirLobeKernel(uv, 1) * 0.78;
+  float c = fuelAirLobeKernel(uv, 2) * 0.62;
+  float d = fuelAirLobeKernel(uv, 3) * 0.52;
+  // A restrained bridge keeps the unequal lobes connected while the source is
+  // still compact. It is broad enough to read as shared hot material, not a
+  // sixth centered fireball.
+  float bridge = ellipticalKernel(
+    uv - profileSourceCenter(),
+    uSourceShape.x * 1.12,
+    vec2(1.9 * mix(1.0, 1.3, uFuelAirPortrait), 1.12 * mix(1.0, 0.86, uFuelAirPortrait))
+  ) * 0.42;
+  return clamp(a + b + c + d + bridge, 0.0, 2.4);
+}
+
+vec2 fuelAirLobeMotion(vec2 uv) {
+  vec2 delta = uv - profileSourceCenter();
+  vec2 outward = vec2(delta.x / max(abs(delta.x), 0.006), 0.0);
+  vec2 tangent = vec2(-delta.y, delta.x) / max(length(delta), 0.006);
+  float phase = uNormalizedTime * 6.28318530718;
+  float rollSign = sin((uv.x - uSourceCenter.x) * 8.0 + phase * 1.4 + uSeedOffsetsA.w * 3.0);
+  return outward * (0.46 + 0.12 * uFuelAirParams.x)
+    + tangent * (0.16 + uFuelAirParams.z * 0.18) * (0.68 + rollSign * 0.32)
+    + vec2(uSeedOffsetsA.z * uFuelAirParams2.x * 0.22, 0.0);
 }
 
 float profileRingKernel(vec2 uv) {
@@ -1844,6 +1984,7 @@ float dissipationVelocityRetention() {
 }
 
 float profileCombinedKernelWithoutTrail(vec2 uv) {
+  if (uPlumeMode > 3.5) return profileFuelAirClusterKernel(uv);
   float result = profileBaseKernel(uv) * (sourceEnabled(SOURCE_RADIAL) ? 1.0 : 0.0);
   result = max(result, profileRingKernel(uv) * (sourceEnabled(SOURCE_RING) ? 1.0 : 0.0));
   result = max(result, profileGroundKernel(uv) * (sourceEnabled(SOURCE_GROUND) ? 1.0 : 0.0));
@@ -1936,9 +2077,19 @@ void main() {
   float buoyancyFalloff = uDissipationMode > 0.5
     ? mix(1.0, 1.0 - clamp(uDissipationParams2.z, 0.0, 0.95), dissipationProgress())
     : 1.0;
-  float buoyantLift = (temperature * uBuoyancy * uProfilePhysics.x + incandescent * 0.14) * buoyancyFalloff;
-  float densitySink = smoke * uDensityLoading * uProfilePhysics.y
-    + dust * uDensityLoading * uProfilePhysics.y * 1.7;
+  float fuelAirPortraitLift = uPlumeMode > 3.5
+    ? mix(1.0, 0.68, uFuelAirPortrait)
+    : 1.0;
+  float buoyantLift = (temperature * uBuoyancy * uProfilePhysics.x + incandescent * 0.14)
+    * buoyancyFalloff * fuelAirPortraitLift;
+  // Narrow portrait grids otherwise make the same density-loading sink read as
+  // long downward curtains. Fuel-Air alone softens that sink on portrait
+  // output; all desktop profiles retain their established force balance.
+  float fuelAirPortraitDensity = uPlumeMode > 3.5
+    ? mix(1.0, 0.72, uFuelAirPortrait)
+    : 1.0;
+  float densitySink = smoke * uDensityLoading * uProfilePhysics.y * fuelAirPortraitDensity
+    + dust * uDensityLoading * uProfilePhysics.y * 1.7 * fuelAirPortraitDensity;
   float lift = buoyantLift - densitySink;
   velocity.y += lift * uDt;
   velocity += uWind * uDt * uProfilePhysics.z * (0.18 + smoke * 0.08);
@@ -2189,7 +2340,59 @@ void main() {
   //      structure to sustain instead of amplifying nothing.
   //   3. Altitude-dependent column widening so the stem thickens with height.
   // All quantities are normalized visual motion cues — no blast/damage model.
-  if (uPlumeMode > 0.5) {
+  if (uPlumeMode > 3.5) {
+    // Fuel-Air cloud mode: several low, unequal lobes exchange material
+    // laterally and roll around their own centers. There is intentionally no
+    // centered coreBand, rising cap ring, or ground-fed stem in this branch.
+    float fuelAirActivity = clamp(
+      temperature * 0.18 + smoke * 0.72 + incandescent * 0.28,
+      0.0,
+      1.25
+    );
+    float cloudPhase = smoothstep(0.018, 0.11, uNormalizedTime);
+    float maturePhase = smoothstep(0.08, 0.26, uNormalizedTime)
+      * (1.0 - smoothstep(0.76, 1.08, uNormalizedTime));
+    float motionDamp = dissipationMotionDamp();
+    float cluster = profileFuelAirClusterKernel(vUv);
+    vec2 lobeMotion = fuelAirLobeMotion(vUv);
+    lobeMotion = vec2(
+      lobeMotion.x * 0.35,
+      lobeMotion.y * mix(0.28, 0.2, uFuelAirParams2.z)
+        * mix(1.0, 0.46, uFuelAirPortrait)
+    );
+    float localAsymmetry = 1.0 + uFuelAirParams2.x * (
+      sin((vUv.x - uSourceCenter.x) * 17.0 + uSeedOffsetsA.w * 4.0)
+      + sin((vUv.y - uSourceCenter.y) * 11.0 - uSeedOffsetsB.y * 3.0)
+    ) * 0.18;
+    float lateralRoll = (0.00025 + 0.0007 * uFuelAirParams.z) * cloudPhase
+      + (0.0004 + 0.0009 * uFuelAirParams.z) * maturePhase;
+    velocity += lobeMotion * fuelAirActivity * lateralRoll
+      * localAsymmetry * uDomainActiveScale * motionScale * uDt * 60.0 * motionDamp;
+    velocity += turbulence.xy * cluster * fuelAirActivity
+      * (0.002 + uFuelAirParams2.w * 0.003) * motionScale * uDt * 60.0 * motionDamp;
+
+    // A small shared rise keeps the connected body airborne while the profile
+    // control suppresses the single-column lift that creates a mushroom stem.
+    float lift = cluster * fuelAirActivity
+      * (0.006 + 0.006 * cloudPhase) * (1.0 - uFuelAirParams2.z)
+      * mix(1.0, 0.62, uFuelAirPortrait)
+      * motionScale * uDt * 30.0 * motionDamp;
+    velocity.y += lift;
+    velocity.y -= max(velocity.y, 0.0) * uFuelAirParams2.z
+      * cluster * 0.65 * motionScale * uDt * 60.0;
+
+    // Widening is horizontal and lobe-relative. It activates through the
+    // mature phase, then relaxes so late smoke can fragment without a runaway
+    // expansion that would erase the field.
+    float widening = smoothstep(0.12, 0.42, uNormalizedTime)
+      * (1.0 - smoothstep(0.72, 1.08, uNormalizedTime));
+    vec2 outward = vUv - uSourceCenter;
+    outward.x *= 1.18;
+    outward /= max(length(outward), 0.02);
+    velocity += outward * cluster * fuelAirActivity
+      * (0.0002 + uFuelAirParams2.w * 0.0005) * widening
+      * uDomainActiveScale * motionScale * uDt * 60.0 * motionDamp;
+  } else if (uPlumeMode > 0.5) {
     float plumeActivity = clamp(temperature * 0.2 + smoke * 0.72 + incandescent * 0.32, 0.0, 1.2);
     float heightAbove = clamp((vUv.y - uSourceCenter.y) / (0.52 * uDomainActiveScale), 0.0, 1.2);
     float lateral = vUv.x - uSourceCenter.x;
@@ -2315,7 +2518,15 @@ void main() {
     if (outwardProgress > 0.0005) {
       vec2 fromCenter = vUv - uSourceCenter;
       vec2 outwardDir = fromCenter / max(length(fromCenter), 0.02);
-      velocity += outwardDir * uDissipationParams2.y * outwardProgress * uDomainActiveScale * motionScale * uDt * 0.6;
+      // Fuel-Air keeps its late residual primarily lateral. The generic radial
+      // tail sends sparse material into a single diagonal streak in portrait
+      // and wide views; only this profile replaces that component with a
+      // horizontally biased outward drift.
+      vec2 lateOutwardDir = uPlumeMode > 3.5
+        ? vec2(sign(fromCenter.x + uSeedOffsetsA.x * 0.01), fromCenter.y * 0.18)
+        : outwardDir;
+      lateOutwardDir /= max(length(lateOutwardDir), 0.02);
+      velocity += lateOutwardDir * uDissipationParams2.y * outwardProgress * uDomainActiveScale * motionScale * uDt * 0.6;
 
       if (uGroundCouplingMode > 0.5) {
         // Ground dust keeps a weak horizontal tail after the main radial
@@ -2347,6 +2558,13 @@ void main() {
       velocity.x += heightShear * (0.55 + 0.45 * sin(slowPhase + vUv.y * 3.1)) * uDomainActiveScale
         * uDissipationParams3.z * lateMaterial * outwardProgress
         * motionScale * uDt * 60.0;
+      // Fuel-Air's late body should continue to exchange laterally without a
+      // single lobe turning into a rising diagonal tail. Keep vertical carry
+      // only during the active cloud and damp it profile-locally as the tail
+      // thins; the broad curl and horizontal drift remain alive.
+      if (uPlumeMode > 3.5) {
+        velocity.y *= mix(1.0, 0.12, outwardProgress);
+      }
     }
   }
 
@@ -2574,7 +2792,42 @@ void main() {
       0.0,
       2.8
     );
-    if (uGroundCouplingMode > 0.5) {
+    if (uPlumeMode > 3.5) {
+      // Fuel-Air scalar layering follows the same connected lobe envelope as
+      // the source motion. A seed-stable detail modulation keeps bright
+      // pockets embedded in smoke instead of making the whole body one white
+      // emissive wall. The material compositor adds the deeper optical
+      // separation later when the profile opts into material mode.
+      float fuelAirPockets = clamp(
+        0.72 + sourceDetail * (0.34 + uFuelAirParams2.w * 0.24)
+          + sin((vUv.x - uSourceCenter.x) * 19.0 + uSeedOffsetsA.z * 4.2) * 0.1
+          + sin((vUv.y - uSourceCenter.y) * 13.0 - uSeedOffsetsB.w * 3.4) * 0.08,
+        0.18,
+        1.38
+      );
+      float fuelAirThermal = clamp(
+        stagedCombined * (0.5 + fuelAirPockets * 0.3),
+        0.0,
+        2.4
+      );
+      float fuelAirMatter = clamp(
+        stagedCombined * (0.82 + fuelAirPockets * 0.28)
+          + multi * 0.22,
+        0.0,
+        2.6
+      );
+      temperature += source * fuelAirThermal * hotEnvelope
+        * uSourceScalar.x * uDt * 2.0;
+      incandescent += source * fuelAirThermal * hotEnvelope
+        * fuelAirPockets * uSourceScalar.z * uDt * 1.35;
+      smoke += source * fuelAirMatter * matterEnvelope
+        * uSourceScalar.y * uDt * 1.08;
+      dust += source * clamp(
+        fuelAirMatter * 0.48 + multi * 0.28,
+        0.0,
+        2.8
+      ) * matterEnvelope * uSourceScalar.w * uDt * 0.7;
+    } else if (uGroundCouplingMode > 0.5) {
       // Keep the surface flash broad but short-lived and irregular; do not
       // feed the whole ground sheet through the same high-temperature kernel
       // as the vertical plume. The base/offset kernels supply the hot core,
@@ -2810,6 +3063,10 @@ void main() {
         center.x + randomAcross * uSourceShape.x * 0.42,
         mix(uSourceShape.w, center.y + uSourceShape.x * 1.8, tracerRandom(index, generation, 31u))
       );
+    } else if (uProfileKind != 9 && uPlumeMode > 3.5) {
+      int lobeIndex = int(index % 4u);
+      position = fuelAirLobeCenter(lobeIndex)
+        + ellipse * radius * mix(0.62, 0.9, tracerRandom(index, generation, 37u));
     } else if (uProfileKind != 9 && sourceEnabled(SOURCE_RING) && sourceLane < 3u) {
       float ringRadius = uSourceShape.x * uSourceAux.x;
       position = center + vec2(cos(angle), sin(angle) * uSourceShape.z) * ringRadius;
@@ -5059,8 +5316,8 @@ export class ResearchFluidEngine {
       finite(groundCoupling.transitionLift, 0),
       finite(groundCoupling.lateGroundDrift, 0),
     );
-    const plume = this.profile.plume || { mode: 0, expansion: 0, vortex: 0, persistence: 0, widen: 0 };
-    this._uniform1f(program, 'uPlumeMode', clamp(finite(plume.mode, 0), 0, 3));
+    const plume = this.profile.plume || { mode: 0, expansion: 0, vortex: 0, persistence: 0, widen: 0, fuelAir: BASE_PROFILE.plume.fuelAir };
+    this._uniform1f(program, 'uPlumeMode', clamp(finite(plume.mode, 0), 0, 4));
     this._uniform4f(
       program,
       'uPlumeParams',
@@ -5077,6 +5334,24 @@ export class ResearchFluidEngine {
       finite(plume.lateralJitter, 0),
       finite(plume.turbulenceBlend, 0),
     );
+    const fuelAir = plume.fuelAir || BASE_PROFILE.plume.fuelAir;
+    this._uniform4f(
+      program,
+      'uFuelAirParams',
+      finite(fuelAir.clusterSpread, 1),
+      finite(fuelAir.verticalSpan, 0.5),
+      finite(fuelAir.roll, 0),
+      finite(fuelAir.drift, 0),
+    );
+    this._uniform4f(
+      program,
+      'uFuelAirParams2',
+      finite(fuelAir.asymmetry, 0),
+      finite(fuelAir.lobeScale, 1),
+      finite(fuelAir.liftSuppression, 0),
+      finite(fuelAir.breakup, 0),
+    );
+    this._uniform1f(program, 'uFuelAirPortrait', this.height > this.width ? 1 : 0);
     const dissipation = this.profile.dissipation || {
       mode: 0, lateStart: 1, finalStart: 1, sourceTaperEnd: 1,
       retentionFloorSmoke: 1, retentionFloorDust: 1, outwardBoost: 0, buoyancyFalloff: 0, motionDamp: 0,
