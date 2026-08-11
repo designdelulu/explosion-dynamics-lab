@@ -22,6 +22,7 @@ const HIROSHIMA_ID = "hiroshima-scale-reference";
 const EARLY_FISSION_ID = "early-fission-test-scale";
 const UNDERGROUND_ID = "underground-detonation";
 const VOLCANIC_ID = "volcanic-eruption";
+const EXTREME_ID = "extreme-historical-scale";
 const RESEARCH_MODE_IDS = new Set([LOW_YIELD_ID, GROUND_BURST_ID, TSAR_ID]);
 const GROUND_COUPLED_IDS = new Set([GROUND_BURST_ID, CASTLE_BRAVO_ID, EARLY_FISSION_ID, UNDERGROUND_ID, VOLCANIC_ID]);
 
@@ -117,6 +118,9 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
   } else if (presetId === FUEL_AIR_ID) {
     assert.equal(profile.ceilingReturnStrength, 0.58,
       "Fuel-Air must retain its profile-local reduced ceiling return");
+  } else if (presetId === EXTREME_ID) {
+    assert.equal(profile.ceilingReturnStrength, 0.5,
+      "Extreme Historical Scale must retain its profile-local reduced ceiling return");
   } else {
     assert.equal(profile.ceilingReturnStrength, 1,
       `${presetId}: profiles without an override must preserve the default ceiling return`);
@@ -246,6 +250,15 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.equal(profile.domain.renderOverscan, 1.16, "Fuel-Air overscan must remain profile-local");
     assert.equal(profile.domain.renderScale, 1, "Fuel-Air must retain the shared tier render scale");
     assert.deepEqual(profile.domain.renderExtent, { x: 1.24, y: 1.02 });
+    assert.ok(profile.domain.riskMargin > 0 && profile.domain.densityThreshold > 0);
+  } else if (presetId === EXTREME_ID) {
+    assert.equal(profile.domain.mode, 1, "Extreme Historical Scale must use the reusable padded-domain path");
+    assert.equal(profile.domain.padding, 0.3, "Extreme Historical Scale must reserve the audited broad active margin");
+    assert.equal(profile.domain.renderOverscan, 1.3, "Extreme Historical Scale overscan must remain profile-local");
+    assert.deepEqual(profile.domain.renderScale,
+      { mobile: 1, balanced: 0.8, high: 0.9 },
+      "Extreme Historical Scale must retain its profile-local render scale without changing solver budgets");
+    assert.deepEqual(profile.domain.renderExtent, { x: 1.2, y: 1.06 });
     assert.ok(profile.domain.riskMargin > 0 && profile.domain.densityThreshold > 0);
   } else {
     assert.equal(profile.domain.mode, 0, `${presetId}: domain path must remain neutral pending its own audit`);
@@ -567,6 +580,20 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     // Source must broaden the plume: radial injection at least matches vertical
     // so the column is no longer a pencil jet.
     assert.ok(profile.source.radial >= profile.source.vertical, "Tsar radial injection must not be dominated by vertical");
+  } else if (presetId === EXTREME_ID) {
+    assert.equal(profile.plume.mode, 1, "Extreme Historical Scale must use the historical layered plume mode");
+    assert.equal(profile.physics.densityLoading, 0.15,
+      "Extreme Historical Scale must retain the boundary-safe late-flow density loading");
+    assert.equal(profile.plume.expansion, 0.18);
+    assert.equal(profile.plume.vortex, 0.9);
+    assert.equal(profile.plume.persistence, 0.92);
+    assert.equal(profile.plume.widen, 0.2);
+    assert.equal(profile.plume.feedTaperStart, 0.38);
+    assert.equal(profile.plume.feedTaperEnd, 0.68);
+    assert.equal(profile.plume.lateralJitter, 0.5);
+    assert.equal(profile.plume.turbulenceBlend, 0.28);
+    assert.ok(profile.source.radial > 0 && profile.source.vertical > 0,
+      "Extreme Historical Scale must retain both broad radial and vertical source components");
   } else if (presetId === HIROSHIMA_ID) {
     assert.equal(profile.plume.mode, 1, "Hiroshima must use the historical persistence path");
     assert.ok(profile.plume.expansion > 0 && profile.plume.expansion < 0.02, "Hiroshima expansion must remain compact");
@@ -709,6 +736,14 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.equal(profile.material.detailOctaveMode, 0,
       "Fuel-Air must retain the two-octave detail budget");
     assert.equal(profile.material.interiorDepth, 0.56);
+  } else if (presetId === EXTREME_ID) {
+    assert.equal(profile.material.mode, 1, "Extreme Historical Scale must enable layered smoke material");
+    assert.ok(profile.material.sootAbsorption > profile.material.dustAbsorption);
+    assert.ok(profile.material.warmCoolContrast > 0);
+    assert.ok(profile.material.lowDensityVisibility > 0);
+    assert.equal(profile.material.detailOctaveMode, 0,
+      "Extreme Historical Scale must retain the two-octave detail budget");
+    assert.ok(profile.material.interiorDepth > 0);
   } else {
     assert.equal(profile.material.mode, 0, `${presetId}: smoke-material mode must remain neutral`);
     assert.equal(profile.material.sootAbsorption, 1, `${presetId}: default soot absorption must stay neutral`);
@@ -912,6 +947,17 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(d.outwardBoost > 0 && d.buoyancyFalloff > 0 && d.motionDamp > 0);
     assert.ok(d.lateVelocityRetention > profile.physics.velocityRetention && d.lateVelocityRetention < 1);
     assert.ok(d.lateCurl > 0 && d.lateShear > 0 && d.latePhaseRate > 0);
+  } else if (presetId === EXTREME_ID) {
+    const d = profile.dissipation;
+    assert.equal(d.mode, 1, "Extreme Historical Scale must enable its profile-local late-motion tail");
+    assert.ok(d.lateStart > 0.5 && d.lateStart < d.sourceTaperEnd);
+    assert.equal(d.finalStart, 1);
+    assert.ok(d.sourceTaperEnd < d.finalStart);
+    assert.ok(d.retentionFloorSmoke < 1 && d.retentionFloorSmoke > 0.99);
+    assert.ok(d.retentionFloorDust < d.retentionFloorSmoke && d.retentionFloorDust > 0.99);
+    assert.ok(d.outwardBoost > 0 && d.motionDamp > 0);
+    assert.ok(d.lateVelocityRetention > profile.physics.velocityRetention && d.lateVelocityRetention < 1);
+    assert.ok(d.lateCurl > 0 && d.lateShear > 0 && d.latePhaseRate > 0);
   } else {
     const d = profile.dissipation;
     assert.equal(d.mode, 0, `${presetId}: late-dissipation mode must remain off for non-target presets`);
@@ -1034,6 +1080,13 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(c.highlightSharpness > 2.0, "Tsar highlight roll-off must be steeper than the default");
     assert.ok(c.structureBlend > 0 && c.structureBlend <= 1, "Tsar structure blend must be active and bounded");
     assert.ok(c.bloomGateScale > 0, "Tsar bloom gradient gate must be active");
+  } else if (presetId === EXTREME_ID) {
+    const c = profile.core;
+    assert.equal(c.mode, 1, "Extreme Historical Scale must enable structured-core roll-off");
+    assert.ok(c.highlightThreshold > 1.5);
+    assert.ok(c.highlightSharpness > 2);
+    assert.ok(c.structureBlend > 0 && c.structureBlend <= 1);
+    assert.ok(c.bloomGateScale > 0);
   } else {
     const c = profile.core;
     assert.equal(c.mode, 0, `${presetId}: core-polish mode must remain neutral`);
@@ -1638,6 +1691,19 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.equal(p.feedTaperEnd, 1.02);
     assert.equal(p.lateralJitter, 0.32);
     assert.equal(p.turbulenceBlend, 0.36);
+  } else if (presetId === EXTREME_ID) {
+    const s = profile.shockwave;
+    assert.equal(s.mode, 0, "Extreme Historical Scale must retain the neutral analytical shock treatment");
+    for (const ringKey of ["ringB", "ringC", "ringD"]) {
+      assert.equal(s[ringKey].strength, 0, `Extreme Historical Scale shockwave.${ringKey}.strength must stay neutral`);
+      assert.equal(s[ringKey].widthScale, 1, `Extreme Historical Scale shockwave.${ringKey}.widthScale must stay neutral`);
+      assert.equal(s[ringKey].radiusOffset, 0, `Extreme Historical Scale shockwave.${ringKey}.radiusOffset must stay neutral`);
+    }
+    const p = profile.plume;
+    assert.equal(p.feedTaperStart, 0.38);
+    assert.equal(p.feedTaperEnd, 0.68);
+    assert.equal(p.lateralJitter, 0.5);
+    assert.equal(p.turbulenceBlend, 0.28);
   } else {
     const s = profile.shockwave;
     assert.equal(s.mode, 0, `${presetId}: shockwave mode must remain neutral`);
