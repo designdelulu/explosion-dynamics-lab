@@ -724,8 +724,8 @@ export const EVENT_PRESETS = deepFreeze([
     defaultPaletteId: "amber-smoke",
     defaultAltitude: 0,
     particleBudget: { low: 1120, balanced: 2480, high: 4680 },
-    render: { flash: 1.12, fireballRadius: 0.86, fireballGrowth: 1.16, shockRadius: 1.32, shockThickness: 0.84, surfaceInteraction: 1.64, debris: 1.7, dust: 1.62, smoke: 0.92, columnRise: 1.42, cloudSpread: 1.08, turbulence: 1.34, windResponse: 0.72, atmosphericLight: 1.06, heatDistortion: 0.68, cameraShake: 1.42 },
-    overview: { luminous: 0.7, innerWave: 1.12, outerWave: 1.38, particulate: 1.52 },
+    render: { flash: 1.12, fireballRadius: 0.86, fireballGrowth: 1.16, shockRadius: 0.22, shockOpacity: 0.18, shockThickness: 0.2, surfaceInteraction: 1.64, debris: 1.7, dust: 1.62, smoke: 0.92, columnRise: 1.42, cloudSpread: 1.08, turbulence: 1.34, windResponse: 0.72, atmosphericLight: 1.06, heatDistortion: 0.68, cameraShake: 1.42 },
+    overview: { luminous: 0.7, innerWave: 0.45, outerWave: 0.55, particulate: 1.52 },
     phases: phaseList([
       ["detonation", 0, 0.24, 1, "outExpo"],
       ["peak-flash", 0, 0.58, 1.12, "outExpo"],

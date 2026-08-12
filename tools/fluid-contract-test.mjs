@@ -24,8 +24,9 @@ const UNDERGROUND_ID = "underground-detonation";
 const VOLCANIC_ID = "volcanic-eruption";
 const EXTREME_ID = "extreme-historical-scale";
 const INDUSTRIAL_ID = "industrial-fireball";
+const METEOR_ID = "meteor-ground-impact";
 const RESEARCH_MODE_IDS = new Set([LOW_YIELD_ID, GROUND_BURST_ID, TSAR_ID]);
-const GROUND_COUPLED_IDS = new Set([GROUND_BURST_ID, CASTLE_BRAVO_ID, EARLY_FISSION_ID, UNDERGROUND_ID, VOLCANIC_ID]);
+const GROUND_COUPLED_IDS = new Set([GROUND_BURST_ID, CASTLE_BRAVO_ID, EARLY_FISSION_ID, UNDERGROUND_ID, VOLCANIC_ID, METEOR_ID]);
 
 const tiers = Object.values(RESEARCH_FLUID_TIERS);
 assert.deepEqual(tiers.map(({ id }) => id), ["mobile", "balanced", "high"]);
@@ -261,6 +262,13 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
       "Extreme Historical Scale must retain its profile-local render scale without changing solver budgets");
     assert.deepEqual(profile.domain.renderExtent, { x: 1.2, y: 1.06 });
     assert.ok(profile.domain.riskMargin > 0 && profile.domain.densityThreshold > 0);
+  } else if (presetId === METEOR_ID) {
+    assert.equal(profile.domain.mode, 1, "Meteor Ground Impact must use the reusable padded-domain path after its boundary audit");
+    assert.equal(profile.domain.padding, 0.14, "Meteor Ground Impact must retain its Mobile-safe profile-local padding");
+    assert.equal(profile.domain.renderOverscan, 1.04, "Meteor Ground Impact render overscan must remain profile-local");
+    assert.equal(profile.domain.renderScale, 1, "Meteor Ground Impact must retain the shared tier render scale");
+    assert.deepEqual(profile.domain.renderExtent, { x: 1.35, y: 1.18 });
+    assert.ok(profile.domain.riskMargin > 0 && profile.domain.densityThreshold > 0);
   } else {
     assert.equal(profile.domain.mode, 0, `${presetId}: domain path must remain neutral pending its own audit`);
     assert.equal(profile.domain.padding, 0, `${presetId}: domain padding must remain neutral`);
@@ -439,6 +447,17 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.equal(ground.baseDust, 1.3);
     assert.equal(ground.transitionLift, 0.70);
     assert.equal(ground.lateGroundDrift, 0.05);
+  } else if (presetId === METEOR_ID) {
+    assert.equal(ground.mode, 1, "Meteor Ground Impact must expose physical surface-contact semantics");
+    assert.equal(ground.radialImpulse, 0, "Meteor surface semantics must not import Ground Burst radial coupling");
+    assert.equal(ground.spreadStart, 0, "Meteor dedicated impact mode owns ejecta timing");
+    assert.equal(ground.spreadEnd, 0, "Meteor dedicated impact mode owns ejecta timing");
+    assert.equal(ground.angularVariation, 0, "Meteor dedicated impact mode owns angular variation");
+    assert.equal(ground.asymmetry, 0, "Meteor dedicated impact mode owns directional asymmetry");
+    assert.equal(ground.surfaceHeat, 0, "Meteor dedicated impact mode owns impact thermal injection");
+    assert.equal(ground.baseDust, 0, "Meteor dedicated impact mode owns particulate injection");
+    assert.equal(ground.transitionLift, 0, "Meteor dedicated impact mode owns plume lift");
+    assert.equal(ground.lateGroundDrift, 0, "Meteor dedicated impact mode owns late ground motion");
   } else {
     assert.equal(ground.mode, 0, `${presetId}: ground coupling must remain neutral`);
     assert.equal(ground.radialImpulse, 0);
@@ -655,6 +674,97 @@ assert.match(
   "Fuel-Air portrait density loading must be profile-gated",
 );
 
+// --- Dedicated Meteor impact/ejecta mode (2026-08) -------------------------
+// The mode owns radial particulate source placement and decentralized lift;
+// the reusable ground flag remains semantic-only for Meteor, so Ground Burst
+// dynamics cannot be inherited accidentally.
+for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
+  assert.ok(profile.impactPlume && typeof profile.impactPlume === "object",
+    `${presetId}: impactPlume config missing`);
+  for (const key of [
+    "mode", "lobeSpread", "directionalBias", "liftVariation", "breakup",
+    "verticalSpread", "groundPersistence", "lateralRoll", "upperDrift",
+  ]) {
+    assert.ok(Number.isFinite(profile.impactPlume[key]),
+      `${presetId}: impactPlume.${key} must be finite`);
+  }
+  if (presetId === METEOR_ID) {
+    assert.equal(profile.impactPlume.mode, 1, "Meteor Ground Impact must enable the dedicated impact mode");
+    assert.deepEqual(profile.impactPlume, {
+      mode: 1,
+      lobeSpread: 1,
+      directionalBias: 0.72,
+      liftVariation: 0.58,
+      breakup: 0.78,
+      verticalSpread: 0.72,
+      groundPersistence: 0.64,
+      lateralRoll: 0.74,
+      upperDrift: 0.48,
+    }, "Meteor impact controls must retain the approved deterministic values");
+    assert.equal(profile.material.mode, 1, "Meteor material depth must use the existing mode-1 path");
+    assert.equal(profile.material.detailOctaveMode, 0, "Meteor must retain the two-octave detail budget");
+    assert.deepEqual(profile.quality,
+      { grid: 1, pressure: 1.04, rays: 1.04, tracers: 1.42, detail: 1.12 },
+      "Meteor impact mode must not increase quality budgets");
+  } else {
+    assert.equal(profile.impactPlume.mode, 0,
+      `${presetId}: Meteor impact mode must remain neutral outside the target profile`);
+    assert.deepEqual(profile.impactPlume, {
+      mode: 0,
+      lobeSpread: 1,
+      directionalBias: 0,
+      liftVariation: 0,
+      breakup: 0,
+      verticalSpread: 0.5,
+      groundPersistence: 0,
+      lateralRoll: 0,
+      upperDrift: 0,
+    }, `${presetId}: Meteor impact controls must remain neutral`);
+  }
+}
+const meteorEngineSource = readFileSync(new URL("../scripts/fluid-engine.js", import.meta.url), "utf8");
+for (const uniform of ["uMeteorImpactMode", "uMeteorImpactParams", "uMeteorImpactParams2"]) {
+  const source = `${RESEARCH_FLUID_SHADER_SOURCES.forceFragment}\n${RESEARCH_FLUID_SHADER_SOURCES.scalarFragment}\n${RESEARCH_FLUID_SHADER_SOURCES.tracerAdvectFragment}`;
+  assert.match(source, new RegExp(`uniform[^;]*\\b${uniform}\\b`),
+    `${uniform}: dedicated Meteor uniform missing`);
+  assert.match(meteorEngineSource, new RegExp(`["']${uniform}["']`),
+    `${uniform}: dedicated Meteor uniform binding missing`);
+}
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.forceFragment,
+  /else if \(uMeteorImpactMode > 0\.5\)[\s\S]*?meteorImpactLobeForce/,
+  "Meteor force path must use the dedicated lobe transport branch",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.scalarFragment,
+  /else if \(uMeteorImpactMode > 0\.5\)[\s\S]*?groundField\s*=\s*meteorImpactGroundKernel[\s\S]*?centralThermal[\s\S]*?particulateMass/,
+  "Meteor scalar path must separate impact heat from particulate lobes",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.tracerAdvectFragment,
+  /else if \(uProfileKind != 9 && uMeteorImpactMode > 0\.5\)[\s\S]*?meteorImpactLobeCenter[\s\S]*?meteorImpactLobeScale/,
+  "Meteor tracers must respawn from the dedicated lobe population",
+);
+const meteorForceBranch = RESEARCH_FLUID_SHADER_SOURCES.forceFragment.match(
+  /else if \(uMeteorImpactMode > 0\.5\) \{[\s\S]*?\n  \} else \{/,
+);
+assert.ok(meteorForceBranch, "Meteor dedicated force branch must be structurally bounded");
+assert.doesNotMatch(
+  meteorForceBranch[0],
+  /uGroundCouplingA\.|uGroundCouplingB\.|uGroundCouplingC\./,
+  "Meteor dedicated force must not inherit Ground Burst coupling dynamics",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.forceFragment,
+  /meteorImpactLobeForce\(vUv, turbulence\)/,
+  "Meteor force breakup must reuse the existing sampled turbulence vector",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.scalarFragment,
+  /float impactDetail = sourceDetail/,
+  "Meteor scalar breakup must reuse the existing sampled detail scalar",
+);
+
 // --- Profile-gated smoke-material controls (2026-07) -------------------------
 for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
   assert.ok(profile.material && typeof profile.material === "object", `${presetId}: material config missing`);
@@ -745,6 +855,17 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.equal(profile.material.detailOctaveMode, 0,
       "Extreme Historical Scale must retain the two-octave detail budget");
     assert.ok(profile.material.interiorDepth > 0);
+  } else if (presetId === METEOR_ID) {
+    assert.equal(profile.material.mode, 1, "Meteor Ground Impact must enable particulate depth material");
+    assert.equal(profile.material.sootAbsorption, 1.15);
+    assert.equal(profile.material.dustAbsorption, 0.88);
+    assert.equal(profile.material.warmCoolContrast, 0.28);
+    assert.equal(profile.material.lowDensityVisibility, 0.24);
+    assert.equal(profile.material.detailOctaveMode, 0,
+      "Meteor Ground Impact must retain the two-octave detail budget");
+    assert.equal(profile.material.interiorDepth, 0.22);
+    assert.equal(profile.material.emissionSmokeAttenuation, 0,
+      "Meteor Ground Impact must not opt into Industrial-only emission attenuation by default");
   } else if (presetId === INDUSTRIAL_ID) {
     assert.equal(profile.material.mode, 0, "Industrial Fireball must retain neutral material mode");
     assert.equal(profile.material.emissionSmokeAttenuation, 1.0,
@@ -1005,6 +1126,17 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.ok(d.retentionFloorSmoke < 1 && d.retentionFloorSmoke > 0.99);
     assert.ok(d.retentionFloorDust < d.retentionFloorSmoke && d.retentionFloorDust > 0.99);
     assert.ok(d.outwardBoost > 0 && d.motionDamp > 0);
+    assert.ok(d.lateVelocityRetention > profile.physics.velocityRetention && d.lateVelocityRetention < 1);
+    assert.ok(d.lateCurl > 0 && d.lateShear > 0 && d.latePhaseRate > 0);
+  } else if (presetId === METEOR_ID) {
+    const d = profile.dissipation;
+    assert.equal(d.mode, 1, "Meteor Ground Impact must enable its profile-local particulate late tail");
+    assert.equal(d.lateStart, 0.42);
+    assert.equal(d.finalStart, 1);
+    assert.ok(d.lateStart < d.sourceTaperEnd && d.sourceTaperEnd < d.finalStart);
+    assert.ok(d.retentionFloorSmoke < 1 && d.retentionFloorSmoke > 0.99);
+    assert.ok(d.retentionFloorDust < d.retentionFloorSmoke && d.retentionFloorDust > 0.99);
+    assert.ok(d.outwardBoost > 0 && d.buoyancyFalloff > 0 && d.motionDamp > 0);
     assert.ok(d.lateVelocityRetention > profile.physics.velocityRetention && d.lateVelocityRetention < 1);
     assert.ok(d.lateCurl > 0 && d.lateShear > 0 && d.latePhaseRate > 0);
   } else {
