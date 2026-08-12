@@ -23,6 +23,7 @@ const EARLY_FISSION_ID = "early-fission-test-scale";
 const UNDERGROUND_ID = "underground-detonation";
 const VOLCANIC_ID = "volcanic-eruption";
 const EXTREME_ID = "extreme-historical-scale";
+const INDUSTRIAL_ID = "industrial-fireball";
 const RESEARCH_MODE_IDS = new Set([LOW_YIELD_ID, GROUND_BURST_ID, TSAR_ID]);
 const GROUND_COUPLED_IDS = new Set([GROUND_BURST_ID, CASTLE_BRAVO_ID, EARLY_FISSION_ID, UNDERGROUND_ID, VOLCANIC_ID]);
 
@@ -657,7 +658,7 @@ assert.match(
 // --- Profile-gated smoke-material controls (2026-07) -------------------------
 for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
   assert.ok(profile.material && typeof profile.material === "object", `${presetId}: material config missing`);
-  for (const key of ["mode", "sootAbsorption", "dustAbsorption", "detailBoost", "warmCoolContrast", "lowDensityVisibility", "detailOctaveMode", "interiorDepth"]) {
+  for (const key of ["mode", "sootAbsorption", "dustAbsorption", "detailBoost", "warmCoolContrast", "lowDensityVisibility", "detailOctaveMode", "interiorDepth", "emissionSmokeAttenuation"]) {
     assert.ok(Number.isFinite(profile.material[key]), `${presetId}: material.${key} must be finite`);
   }
   if (presetId === LOW_YIELD_ID) {
@@ -744,6 +745,17 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.equal(profile.material.detailOctaveMode, 0,
       "Extreme Historical Scale must retain the two-octave detail budget");
     assert.ok(profile.material.interiorDepth > 0);
+  } else if (presetId === INDUSTRIAL_ID) {
+    assert.equal(profile.material.mode, 0, "Industrial Fireball must retain neutral material mode");
+    assert.equal(profile.material.emissionSmokeAttenuation, 1.0,
+      "Industrial Fireball must opt into the bounded smoke-to-emission transfer");
+    assert.ok(profile.material.emissionSmokeAttenuation > 0
+      && profile.material.emissionSmokeAttenuation <= 1);
+    assert.equal(profile.domain.mode, 0, "Industrial Fireball must retain the legacy domain path");
+    assert.equal(profile.plume.mode, 0, "Industrial Fireball must retain the legacy plume path");
+    assert.deepEqual(profile.quality,
+      { grid: 0.96, pressure: 0.94, rays: 1, tracers: 1.12, detail: 1 },
+      "Industrial Fireball quality budgets must remain unchanged");
   } else {
     assert.equal(profile.material.mode, 0, `${presetId}: smoke-material mode must remain neutral`);
     assert.equal(profile.material.sootAbsorption, 1, `${presetId}: default soot absorption must stay neutral`);
@@ -751,6 +763,8 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.equal(profile.material.lowDensityVisibility, 0, `${presetId}: low-density visibility must stay neutral`);
     assert.equal(profile.material.detailOctaveMode, 0, `${presetId}: detail octave must stay neutral`);
     assert.equal(profile.material.interiorDepth, 0, `${presetId}: interior depth must stay neutral`);
+    assert.equal(profile.material.emissionSmokeAttenuation, 0,
+      `${presetId}: emission smoke attenuation must remain neutral`);
   }
 }
 // The volume shader and engine bindings must carry the material uniforms.
@@ -778,6 +792,41 @@ assert.match(
   RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
   /uniform\s+float\s+uMaterialLowDensityVisibility\b/,
   "uMaterialLowDensityVisibility: weak-particulate transfer uniform missing from the volume shader",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /uniform\s+float\s+uEmissionSmokeAttenuation\b/,
+  "uEmissionSmokeAttenuation: smoke-to-emission transfer uniform missing from the volume shader",
+);
+assert.match(
+  readFileSync(new URL("../scripts/fluid-engine.js", import.meta.url), "utf8"),
+  /emissionSmokeAttenuation:\s*clamp\([\s\S]*?finite\(overrides\.material\?\.emissionSmokeAttenuation,\s*BASE_PROFILE\.material\.emissionSmokeAttenuation\)[\s\S]*?0,\s*1[\s\S]*?\)/,
+  "Emission smoke attenuation must fall back to zero and clamp profile overrides",
+);
+assert.match(
+  readFileSync(new URL("../scripts/fluid-engine.js", import.meta.url), "utf8"),
+  /_uniform1f\(\s*program,\s*['"]uEmissionSmokeAttenuation['"][\s\S]*?clamp\(finite\(material\.emissionSmokeAttenuation,\s*0\),\s*0,\s*1\)/,
+  "Emission smoke attenuation must be clamped again at the renderer binding",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /float emissionSmokeStrength = clamp\(uEmissionSmokeAttenuation,\s*0\.0,\s*1\.0\);[\s\S]*?float smokeThermalRatio = opticalWeightedSmoke[\s\S]*?float sameLayerResponse = smoothstep\(0\.28,\s*0\.44,\s*smokeThermalRatio\)[\s\S]*?float smokeResponse = sameLayerResponse[\s\S]*?emission \*= thermalVisibility;/,
+  "Smoke attenuation must be smooth, bounded, and applied to emission",
+);
+assert.doesNotMatch(
+  `${RESEARCH_FLUID_SHADER_SOURCES.forceFragment}\n${RESEARCH_FLUID_SHADER_SOURCES.scalarFragment}`,
+  /uEmissionSmokeAttenuation|emissionSmokeAttenuation/,
+  "Smoke-to-emission attenuation must not alter fluid source, temperature, velocity, or dissipation paths",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /emission \*= thermalVisibility;[\s\S]*?emission \*= layerFade;/,
+  "Smoke attenuation must affect radiance before the existing boundary mask",
+);
+assert.match(
+  RESEARCH_FLUID_SHADER_SOURCES.volumeFragment,
+  /float neighborSmokeThermalRatio = neighborSmoke[\s\S]*?float neighborSmokeResponse = smoothstep\(0\.28,\s*0\.44,\s*neighborSmokeThermalRatio\)[\s\S]*?bloom \+= heatRamp\(neighborHeat\) \* neighbor\.b \* uLayerVisibility\.x \* neighborEmissionVisibility;/,
+  "Neighbor bloom must use the same bounded smoke/thermal response",
 );
 // Every new material term must be reachable only through the uMaterialMode
 // gate, and must algebraically collapse to the prior expression when it is 0.
