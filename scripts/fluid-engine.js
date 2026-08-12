@@ -1427,6 +1427,19 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       // hot phase reads as a structured fireball instead of a flat white disc.
       volume: { scaleX: 1.4, scaleY: 1.42, depth: 1.48, opacity: 1.48, shadow: 1.5, bloom: 1.15, distortion: 1.32, erosion: 0.82, noiseScale: 0.86, dustVisibility: 0.58, exposure: 1.0, toneMap: 0.24, backgroundIllumination: 0.46, emissionCurve: 0.88 },
       quality: { grid: 1.14, pressure: 1.18, rays: 1.2, tracers: 1.44, detail: 1.28 },
+      // Tsar's approved legacy field reached the solver roof and side edges
+      // during the dense plume. Keep the visible volume scale explicit while
+      // moving the active field into the existing padded-domain envelope.
+      domain: {
+        mode: 1,
+        padding: 0.30,
+        activeScale: 0.15,
+        dynamicsScale: 0.30,
+        renderOverscan: 1.04,
+        renderExtent: { x: 0.72, y: 1.0 },
+        riskMargin: 0.07,
+        densityThreshold: 0.14,
+      },
       // feedTaperStart/End (2026-07 shockwave/stem/performance pass): the
       // audited hard vertical seam came from coreBand staying fed almost to
       // the end of the timeline (old 0.85-1.05 taper, ~t46-54) while the
@@ -4920,8 +4933,11 @@ export class ResearchFluidEngine {
     // remain a visible compositing primitive. The lower bound is a render
     // extent, not a source or event-scale change, so mobile can crop the
     // event naturally while preserving the physical ground plane.
-    const minimumVolumeScaleX = domain.mode ? 1.08 : 0.06;
-    const minimumVolumeScaleY = domain.mode ? 1.02 : 0.08;
+    // An explicit profile render extent is the visible-scale contract. Do not
+    // re-clamp it to the padded-domain default, or a boundary fix would make
+    // the approved event appear smaller even though the source is unchanged.
+    const minimumVolumeScaleX = domain.mode ? (domain.renderExtent ? 0.5 : 1.08) : 0.06;
+    const minimumVolumeScaleY = domain.mode ? (domain.renderExtent ? 0.5 : 1.02) : 0.08;
     const volumeScale = [
       clamp(
         minimumDimension * 0.48 * sceneScale * this.profile.volume.scaleX
@@ -5658,7 +5674,10 @@ export class ResearchFluidEngine {
     const domain = this.profile.domain || BASE_PROFILE.domain;
     const mode = Number(domain.mode) > 0;
     const padding = mode ? clamp(finite(domain.padding, 0), 0, 0.3) : 0;
-    const activeScale = mode ? Math.max(0.4, 1 - padding * 2) : 1;
+    const defaultActiveScale = 1 - padding * 2;
+    const activeScale = mode
+      ? clamp(finite(domain.activeScale, defaultActiveScale), 0.15, 0.95)
+      : 1;
     const renderOverscan = mode ? clamp(finite(domain.renderOverscan, 1), 1, 1.3) : 1;
     const renderScaleValue = domain.renderScale && typeof domain.renderScale === 'object'
       ? domain.renderScale[this.tier?.id || this.settings?.tier || 'balanced']
@@ -5677,6 +5696,7 @@ export class ResearchFluidEngine {
       renderOverscan: renderOverscan / activeScale,
       renderScale,
       renderExtent,
+      dynamicsScale: mode ? clamp(finite(domain.dynamicsScale, activeScale), 0.15, 1) : 1,
       riskMargin: clamp(finite(domain.riskMargin, 0.06), 0.02, 0.2),
       densityThreshold: clamp(finite(domain.densityThreshold, 0.14), 0.02, 1),
     };
@@ -5690,30 +5710,31 @@ export class ResearchFluidEngine {
     const source = this.profile.source;
     const domain = this._domainState();
     const coordinateScale = domain.activeScale;
+    const dynamicsScale = domain.dynamicsScale;
     const mapY = (value) => 0.5 + (value - 0.5) * coordinateScale;
     const offsets = seededProfileOffsets(this.settings.seed, this.profile.profileKind);
     const researchRegression = Boolean(this.profile.preserveResearchSource);
     return {
       mask: this.settings.sourcePrimitiveMask,
       profileKind: this.profile.profileKind,
-      shape: [source.radius * coordinateScale, source.aspectX, source.aspectY, mapY(source.groundLevel)],
+      shape: [source.radius * dynamicsScale, source.aspectX, source.aspectY, mapY(source.groundLevel)],
       timing: [source.onsetEnd, source.sustainEnd, source.pulseFrequency, source.stageOffset],
-      motion: [source.radial * coordinateScale, source.vertical * coordinateScale, source.directional * coordinateScale, source.turbulence * coordinateScale],
+      motion: [source.radial * dynamicsScale, source.vertical * dynamicsScale, source.directional * dynamicsScale, source.turbulence * dynamicsScale],
       scalar: [source.heat, source.smoke, source.incandescent, source.dust],
       vector: [
         source.directionX,
         source.directionY,
-        (source.offsetX + offsets[6] * (researchRegression ? 0 : source.radius * 0.24)) * coordinateScale,
-        (source.offsetY + offsets[7] * (researchRegression ? 0 : source.radius * 0.24) * 0.72) * coordinateScale,
+        (source.offsetX + offsets[6] * (researchRegression ? 0 : source.radius * 0.24)) * dynamicsScale,
+        (source.offsetY + offsets[7] * (researchRegression ? 0 : source.radius * 0.24) * 0.72) * dynamicsScale,
       ],
       aux: [source.ringRadius, source.ejecta, source.trailLength, source.clusterSpread],
       offsetsA: offsets.slice(0, 4),
       offsetsB: offsets.slice(4, 8),
       physics: [
-        this.profile.physics.buoyancy * coordinateScale,
-        this.profile.physics.densityLoading * coordinateScale,
-        this.profile.physics.windCoupling * coordinateScale,
-        this.profile.physics.vorticity * coordinateScale,
+        this.profile.physics.buoyancy * dynamicsScale,
+        this.profile.physics.densityLoading * dynamicsScale,
+        this.profile.physics.windCoupling * dynamicsScale,
+        this.profile.physics.vorticity * dynamicsScale,
       ],
       decay: [
         this.profile.physics.velocityRetention,
