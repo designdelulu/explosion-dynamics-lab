@@ -321,6 +321,21 @@ const BASE_PROFILE = Object.freeze({
       breakup: 0,
     }),
   }),
+  // Meteor's surface-impact source/transport mode. mode 0 is inert; the
+  // enabled profile resolves unequal radial particulate masses instead of
+  // entering the generic centered vertical-feed path. Values are normalized
+  // visual controls, not real impact or destructive-effect quantities.
+  impactPlume: Object.freeze({
+    mode: 0,
+    lobeSpread: 1,
+    directionalBias: 0,
+    liftVariation: 0,
+    breakup: 0,
+    verticalSpread: 0.5,
+    groundPersistence: 0,
+    lateralRoll: 0,
+    upperDrift: 0,
+  }),
   // Upper return strength scales only the lateral ceiling turn and outer
   // umbrella roll. The vertical ceiling brake remains active for solver
   // safety. 1 preserves the established behavior for profiles without an
@@ -476,6 +491,7 @@ function defineFluidProfile(presetId, profileId, overrides = {}) {
         ...(overrides.plume?.fuelAir || {}),
       },
     },
+    impactPlume: { ...BASE_PROFILE.impactPlume, ...(overrides.impactPlume || {}) },
     shockwave: {
       ...BASE_PROFILE.shockwave,
       ...(overrides.shockwave || {}),
@@ -686,6 +702,73 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       physics: { buoyancy: 0.84, densityLoading: 1.5, windCoupling: 0.82, vorticity: 1.4, velocityRetention: 0.982, cooling: 1.25, smokeConversion: 1.05, scalarRetention: 0.998 },
       volume: { scaleX: 1.2, scaleY: 1.34, depth: 1.18, opacity: 1.48, shadow: 1.48, bloom: 0.78, distortion: 0.86, erosion: 1.15, noiseScale: 1.3, dustVisibility: 1.9, exposure: 0.9, toneMap: 0.18, backgroundIllumination: 0.12, emissionCurve: 0.94 },
       quality: { grid: 1, pressure: 1.04, rays: 1.04, tracers: 1.42, detail: 1.12 },
+      domain: {
+        mode: 1,
+        padding: 0.14,
+        renderOverscan: 1.04,
+        renderExtent: { x: 1.35, y: 1.18 },
+        riskMargin: 0.07,
+        densityThreshold: 0.14,
+      },
+      // Surface contact is semantic only here. The dedicated impact path below
+      // owns the ejecta motion, so these neutral coupling values do not import
+      // Nuclear Ground Burst dynamics.
+      groundCoupling: {
+        mode: 1,
+        radialImpulse: 0,
+        spreadWidth: 1,
+        heightFalloff: 1,
+        horizontalRetention: 1,
+        verticalDamping: 1,
+        spreadStart: 0,
+        spreadEnd: 0,
+        angularVariation: 0,
+        asymmetry: 0,
+        surfaceHeat: 0,
+        baseDust: 0,
+        transitionLift: 0,
+        lateGroundDrift: 0,
+      },
+      impactPlume: {
+        mode: 1,
+        lobeSpread: 1,
+        directionalBias: 0.72,
+        liftVariation: 0.58,
+        breakup: 0.78,
+        verticalSpread: 0.72,
+        groundPersistence: 0.64,
+        lateralRoll: 0.74,
+        upperDrift: 0.48,
+      },
+      // The impact field is impulsive, but its particulate tail should keep
+      // exchanging position after the source has shut off. This uses the
+      // existing late-dissipation path only: no new source is created, and
+      // the normalized controls remain profile-local visual parameters.
+      dissipation: {
+        mode: 1,
+        lateStart: 0.42,
+        finalStart: 1,
+        sourceTaperEnd: 0.68,
+        retentionFloorSmoke: 0.9999,
+        retentionFloorDust: 0.9995,
+        outwardBoost: 0.018,
+        buoyancyFalloff: 0.22,
+        motionDamp: 0.38,
+        lateVelocityRetention: 0.997,
+        lateCurl: 0.005,
+        lateShear: 0.003,
+        latePhaseRate: 0.04,
+      },
+      material: {
+        mode: 1,
+        sootAbsorption: 1.15,
+        dustAbsorption: 0.88,
+        detailBoost: 0,
+        warmCoolContrast: 0.28,
+        lowDensityVisibility: 0.24,
+        detailOctaveMode: 0,
+        interiorDepth: 0.22,
+      },
     },
   ),
   'volcanic-eruption': defineFluidProfile(
@@ -1764,6 +1847,12 @@ uniform vec4 uPlumeStemParams;
 uniform vec4 uFuelAirParams;
 uniform vec4 uFuelAirParams2;
 uniform float uFuelAirPortrait;
+// Dedicated Meteor Ground Impact source/transport controls. mode 0 is inert
+// and the two vectors are normalized visual controls for deterministic radial
+// particulate masses, decentralized lift, and lobe breakup.
+uniform float uMeteorImpactMode;
+uniform vec4 uMeteorImpactParams;
+uniform vec4 uMeteorImpactParams2;
 // Tsar-scale late-dissipation research controls. uDissipationMode is 0 for
 // every shipped preset except the Tsar historical reference, so this block is
 // inert (byte-identical behavior) for all other events. uDissipationParams
@@ -1908,6 +1997,185 @@ float profileFuelAirClusterKernel(vec2 uv) {
     vec2(1.9 * mix(1.0, 1.3, uFuelAirPortrait), 1.12 * mix(1.0, 0.86, uFuelAirPortrait))
   ) * 0.26;
   return clamp(a + b + c + d + bridge, 0.0, 2.4);
+}
+
+float meteorImpactProgress() {
+  if (uMeteorImpactMode < 0.5) return 0.0;
+  return smoothstep(0.008, 0.32, uNormalizedTime);
+}
+
+float meteorImpactEjectaPhase() {
+  if (uMeteorImpactMode < 0.5) return 0.0;
+  return 1.0 - smoothstep(0.16, 0.36, uNormalizedTime);
+}
+
+float meteorImpactPlumePhase() {
+  if (uMeteorImpactMode < 0.5) return 0.0;
+  return smoothstep(0.07, 0.18, uNormalizedTime)
+    * (1.0 - smoothstep(0.62, 0.82, uNormalizedTime));
+}
+
+float meteorImpactSourceFeed() {
+  return max(meteorImpactEjectaPhase(), meteorImpactPlumePhase() * 0.48);
+}
+
+vec2 meteorImpactBaseOffset(int index) {
+  if (index == 0) return vec2(-2.18, 0.02);
+  if (index == 1) return vec2(1.72, 0.06);
+  if (index == 2) return vec2(-0.94, 0.46);
+  if (index == 3) return vec2(1.04, 0.68);
+  return vec2(0.72, 1.06);
+}
+
+float meteorImpactLobeWeight(int index) {
+  if (index == 0) return 0.96;
+  if (index == 1) return 0.78;
+  if (index == 2) return 0.68;
+  if (index == 3) return 0.56;
+  return 0.42;
+}
+
+float meteorImpactLobeScale(int index) {
+  if (index == 0) return 1.18;
+  if (index == 1) return 0.98;
+  if (index == 2) return 0.86;
+  if (index == 3) return 0.74;
+  return 0.62;
+}
+
+float meteorImpactLobeLift(int index) {
+  if (index == 0) return 0.12;
+  if (index == 1) return 0.18;
+  if (index == 2) return 0.36;
+  if (index == 3) return 0.46;
+  return 0.68;
+}
+
+float meteorImpactBreakup(vec2 uv) {
+  if (uMeteorImpactMode < 0.5) return 1.0;
+  float phase = uNormalizedTime * 5.4 + uSeedOffsetsA.w * 3.7;
+  float broad = sin(uv.x * 17.0 + phase) * sin(uv.y * 12.0 - phase * 0.71);
+  float folded = sin((uv.x + uv.y) * 29.0 - phase * 1.13);
+  return clamp(
+    0.82 + broad * 0.16 * uMeteorImpactParams.w
+      + folded * 0.06 * uMeteorImpactParams.w,
+    0.58,
+    1.08
+  );
+}
+
+float meteorImpactLobeSeed(int index) {
+  if (index == 0) return uSeedOffsetsA.x;
+  if (index == 1) return uSeedOffsetsA.z;
+  if (index == 2) return uSeedOffsetsB.x;
+  if (index == 3) return uSeedOffsetsB.z;
+  return uSeedOffsetsB.w;
+}
+
+vec2 meteorImpactLobeCenter(int index) {
+  vec2 groundCenter = vec2(profileSourceCenter().x, uSourceShape.w);
+  vec2 base = meteorImpactBaseOffset(index);
+  float progress = meteorImpactProgress();
+  float spread = uSourceShape.x
+    * mix(0.68, 3.7, progress)
+    * max(0.55, uMeteorImpactParams.x);
+  float seed = meteorImpactLobeSeed(index);
+  float lateralBias = uSourceVector.x * uMeteorImpactParams.y
+    * (0.22 + progress * 0.78);
+  base.x += lateralBias * (index == 0 ? 0.36 : index == 1 ? 0.18 : 0.24);
+  base.y *= mix(0.72, 1.0, uMeteorImpactParams2.x);
+  base.x += seed * 0.16 * uMeteorImpactParams.y;
+  return groundCenter + vec2(
+    base.x * spread,
+    base.y * spread * max(0.35, uMeteorImpactParams2.x)
+  );
+}
+
+float meteorImpactLobeKernelBase(vec2 uv, int index) {
+  vec2 center = meteorImpactLobeCenter(index);
+  float growth = mix(0.56, 1.22, smoothstep(0.02, 0.34, uNormalizedTime));
+  float radius = uSourceShape.x * growth * meteorImpactLobeScale(index);
+  vec2 aspect = index == 0 ? vec2(1.72, 0.62)
+    : index == 1 ? vec2(1.48, 0.76)
+    : index == 2 ? vec2(1.18, 0.98)
+    : index == 3 ? vec2(1.32, 0.86)
+    : vec2(0.92, 1.18);
+  return ellipticalKernel(uv - center, radius, aspect);
+}
+
+float meteorImpactGroundKernel(vec2 uv) {
+  if (uMeteorImpactMode < 0.5) return 0.0;
+  vec2 groundCenter = vec2(profileSourceCenter().x, uSourceShape.w);
+  float progress = meteorImpactProgress();
+  float breakup = meteorImpactBreakup(uv);
+  vec2 delta = uv - groundCenter;
+  float growth = mix(0.64, 1.04, smoothstep(0.02, 0.28, uNormalizedTime));
+  float lateral = delta.x / max(0.002, uSourceShape.x * 2.8 * growth);
+  float vertical = (delta.y - uSourceShape.x * 0.18)
+    / max(0.002, uSourceShape.x * 0.34);
+  float directional = 1.0 + delta.x * uMeteorImpactParams.y * 1.6;
+  float field = exp(-lateral * lateral - vertical * vertical)
+    * max(0.55, directional)
+    * mix(1.0, 0.78, progress);
+  return clamp(field * breakup, 0.0, 2.2);
+}
+
+float meteorImpactFieldKernel(vec2 uv) {
+  if (uMeteorImpactMode < 0.5) return 0.0;
+  float field = 0.0;
+  float breakup = meteorImpactBreakup(uv);
+  for (int index = 0; index < 4; index++) {
+    field += meteorImpactLobeKernelBase(uv, index) * meteorImpactLobeWeight(index);
+  }
+  // A small central remnant preserves one connected event without restoring a
+  // centered vertical column or a sealed circular ground disk.
+  field = field * breakup
+    + profileBaseKernel(uv) * (0.08 + 0.08 * (1.0 - meteorImpactProgress()));
+  return clamp(field, 0.0, 2.8);
+}
+
+vec2 meteorImpactLobeForce(vec2 uv, vec3 turbulence) {
+  if (uMeteorImpactMode < 0.5) return vec2(0.0);
+  vec2 groundCenter = vec2(profileSourceCenter().x, uSourceShape.w);
+  vec2 impactDirection = safeDirection(vec2(
+    uSourceVector.x,
+    max(0.16, abs(uSourceVector.y) * 0.34)
+  ));
+  float ejectaPhase = meteorImpactEjectaPhase();
+  float plumePhase = meteorImpactPlumePhase();
+  float progress = meteorImpactProgress();
+  float breakup = meteorImpactBreakup(uv);
+  vec2 result = vec2(0.0);
+  float field = 0.0;
+  for (int index = 0; index < 4; index++) {
+    vec2 center = meteorImpactLobeCenter(index);
+    vec2 fromGround = center - groundCenter;
+    vec2 radial = safeDirection(fromGround + impactDirection * 0.035);
+    vec2 tangent = vec2(-radial.y, radial.x);
+    float kernel = meteorImpactLobeKernelBase(uv, index) * breakup;
+    field += kernel * meteorImpactLobeWeight(index);
+    float lift = meteorImpactLobeLift(index)
+      * (0.72 + meteorImpactLobeSeed(index) * uMeteorImpactParams.z * 0.28)
+      * max(0.35, uMeteorImpactParams2.x);
+    float lobePersistence = mix(1.0, 0.72, float(index) * 0.12)
+      * mix(0.86, 1.0, uMeteorImpactParams2.y);
+    result += radial * kernel * ejectaPhase
+      * (0.22 + meteorImpactLobeWeight(index) * 0.24)
+      * lobePersistence;
+    result += vec2(0.0, 1.0) * kernel * lift * plumePhase * 0.32;
+    result += tangent * kernel * uMeteorImpactParams2.z
+      * (0.05 + progress * 0.08) * lobePersistence;
+  }
+  field = clamp(
+    field + profileBaseKernel(uv) * (0.08 + 0.08 * (1.0 - progress)),
+    0.0,
+    2.8
+  );
+  result += turbulence.xy * field
+    * uMeteorImpactParams.w * (0.018 + progress * 0.024);
+  result += impactDirection * field
+    * uMeteorImpactParams2.w * ejectaPhase * 0.12;
+  return result;
 }
 
 vec2 fuelAirLobeMotion(vec2 uv) {
@@ -2217,6 +2485,16 @@ void main() {
       * uSourceMotion.y * sourceFeedTaper * motionScale * uDt;
     velocity += turbulence.xy * sourceKernel * (impulseEnvelope + rollingEnvelope * 0.42)
       * 0.026 * (uSourceMotion.w / 0.65) * motionScale * uDt * 60.0;
+  } else if (uMeteorImpactMode > 0.5) {
+    // Meteor Impact mode deliberately avoids the generic centered radial
+    // impulse + vertical-jet path. Each unequal lobe carries its own outward
+    // direction, lift, tangent roll, and breakup so the source hands the
+    // solver several overlapping particulate masses instead of one neck.
+    // Several lobe forces overlap near the impact origin. Keep their combined
+    // impulse below the generic single-kernel impulse so the new morphology
+    // separates the source without filling the solver as one vertical wall.
+    velocity += meteorImpactLobeForce(vUv, turbulence)
+      * uSourceMotion.x * 0.12 * motionScale * uDt * 60.0;
   } else {
     vec2 primitiveCenter = profileSourceCenter();
     vec2 primitiveDelta = vUv - primitiveCenter;
@@ -2824,6 +3102,52 @@ void main() {
     float lowerRegion = 1.0 - smoothstep(uSourceCenter.y + 0.12, uSourceCenter.y + 0.34, vUv.y);
     dust += source * shell * lowerRegion * smokeEnvelope
       * (uSourceScalar.w / 0.4) * uDt * 0.12;
+  } else if (uMeteorImpactMode > 0.5) {
+    // Impact mode injects a compact hot remnant at the strike point while the
+    // surrounding lobe population carries most of the smoke and dust. The
+    // field remains connected, but no centered vertical source is reintroduced.
+    float impactField = meteorImpactFieldKernel(vUv);
+    float impactFeed = meteorImpactSourceFeed();
+    float groundField = meteorImpactGroundKernel(vUv);
+    // The source-detail sample is already available for the generic scalar
+    // path; reuse it for deterministic particulate variation.
+    float impactDetail = sourceDetail;
+    float centralImpact = profileBaseKernel(vUv);
+    // The strike point stays hot through ignition, then yields to the
+    // unequal particulate lobes as the impact plume develops. This profile-
+    // local handoff prevents the generic central feed from re-forming a
+    // narrow nuclear-style neck above the surface.
+    float centralThermal = centralImpact * mix(1.18, 0.24, meteorImpactProgress());
+    float thermalPockets = clamp(
+      centralThermal
+        + impactField * (0.52 + max(0.0, impactDetail) * 0.22),
+      0.0,
+      2.6
+    );
+    float particulateMass = clamp(
+      impactField * (1.22 + (impactDetail * 0.18))
+        + groundField * 0.52,
+      0.0,
+      2.8
+    );
+    float thermalEnvelope = flashEnvelope * 1.75
+      + fireEnvelope * (0.34 + impactFeed * 0.12);
+    float particulateEnvelope = smokeEnvelope * (0.48 + impactFeed * 0.52)
+      + smoothstep(0.08, 0.28, uNormalizedTime) * 0.22;
+    temperature += source * thermalPockets * thermalEnvelope
+      * uSourceScalar.x * uDt * 2.55;
+    incandescent += source * thermalPockets
+      * (flashEnvelope * 1.05 + fireEnvelope * 0.38)
+      * uSourceScalar.z * uDt * 1.4;
+    smoke += source * particulateMass * particulateEnvelope
+      * uSourceScalar.y * uDt * 1.3;
+    dust += source * clamp(
+        particulateMass * (1.05 + uMeteorImpactParams2.y * 0.28)
+        + groundField * 0.46
+        + centralImpact * 0.08,
+      0.0,
+      3.2
+    ) * particulateEnvelope * uSourceScalar.w * uDt * 1.08;
   } else {
     float onset = profileOnsetEnvelope();
     float sustain = profileSustainEnvelope() * dissipationSourceTaper();
@@ -3123,6 +3447,24 @@ void main() {
       vec2 normal = vec2(-direction.y, direction.x);
       position = center - direction * abs(randomAlong) * uSourceShape.x * uSourceAux.z
         + normal * randomAcross * uSourceShape.x * 0.34;
+    } else if (uProfileKind != 9 && uMeteorImpactMode > 0.5) {
+      // Meteor tracers originate from the same deterministic lobe population
+      // as the scalar source. The branch keeps particulate motion visibly
+      // radial and decentralized without increasing the tracer budget.
+      int lobeIndex = int(index % 4u);
+      vec2 lobeCenter = meteorImpactLobeCenter(lobeIndex);
+      float lobeLift = meteorImpactLobeLift(lobeIndex)
+        * (0.78 + tracerRandom(index, generation, 41u) * 0.34);
+      vec2 lobeEllipse = vec2(cos(angle), sin(angle) * (0.38 + lobeLift * 0.22));
+      float lobeRadius = uSourceShape.x
+        * mix(0.42, 0.9, tracerRandom(index, generation, 43u))
+        * meteorImpactLobeScale(lobeIndex);
+      position = lobeCenter + lobeEllipse * lobeRadius;
+      position.y = mix(
+        uSourceShape.w + abs(randomAcross) * uSourceShape.x * 0.18,
+        position.y,
+        0.42 + meteorImpactProgress() * 0.34
+      );
     } else if (uProfileKind != 9 && sourceEnabled(SOURCE_EJECTA)
       && (sourceLane == 0u || (sourceLane == 3u && !sourceEnabled(SOURCE_MULTIPLE)))) {
       position = vec2(
@@ -5463,6 +5805,24 @@ export class ResearchFluidEngine {
       finite(fuelAir.breakup, 0),
     );
     this._uniform1f(program, 'uFuelAirPortrait', this.height > this.width ? 1 : 0);
+    const impactPlume = this.profile.impactPlume || BASE_PROFILE.impactPlume;
+    this._uniform1f(program, 'uMeteorImpactMode', clamp(finite(impactPlume.mode, 0), 0, 1));
+    this._uniform4f(
+      program,
+      'uMeteorImpactParams',
+      clamp(finite(impactPlume.lobeSpread, 1), 0.4, 2),
+      clamp(finite(impactPlume.directionalBias, 0), 0, 1),
+      clamp(finite(impactPlume.liftVariation, 0), 0, 1),
+      clamp(finite(impactPlume.breakup, 0), 0, 1),
+    );
+    this._uniform4f(
+      program,
+      'uMeteorImpactParams2',
+      clamp(finite(impactPlume.verticalSpread, 0.5), 0.2, 1.4),
+      clamp(finite(impactPlume.groundPersistence, 0), 0, 1),
+      clamp(finite(impactPlume.lateralRoll, 0), 0, 1),
+      clamp(finite(impactPlume.upperDrift, 0), 0, 1),
+    );
     const dissipation = this.profile.dissipation || {
       mode: 0, lateStart: 1, finalStart: 1, sourceTaperEnd: 1,
       retentionFloorSmoke: 1, retentionFloorDust: 1, outwardBoost: 0, buoyancyFalloff: 0, motionDamp: 0,
