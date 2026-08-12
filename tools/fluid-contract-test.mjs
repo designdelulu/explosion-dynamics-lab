@@ -269,6 +269,20 @@ for (const [presetId, profile] of Object.entries(RESEARCH_FLUID_PROFILES)) {
     assert.equal(profile.domain.renderScale, 1, "Meteor Ground Impact must retain the shared tier render scale");
     assert.deepEqual(profile.domain.renderExtent, { x: 1.35, y: 1.18 });
     assert.ok(profile.domain.riskMargin > 0 && profile.domain.densityThreshold > 0);
+  } else if (presetId === TSAR_ID) {
+    assert.equal(profile.domain.mode, 1, "Tsar must use the padded-domain path after the computational-boundary audit");
+    assert.equal(profile.domain.padding, 0.30, "Tsar must retain the smallest tested clean High-tier padding");
+    assert.equal(profile.domain.activeScale, 0.15, "Tsar active scale must retain the tested all-viewport clearance");
+    assert.equal(profile.domain.dynamicsScale, 0.30, "Tsar dynamics scale must preserve dense-plume behavior inside the padded field");
+    assert.equal(profile.domain.renderOverscan, 1.04, "Tsar render overscan must remain profile-local");
+    assert.equal(profile.domain.renderScale, 1, "Tsar must retain the shared tier render scale");
+    assert.deepEqual(profile.domain.renderExtent, { x: 0.72, y: 1.0 },
+      "Tsar must preserve its approved visible volume scale while the padded field moves outward");
+    assert.equal(profile.domain.riskMargin, 0.07, "Tsar boundary risk margin must remain explicit");
+    assert.equal(profile.groundCoupling.mode, 0, "Tsar bottom contact must remain computational, not physical ground");
+    assert.deepEqual(profile.quality,
+      { grid: 1.14, pressure: 1.18, rays: 1.2, tracers: 1.44, detail: 1.28 },
+      "Tsar padded-domain adoption must not alter its approved quality multipliers");
   } else {
     assert.equal(profile.domain.mode, 0, `${presetId}: domain path must remain neutral pending its own audit`);
     assert.equal(profile.domain.padding, 0, `${presetId}: domain padding must remain neutral`);
@@ -321,6 +335,8 @@ assert.match(engineBoundarySource, /maxDensityAtEdge\s*[=:][\s\S]*?touchesMedium
 assert.match(engineBoundarySource, /computationalRiskPercent[\s\S]*?physicalGroundContact/, "Ground contact must be separated from computational boundary risk");
 assert.match(engineBoundarySource, /getRenderResolutionScale\(\)/, "Fluid engine must expose the profile render scale without preset-ID logic");
 assert.match(engineBoundarySource, /renderExtent: domain\.renderExtent ?/, "Render extent must be reported as part of the reusable domain contract");
+assert.match(engineBoundarySource, /minimumVolumeScaleX = domain\.mode \? \(domain\.renderExtent \? 0\.5 : 1\.08\)/,
+  "Explicit padded-domain render extents must be allowed to preserve approved visible scale");
 const appBoundarySource = readFileSync(new URL("../scripts/app.js", import.meta.url), "utf8");
 assert.match(appBoundarySource, /computationalEdgeDensity[\s\S]*?physicalGroundContact/, "Developer HUD must label computational edges separately from ground contact");
 
