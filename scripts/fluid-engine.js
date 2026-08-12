@@ -2091,8 +2091,7 @@ vec2 meteorImpactLobeCenter(int index) {
   );
 }
 
-float meteorImpactLobeKernelBase(vec2 uv, int index) {
-  vec2 center = meteorImpactLobeCenter(index);
+float meteorImpactLobeKernelFromCenter(vec2 uv, vec2 center, int index) {
   float growth = mix(0.56, 1.22, smoothstep(0.02, 0.34, uNormalizedTime));
   float radius = uSourceShape.x * growth * meteorImpactLobeScale(index);
   vec2 aspect = index == 0 ? vec2(1.72, 0.62)
@@ -2101,6 +2100,10 @@ float meteorImpactLobeKernelBase(vec2 uv, int index) {
     : index == 3 ? vec2(1.32, 0.86)
     : vec2(0.92, 1.18);
   return ellipticalKernel(uv - center, radius, aspect);
+}
+
+float meteorImpactLobeKernelBase(vec2 uv, int index) {
+  return meteorImpactLobeKernelFromCenter(uv, meteorImpactLobeCenter(index), index);
 }
 
 float meteorImpactGroundKernel(vec2 uv) {
@@ -2152,7 +2155,7 @@ vec2 meteorImpactLobeForce(vec2 uv, vec3 turbulence) {
     vec2 fromGround = center - groundCenter;
     vec2 radial = safeDirection(fromGround + impactDirection * 0.035);
     vec2 tangent = vec2(-radial.y, radial.x);
-    float kernel = meteorImpactLobeKernelBase(uv, index) * breakup;
+    float kernel = meteorImpactLobeKernelFromCenter(uv, center, index) * breakup;
     field += kernel * meteorImpactLobeWeight(index);
     float lift = meteorImpactLobeLift(index)
       * (0.72 + meteorImpactLobeSeed(index) * uMeteorImpactParams.z * 0.28)
