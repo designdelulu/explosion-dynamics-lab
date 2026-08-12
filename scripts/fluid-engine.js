@@ -376,6 +376,9 @@ const BASE_PROFILE = Object.freeze({
     // the expensive third curl-detail octave. Profiles opt into it explicitly.
     detailOctaveMode: 0,
     interiorDepth: 0,
+    // Smoke/soot can opt into bounded same-layer thermal-emission occlusion.
+    // Zero preserves the established compositor exactly.
+    emissionSmokeAttenuation: 0,
   }),
   // Late-stage dissipation research controls (2026-07 Tsar dissipation pass).
   // mode 0 keeps every shipped preset byte-identical to before this pass; only
@@ -480,7 +483,15 @@ function defineFluidProfile(presetId, profileId, overrides = {}) {
       ringC: { ...BASE_PROFILE.shockwave.ringC, ...(overrides.shockwave?.ringC || {}) },
       ringD: { ...BASE_PROFILE.shockwave.ringD, ...(overrides.shockwave?.ringD || {}) },
     },
-    material: { ...BASE_PROFILE.material, ...(overrides.material || {}) },
+    material: {
+      ...BASE_PROFILE.material,
+      ...(overrides.material || {}),
+      emissionSmokeAttenuation: clamp(
+        finite(overrides.material?.emissionSmokeAttenuation, BASE_PROFILE.material.emissionSmokeAttenuation),
+        0,
+        1,
+      ),
+    },
     dissipation: { ...BASE_PROFILE.dissipation, ...(overrides.dissipation || {}) },
     core: { ...BASE_PROFILE.core, ...(overrides.core || {}) },
     tracerMaterial: { ...BASE_PROFILE.tracerMaterial, ...(overrides.tracerMaterial || {}) },
@@ -531,6 +542,7 @@ export const RESEARCH_FLUID_PROFILES = deepFreeze({
       source: { centerY: 0.22, radius: 0.072, aspectX: 1.28, aspectY: 0.92, onsetEnd: 0.09, sustainEnd: 0.68, pulseFrequency: 2.2, radial: 0.48, vertical: 0.9, turbulence: 1.22, heat: 1.12, smoke: 1.42, incandescent: 1.35, dust: 0.38, clusterSpread: 1.48 },
       physics: { buoyancy: 0.82, densityLoading: 1.12, windCoupling: 0.9, vorticity: 1.42, velocityRetention: 0.991, cooling: 0.66, smokeConversion: 1.38, scalarRetention: 0.999 },
       volume: { scaleX: 1.32, scaleY: 0.98, depth: 1.12, opacity: 1.3, shadow: 1.35, bloom: 1.22, distortion: 1.18, erosion: 0.82, noiseScale: 1.14, dustVisibility: 0.48, exposure: 1.08, backgroundIllumination: 0.2, emissionCurve: 0.78 },
+      material: { emissionSmokeAttenuation: 1.0 },
       quality: { grid: 0.96, pressure: 0.94, rays: 1, tracers: 1.12, detail: 1 },
     },
   ),
@@ -3331,6 +3343,9 @@ uniform float uMaterialMode;
 uniform vec4 uMaterialParams;
 uniform float uMaterialLowDensityVisibility;
 uniform float uDetailOctaveMode;
+// Bounded same-layer smoke/soot occlusion of thermal emission. Zero keeps the
+// established independent-emission path exactly neutral.
+uniform float uEmissionSmokeAttenuation;
 // Ground Burst may use the already-sampled view-ray depth to separate front,
 // middle, and rear particulate layers without purchasing another detail
 // octave. Zero keeps every other profile's material path unchanged.
@@ -3770,6 +3785,7 @@ void main() {
   float sideAsymmetry = (fract(seedPhase * 7.31) - 0.5) * 0.06;
   vec4 edgeProfile = edgeExtinctionProfile(boundaryWobble, sideAsymmetry);
   float inverseSteps = 1.0 / float(max(uRaySteps, 1));
+  float emissionSmokeStrength = clamp(uEmissionSmokeAttenuation, 0.0, 1.0);
   const int MAX_RAY_STEPS = 48;
   for (int index = 0; index < MAX_RAY_STEPS; index += 1) {
     if (index >= uRaySteps) break;
@@ -3994,11 +4010,28 @@ void main() {
       * pow(clamp((temperature - coreThreshold) * 0.85, 0.0, 1.0), coreSharpness)
       * (0.4 + incandescent * 0.45)
       * coreStructure;
+    // Industrial Fireball can let the already-sampled smoke/soot partially
+    // obscure same-layer heat. The smooth response is negligible for sparse
+    // smoke, bounded for dense smoke, and remains exactly neutral at zero.
+    float thermalVisibility = 1.0;
+    if (emissionSmokeStrength > 0.0) {
+      // Compare smoke with the co-located thermal signal so the very early,
+      // heat-dominant ignition remains bright while the denser transition
+      // state can break the otherwise continuous luminous column.
+      float smokeThermalRatio = opticalWeightedSmoke
+        / max(0.0001, opticalWeightedSmoke + temperature * 0.9);
+      float sameLayerResponse = smoothstep(0.28, 0.44, smokeThermalRatio);
+      float smokeResponse = sameLayerResponse;
+      float smokeOcclusion = 1.0 - exp(-smokeResponse * 3.2);
+      thermalVisibility = 1.0 - emissionSmokeStrength * smokeOcclusion;
+      emission *= thermalVisibility;
+    }
     // Every radiance source is masked by the same extinction as density —
     // saturated emission can never outline the domain where alpha has faded.
     emission *= layerFade;
     float edgeScatter = pow(max(0.0, 1.0 - radialWeight), 1.7) * smoke * 0.12 * layerFade;
     vec3 fireScatter = sourceRadiance * smoke * lightTransmittance
+      * thermalVisibility
       * (0.085 + forwardLobe * 0.15) * layerFade;
     vec3 layerColor = smokeColor * smoke + emission + fireScatter
       + mix(uPaletteSmokeLight, uPaletteCore, 0.18) * edgeScatter;
@@ -4022,7 +4055,20 @@ void main() {
     vec4 neighbor = sampleField(uScalar, neighborUv) * fieldSampleValidity(neighborUv);
     float neighborHeat = neighbor.r * uLayerVisibility.w
       + neighbor.b * uLayerVisibility.x;
-    bloom += heatRamp(neighborHeat) * neighbor.b * uLayerVisibility.x;
+    if (emissionSmokeStrength > 0.0) {
+      float neighborSmoke = max(0.0,
+        neighbor.g * 0.9 * uLayerVisibility.y
+        + neighbor.a * 0.72 * uLayerVisibility.z * uVolumeProfile1.w
+      );
+      float neighborSmokeThermalRatio = neighborSmoke
+        / max(0.0001, neighborSmoke + neighborHeat * 0.9);
+      float neighborSmokeResponse = smoothstep(0.28, 0.44, neighborSmokeThermalRatio);
+      float neighborSmokeOcclusion = 1.0 - exp(-neighborSmokeResponse * 3.2);
+      float neighborEmissionVisibility = 1.0 - emissionSmokeStrength * neighborSmokeOcclusion;
+      bloom += heatRamp(neighborHeat) * neighbor.b * uLayerVisibility.x * neighborEmissionVisibility;
+    } else {
+      bloom += heatRamp(neighborHeat) * neighbor.b * uLayerVisibility.x;
+    }
     bloomHeatSum += neighborHeat;
     bloomHeatSumSq += neighborHeat * neighborHeat;
   }
@@ -5499,11 +5545,26 @@ export class ResearchFluidEngine {
       volume.emissionCurve,
     );
     this._uniform1f(program, 'uDomainDensityThreshold', this._domainState().densityThreshold);
-    const material = this.profile.material || { mode: 0, sootAbsorption: 1, dustAbsorption: 1, detailBoost: 0, warmCoolContrast: 0, lowDensityVisibility: 0, detailOctaveMode: 0, interiorDepth: 0 };
+    const material = this.profile.material || {
+      mode: 0,
+      sootAbsorption: 1,
+      dustAbsorption: 1,
+      detailBoost: 0,
+      warmCoolContrast: 0,
+      lowDensityVisibility: 0,
+      detailOctaveMode: 0,
+      interiorDepth: 0,
+      emissionSmokeAttenuation: 0,
+    };
     this._uniform1f(program, 'uMaterialMode', material.mode > 0 ? 1 : 0);
     this._uniform1f(program, 'uDetailOctaveMode', material.detailOctaveMode > 0 ? 1 : 0);
     this._uniform1f(program, 'uMaterialInteriorDepth', finite(material.interiorDepth, 0));
     this._uniform1f(program, 'uMaterialLowDensityVisibility', finite(material.lowDensityVisibility, 0));
+    this._uniform1f(
+      program,
+      'uEmissionSmokeAttenuation',
+      clamp(finite(material.emissionSmokeAttenuation, 0), 0, 1),
+    );
     this._uniform4f(
       program,
       'uMaterialParams',
