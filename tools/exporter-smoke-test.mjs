@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import { readFile } from "node:fs/promises";
 import {
+  buildMp4CommandCandidates,
   detectExportCapabilities,
   isIsoBmffMp4,
 } from "../scripts/exporter.js";
@@ -75,6 +76,19 @@ assert.equal(
 
 const unsupportedBrand = new Blob([ftypBox("qt  ", ["qt  "])], { type: "video/mp4" });
 assert.equal(await isIsoBmffMp4(unsupportedBrand), false, "An unsupported ISO-BMFF brand was accepted as MP4");
+
+const paddedCommands = buildMp4CommandCandidates({ fps: 30, duration: 5 });
+assert.equal(paddedCommands.length, 2, "The local exporter must retain both MP4 encoder candidates");
+for (const command of paddedCommands) {
+  const filterIndex = command.indexOf("-vf");
+  assert.notEqual(filterIndex, -1, "FFmpeg MP4 conversion must use an explicit video filter");
+  assert.match(command[filterIndex + 1], /^tpad=stop_mode=clone:stop_duration=5$/, "Short WebM intermediates must be padded with the final frame");
+  const durationIndex = command.indexOf("-t");
+  assert.notEqual(durationIndex, -1, "FFmpeg MP4 conversion must cap output duration");
+  assert.equal(command[durationIndex + 1], "5", "FFmpeg output duration cap changed unexpectedly");
+}
+assert.equal(paddedCommands[0][paddedCommands[0].indexOf("-c:v") + 1], "libx264");
+assert.equal(paddedCommands[1][paddedCommands[1].indexOf("-c:v") + 1], "mpeg4");
 
 const globalKeysBefore = Reflect.ownKeys(globalThis);
 const capabilitiesBefore = detectExportCapabilities();

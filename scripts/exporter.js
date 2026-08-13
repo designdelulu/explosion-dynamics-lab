@@ -18,6 +18,72 @@ export const WEBM_MIME_CANDIDATES = Object.freeze([
   "video/webm",
 ]);
 
+/**
+ * Build the local MP4 conversion commands.
+ *
+ * A heavy render can make the browser's WebM timestamps shorter than the
+ * requested export duration even though the recorder completed normally. The
+ * final-frame pad keeps that valid intermediate usable without weakening MP4
+ * duration validation or inventing frames in the simulator itself.
+ */
+export function buildMp4CommandCandidates({ fps, duration } = {}) {
+  const outputFps = Number(fps);
+  const outputDuration = Number(duration);
+  if (!Number.isFinite(outputFps) || outputFps <= 0) {
+    throw new TypeError("fps must be a positive finite number.");
+  }
+  if (!Number.isFinite(outputDuration) || outputDuration <= 0) {
+    throw new TypeError("duration must be a positive finite number.");
+  }
+
+  const durationText = String(outputDuration);
+  const framePad = `tpad=stop_mode=clone:stop_duration=${durationText}`;
+  return Object.freeze([
+    Object.freeze([
+      "-i",
+      "input.webm",
+      "-an",
+      "-vf",
+      framePad,
+      "-t",
+      durationText,
+      "-c:v",
+      "libx264",
+      "-preset",
+      "veryfast",
+      "-crf",
+      "20",
+      "-r",
+      String(outputFps),
+      "-pix_fmt",
+      "yuv420p",
+      "-movflags",
+      "+faststart",
+      "output-h264.mp4",
+    ]),
+    Object.freeze([
+      "-i",
+      "input.webm",
+      "-an",
+      "-vf",
+      framePad,
+      "-t",
+      durationText,
+      "-c:v",
+      "mpeg4",
+      "-q:v",
+      "4",
+      "-r",
+      String(outputFps),
+      "-pix_fmt",
+      "yuv420p",
+      "-movflags",
+      "+faststart",
+      "output-mpeg4.mp4",
+    ]),
+  ]);
+}
+
 const MP4_BRANDS = new Set([
   "isom",
   "iso2",
@@ -691,42 +757,7 @@ async function transcodeWebmToMp4(webmBlob, settings) {
     await raceWithSignal(ffmpeg.writeFile(inputName, inputBytes), settings.signal, () => ffmpeg.terminate());
     inputWritten = true;
 
-    const commandCandidates = [
-      [
-        "-i",
-        inputName,
-        "-an",
-        "-c:v",
-        "libx264",
-        "-preset",
-        "veryfast",
-        "-crf",
-        "20",
-        "-r",
-        String(settings.fps),
-        "-pix_fmt",
-        "yuv420p",
-        "-movflags",
-        "+faststart",
-        outputNames[0],
-      ],
-      [
-        "-i",
-        inputName,
-        "-an",
-        "-c:v",
-        "mpeg4",
-        "-q:v",
-        "4",
-        "-r",
-        String(settings.fps),
-        "-pix_fmt",
-        "yuv420p",
-        "-movflags",
-        "+faststart",
-        outputNames[1],
-      ],
-    ];
+    const commandCandidates = buildMp4CommandCandidates(settings);
 
     let lastFailure = null;
     for (let index = 0; index < commandCandidates.length; index += 1) {
